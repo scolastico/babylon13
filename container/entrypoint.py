@@ -35,7 +35,29 @@ def healthcheck():
         pass
 
 
-LOBBY_HANDOFF_SECONDS = 8
+# After the worlds stop, the lobby stays up until every player sent back from a world has
+# received its restart screen (the lobby asks the supervisor when the player arrives and
+# every 5 seconds after), at most this long. Joining the lobby can take BYOND a while.
+LOBBY_HANDOFF_TIMEOUT_SECONDS = 60
+# Time for the last screen to render before the lobby closes.
+LOBBY_RENDER_SECONDS = 3
+
+
+def wait_for_lobby_handoff(service, players, timeout=LOBBY_HANDOFF_TIMEOUT_SECONDS, sleep=time.sleep,
+                           clock=time.monotonic):
+    """Waits until each player sent back to the lobby has seen the restart screen; returns who did not."""
+    if not players:
+        return set()
+    log('Waiting up to %ss for %d player(s) to reach the lobby.' % (timeout, len(players)))
+    deadline = clock() + timeout
+    missing = set(players) - service.restart_screen_shown
+    while missing and clock() < deadline:
+        sleep(1)
+        missing = set(players) - service.restart_screen_shown
+    if missing:
+        log('%d player(s) did not reach the lobby in time.' % len(missing))
+    sleep(LOBBY_RENDER_SECONDS)
+    return missing
 
 
 def restart_countdown(service, seconds, sleep=time.sleep):
@@ -106,7 +128,7 @@ def main():
                 # screen offers Reconnect for when the server is back.
                 handed_over = True
                 restart_countdown(service, limits['restart_warning_seconds'] if lobby_running and not exit_code else 0)
-            players = service.players_in_worlds()
+            players = service.player_keys_in_worlds()
             def stop(actor, world):
                 return service.dispatch(actor, 'stop', {'world': world})
             def tick(delay):
@@ -121,10 +143,7 @@ def main():
                 time.sleep(5)
                 continue
             if menu.poll() is None:
-                if players:
-                    # Give the players sent back from their worlds time to arrive in the lobby.
-                    log('Waiting %ss for %d player(s) to reach the lobby.' % (LOBBY_HANDOFF_SECONDS, players))
-                    time.sleep(LOBBY_HANDOFF_SECONDS)
+                wait_for_lobby_handoff(service, players)
                 menu.terminate()
                 menu.wait(timeout=10)
             return exit_code

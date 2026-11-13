@@ -228,3 +228,26 @@ class RestartCountdown(unittest.TestCase):
         quiet = type(service)()
         entrypoint.restart_countdown(quiet, 0, sleep=slept.append)
         self.assertTrue(quiet.shutting_down)
+
+    def test_lobby_stays_up_until_players_saw_the_restart_screen(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "container"))
+        import entrypoint
+        now = [0.0]
+        service = type("Service", (), {"restart_screen_shown": set()})()
+        def sleep(seconds):
+            now[0] += seconds
+            if now[0] >= 12:
+                service.restart_screen_shown.add("alice")
+            if now[0] >= 20:
+                service.restart_screen_shown.add("bob")
+        missing = entrypoint.wait_for_lobby_handoff(service, {"alice", "bob"}, timeout=60, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(missing, set())
+        self.assertEqual(now[0], 20 + entrypoint.LOBBY_RENDER_SECONDS)
+        now[0] = 0.0
+        missing = entrypoint.wait_for_lobby_handoff(service, {"carol"}, timeout=30, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(missing, {"carol"})
+        self.assertEqual(now[0], 30 + entrypoint.LOBBY_RENDER_SECONDS)
+        slept = []
+        self.assertEqual(entrypoint.wait_for_lobby_handoff(service, set(), sleep=slept.append), set())
+        self.assertEqual(slept, [])

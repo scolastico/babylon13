@@ -261,6 +261,8 @@ class Supervisor:
         # Set while the container shuts down: no new worlds or joins, and a notice for the lobby.
         self.shutting_down = False
         self.server_notice = None
+        # Players whose lobby has received the restart screen; the container waits for them.
+        self.restart_screen_shown = set()
         # Returns how many admins are online on Discord (or None), for the player's ahelp notice.
         self.ahelp_admins_online = None
         self.checkpoints = Checkpoints(config["data_directory"], config.get("kept_save_points_per_world", 4))
@@ -582,9 +584,9 @@ class Supervisor:
             except Exception as error:
                 log(f"Announcing to {self.describe(run['world'])} failed: {error}")
 
-    def players_in_worlds(self):
+    def player_keys_in_worlds(self):
         with self.lock:
-            return sum(len(json.loads(r["players"] or "[]")) for r in self.db.execute("SELECT players FROM runs"))
+            return {ckey(p) for r in self.db.execute("SELECT players FROM runs") for p in json.loads(r["players"] or "[]")}
 
     def status_snapshot(self):
         """Server-wide state for the Discord status message. Private worlds stay anonymous."""
@@ -638,6 +640,8 @@ class Supervisor:
                                       last_save=run["last_save"] if run else self.last_save(world["id"]),
                                       error=run["error"] if run else None,
                                       last_active=time.strftime("%Y-%m-%d %H:%M", time.localtime(world["last_used"])))
+                if self.shutting_down:
+                    self.restart_screen_shown.add(actor)
                 return {"ok": True, "worlds": worlds, "admin": actor in self.admins, "server_notice": self.server_notice,
                         "restarting": self.shutting_down, "discord": self.discord_state(actor),
                         "delete_unused_worlds_after_days": self.config.get("delete_unused_worlds_after_days", 60),

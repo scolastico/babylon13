@@ -476,9 +476,11 @@ whole bars of the same tempo, ideally the same length or multiples of it.
 When the container stops (a deploy or `docker stop`), new worlds and joins are refused and
 every world counts down in chat (`BABYLON_RESTART_WARNING_SECONDS`, default 30, at the
 start and at 10 and 5 seconds); the lobby shows the same notice. Then each world saves and
-sends its players to the lobby, which stays up for a few more seconds until they arrive.
-Only then does the lobby stop, so players are connected to the lobby address and their game
-reconnects to it on its own once the server is back. The whole shutdown has to fit Docker's
+sends its players to the lobby. The lobby stays up until each of them has received its
+restart screen (at most 60 seconds, for players whose BYOND is slow to connect or who
+closed it), plus 3 seconds to show it. Only then does the lobby stop, so players are
+connected to the lobby address and its Reconnect button brings them back once the server is
+up again. The whole shutdown has to fit Docker's
 `stop_grace_period`.
 
 ## AFK return to the lobby

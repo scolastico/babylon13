@@ -82,8 +82,11 @@ class Policies(unittest.TestCase):
         self.assertEqual(self.s.dispatch("stranger", "list", {})["worlds"], [])
         # The lobby swaps the world list for its restart screen while the server restarts.
         self.assertFalse(self.s.dispatch("stranger", "list", {})["restarting"])
+        self.assertEqual(self.s.restart_screen_shown, set())
         self.s.shutting_down = True
         self.assertTrue(self.s.dispatch("stranger", "list", {})["restarting"])
+        # The container keeps the lobby up until the players sent back have seen that screen.
+        self.assertEqual(self.s.restart_screen_shown, {"stranger"})
         self.s.shutting_down = False
         with self.assertRaises(Denied):
             self.s.dispatch("stranger", "join", {"world": w})
