@@ -128,6 +128,9 @@ def main():
         frames = call(run, "session", "test_machine_frames")
         frames = {entry["entry"]: entry["value"] for entry in frames["entries"]}
         assert frames and all(frames.values()), frames
+        reflectors = call(run, "session", "test_reflectors")
+        reflectors = {entry["entry"]: entry["value"] for entry in reflectors["entries"]}
+        assert reflectors and all(reflectors.values()), reflectors
         music = call(run, "session", "test_music_folders")
         music = {entry["entry"]: entry["value"] for entry in music["entries"]}
         assert music and all(music.values()), music

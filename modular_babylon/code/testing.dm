@@ -291,6 +291,23 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	qdel(crate)
 	return result
 
+/// Reflectors keep their angle and rotation lock through a save, with the mirror turned.
+/datum/babylon_save/proc/test_reflectors()
+	var/list/result = list()
+	var/obj/structure/reflector/single/turned = new(respawn_turf)
+	turned.set_angle(135)
+	turned.can_rotate = FALSE
+	var/map_entry = metadata(turned)
+	result["angle_in_map"] = findtext(map_entry, "rotation_angle = 135") && findtext(map_entry, "can_rotate = 0")
+	// As the map loader creates it from those entries.
+	world.preloader_setup(list("rotation_angle" = 135, "can_rotate" = 0), /obj/structure/reflector/single)
+	var/obj/structure/reflector/single/loaded = new(respawn_turf)
+	result["angle_restored"] = loaded.rotation_angle == 135 && !loaded.can_rotate
+	result["mirror_turned"] = loaded.deflector_overlay?.transform ~= turn(matrix(), 135)
+	qdel(turned)
+	qdel(loaded)
+	return result
+
 /// A machine frame with its board and some parts survives a save and can still be finished,
 /// and one from an older save (board only) can be emptied again.
 /datum/babylon_save/proc/test_machine_frames()

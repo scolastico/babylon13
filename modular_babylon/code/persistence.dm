@@ -882,3 +882,13 @@
 				frame.req_components[path]--
 				break
 	migration_notes |= "Machine frames from older saves keep their circuit board; stock parts already put into them have to be added again."
+
+/// Reflectors: the saved angle and rotation lock are set before Initialize (structural fields).
+/// Initialize turns the mirror to rotation_angle only while it can rotate, so a reflector
+/// locked with a screwdriver would keep its angle but show the mirror unturned.
+/obj/structure/reflector/Initialize(mapload)
+	var/locked = !can_rotate
+	can_rotate = TRUE
+	. = ..()
+	if(locked)
+		can_rotate = FALSE
