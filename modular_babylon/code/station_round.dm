@@ -145,7 +145,7 @@
 /// What the end of the round says about the world's next start. Players who are not the owner
 /// only hear what is true for everyone.
 /proc/babylon_next_start_text(for_owner = FALSE)
-	return babylon_next_start_message(babylon_station_saving_available() && babylon_persistence_enabled(), for_owner)
+	return babylon_next_start_message(babylon_station_saving_available() && babylon_world_saves(), for_owner)
 
 /proc/babylon_next_start_message(saves, for_owner)
 	if(!saves)

@@ -513,17 +513,17 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   (`ROUND_END_COUNTDOWN`), at most 60 seconds, then everyone is sent back to the
   lobby and the world stops **without** a save. The supervisor records this as an
   ordinary stop (the world reports `round_ended`; the lobby shows the world as
-  stopping and admits nobody in the meantime). Until station worlds are saved
-  (persistence for station maps is still to come) the round-end message says "Next
-  time this world starts, it begins a fresh round." Once they are saved, the owner
-  is told that the next start picks up from the last autosave before the round
-  ended, and that resetting or rolling back the world in the lobby begins fresh.
+  stopping and admits nobody in the meantime). In a saved world the owner is told
+  that the next start picks up from the last autosave before the round ended, and
+  that resetting or rolling back the world in the lobby begins fresh; worlds that are
+  not saved (Persistent off, tutorials) say "Next time this world starts, it begins a
+  fresh round."
   An administrator's Reboot World ends the world the same way (a reboot would restart
   the run behind the supervisor's back).
-- **Resumed rounds** (with station persistence, still to come). A world whose save
-  contains a started round resumes it at once, without roundstart job assignment or
-  antagonist rolls. Returning players will get their saved character back once
-  characters are saved; until then everyone uses the normal late-join menu.
+- **Resumed rounds.** A world whose save contains a started round resumes it at once,
+  without roundstart job assignment or antagonist rolls, and the station clock goes on
+  from the saved station time. Returning players will get their saved character back
+  once characters are saved; until then everyone uses the normal late-join menu.
 - **Tutorials** (play instances and admin edits) start their round at once. The joining
   player spawns as their preferences character, job Assistant, without antagonists, at
   the tutorial's start.
@@ -536,6 +536,46 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 - **Failed starts.** If the round cannot start, the world says so and the owner may press
   Start round again; tutorial worlds show a RETRY TUTORIAL button after three failed
   spawns of a player.
+
+## Saving station worlds
+
+Station worlds are saved like Babylon worlds: an autosave every 15 minutes while
+players are connected (with the same 30/10/5/1 second countdown), a final save when the
+world is stopped from the lobby, and the owner's **Save world** and **Save and stop
+world** verbs in the Babylon tab. A save writes every level a round can change as
+`z<N>.dmm` in the checkpoint: the station's levels, the map's own extra levels (the
+ice moon's wilderness, mining levels), lavaland and the space levels with their ruins.
+CentCom, transit levels and the Interlink are rebuilt on every start and never saved.
+`state.json` (format 8, see `services/supervisor/fixtures/README.md`) holds each level's
+traits, the map json, whether the round had started and its station time.
+
+When the world starts again, the supervisor stages the saved levels and the world loads
+exactly those, with their saved traits: lavaland, space ruins, ice moon caves and rivers
+are not generated again, and no new mice, trash or weakpoints appear.
+
+What a save keeps and what it does not:
+
+- Kept: turfs and their floor decals, objects, machines and items with their settings
+  and contents (an emptied locker stays empty), room air, landmarks (job starts, the
+  observer start, event spawns), and living things without a player (animals, monsters,
+  bots, NPC humans) by type, name, health and whether they are dead. Scenery (plants,
+  rocks, decals, dirt) keeps only its place, look and colour.
+- Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
+  (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,
+  idle; whatever was aboard is lost. Antagonists, ongoing events, the crew manifest
+  beyond names and jobs, and bank balances are not saved either.
+- Players' characters are not saved yet (a later update adds them): after a restart
+  everyone uses the normal late-join menu.
+
+A save pauses the world's simulation while it is captured; the time is logged as
+`Babylon saved <generation>: ... capture <ms> ms, total <ms> ms` in the world's log.
+Large maps with many levels take longer than a Babylon world (see the station smoke
+test's report for measured times and sizes).
+
+Worlds with **Persistent** off, and tutorial worlds, are never saved: no autosave and no
+countdown, no save verbs, and stopping them ends at once without a save (and never
+leaves them in an error state). A world stopped before it finished starting is not
+saved either.
 
 ## Tutorials
 

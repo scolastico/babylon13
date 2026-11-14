@@ -416,3 +416,46 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	player_sessions -= "babylonsmokeplayer"
 #endif
 	return result
+
+/// Worlds that are not saved (persistent=0, tutorial kinds) never save: no save, no autosave
+/// countdown, and a managed stop that reports success without one (persistence.dm, admission.dm).
+/datum/babylon_save/proc/test_non_persistent_never_saves()
+	var/list/result = list()
+	var/datum/babylon_world/flags = GLOB.babylon_world
+	var/real_persistent = flags.persistent
+	var/real_kind = flags.kind
+	var/real_last_save = last_save
+	var/real_next_autosave = next_autosave_at
+	result["persistent_world_saves"] = babylon_world_saves() == (real_persistent && !flags.is_tutorial())
+	next_autosave_at = 0
+	result["persistent_autosave_due"] = !babylon_world_saves() || autosave_due(1)
+	flags.persistent = FALSE
+	result["not_saved"] = !babylon_world_saves()
+	result["save_refused"] = save_world()["error"] == "This world is not saved"
+	result["no_new_save"] = last_save == real_last_save
+	result["no_autosave"] = !autosave_due(1)
+	result["stop_without_save"] = !babylon_stop_saves()
+	result["stop_message_says_so"] = !!findtext(babylon_stop_message(FALSE), "without a save") || !!findtext(babylon_stop_message(FALSE), "not saved")
+	flags.persistent = TRUE
+	flags.kind = "tutorial"
+	result["tutorial_not_saved"] = !babylon_world_saves() && !babylon_stop_saves() && save_world()["error"] == "This world is not saved" && !autosave_due(1)
+	flags.kind = "tutorial_edit"
+	result["tutorial_edit_not_saved"] = !babylon_world_saves() && !babylon_stop_saves()
+	flags.kind = real_kind
+	flags.persistent = real_persistent
+	next_autosave_at = real_next_autosave
+	result["flags_restored"] = flags.persistent == real_persistent && flags.kind == real_kind && last_save == real_last_save
+	result["persistent_stop_saves"] = babylon_stop_saves() == babylon_world_saves()
+#ifndef BABYLON_STATION
+	// Babylon hides the drone's save verbs in worlds that are not saved.
+	var/mob/living/basic/drone/babylon/drone = owner_player()?.builder
+	if(drone)
+		var/list/save_verbs = list(/mob/living/basic/drone/babylon/verb/save_babylon, /mob/living/basic/drone/babylon/verb/save_stop_babylon)
+		flags.persistent = FALSE
+		hide_save_verbs(drone)
+		result["drone_save_verbs_hidden"] = !(save_verbs[1] in drone.verbs) && !(save_verbs[2] in drone.verbs)
+		flags.persistent = real_persistent
+		add_verb(drone, save_verbs)
+		result["drone_save_verbs_back"] = (save_verbs[1] in drone.verbs)
+#endif
+	return result

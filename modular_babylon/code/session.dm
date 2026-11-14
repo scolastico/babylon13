@@ -106,33 +106,7 @@
 			catch(var/exception/error)
 				babylon_loop_failed("player [player_key]", error)
 		tick_survival()
-	if(length(GLOB.clients) && world.time >= next_autosave_at - 30 SECONDS && !autosave_countdown_active && !draining)
-		next_autosave_at = world.time + 15 MINUTES + 30 SECONDS
-		INVOKE_ASYNC(src, PROC_REF(countdown_autosave))
-
-// Keep the possession/reconnect loop responsive during the warning period.
-// The authenticated control API may allow an unoccupied drone for isolated tests.
-/datum/babylon_save/proc/countdown_autosave(allow_unoccupied = FALSE)
-	if(autosave_countdown_active)
-		return
-	autosave_countdown_active = TRUE
-	autosave_notices = list()
-	var/remaining = 30
-	for(var/seconds_left in list(30, 10, 5, 1))
-		if(remaining > seconds_left)
-			sleep((remaining - seconds_left) SECONDS)
-		if(!allow_unoccupied && !length(GLOB.clients))
-			autosave_countdown_active = FALSE
-			return
-		var/message = seconds_left == 1 ? "Babylon autosave now." : "Babylon autosave in [seconds_left] seconds."
-		autosave_notices += list(list("remaining" = seconds_left, "at" = world.time, "message" = message))
-		to_chat(world, span_notice(message))
-		remaining = seconds_left
-	// Give the client a full second to receive/render "now" before freezing.
-	sleep(1 SECONDS)
-	if((allow_unoccupied || length(GLOB.clients)) && !busy)
-		save_world()
-	autosave_countdown_active = FALSE
+	schedule_autosave()
 
 SUBSYSTEM_DEF(babylon_builder)
 	name = "Babylon Saves"
@@ -246,6 +220,11 @@ SUBSYSTEM_DEF(babylon_builder)
 		return
 	GLOB.babylon_save.managed_stop()
 
+/// Worlds that are not saved (babylon_world_saves()) show no save verbs.
+/datum/babylon_save/proc/hide_save_verbs(mob/living/basic/drone/babylon/drone)
+	if(drone && !babylon_world_saves())
+		remove_verb(drone, list(/mob/living/basic/drone/babylon/verb/save_babylon, /mob/living/basic/drone/babylon/verb/save_stop_babylon))
+
 /datum/babylon_save/proc/player_for_drone(mob/living/basic/drone/babylon/drone)
 	RETURN_TYPE(/datum/babylon_player)
 	for(var/player_key in player_sessions)
@@ -319,6 +298,7 @@ SUBSYSTEM_DEF(babylon_builder)
 			lobby.hide_title_screen()
 		player.builder.PossessByPlayer(student.ckey)
 		player.install_drone_actions()
+		hide_save_verbs(player.builder)
 		if(previous && isnewplayer(previous))
 			qdel(previous)
 	if(student)

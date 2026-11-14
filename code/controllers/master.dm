@@ -680,6 +680,9 @@ ADMIN_VERB(cmd_controller_view_ui, R_SERVER|R_DEBUG, "Controller Overview", "Vie
 #ifdef BABYLON_BUILDER // BABYLON13: see modular_babylon/UPSTREAM_HOOKS.md
 		// World reconstruction must finish before any game simulation runs.
 		if(init_stage >= INITSTAGE_MAIN && (!GLOB.babylon_save?.prepared || init_stage_completed < INITSTAGE_MAX))
+			// The loop is alive while it waits: without counting, the failsafe took a long restore
+			// (a station world's several levels) for a hung controller and restarted it mid-init.
+			iteration++
 			sleep(1 TICKS)
 			continue
 #endif

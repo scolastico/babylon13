@@ -45,10 +45,26 @@
 	if(world.params["babylon-lobby"])
 		src << link(world.params["babylon-lobby"])
 
-/// Whether station worlds can save and resume their round. Task D1 turns this on; until then the
-/// stop and round-end messages say that a station world is not saved.
+/// Whether station worlds can save and resume their round: the multi-z save engine
+/// (persistence_levels.dm). The stop and round-end messages depend on it.
 /proc/babylon_station_saving_available()
-	return FALSE
+	return TRUE
+
+/// Whether a managed stop saves first: only worlds that are saved (persistent, not tutorials).
+/proc/babylon_stop_saves()
+	if(!babylon_world_saves())
+		return FALSE
+	return !babylon_is_station_build() || babylon_station_saving_available()
+
+/// The chat line players see when the world stops; says truthfully whether it is saved.
+/proc/babylon_stop_message(saves)
+	if(saves)
+		return "This world is stopping. Saving progress and returning players to the lobby."
+	if(babylon_is_station_build() && GLOB.babylon_world?.is_tutorial())
+		return "This tutorial is stopping; tutorial worlds are not saved. Returning you to the lobby."
+	if(babylon_is_station_build() && !babylon_station_saving_available())
+		return "This world is stopping. Station worlds are not saved yet, so this round ends here. Returning you to the lobby."
+	return "This world is stopping without a save (saving is off for this world). Returning you to the lobby."
 
 /datum/babylon_save/proc/managed_stop()
 	if(draining)
@@ -58,14 +74,21 @@
 		return list("error" = "Already stopping")
 	draining = TRUE
 	var/list/result
-	if(babylon_is_station_build() && !babylon_station_saving_available())
-		// Station worlds cannot save yet (multi-z persistence comes later): stop without one.
-		to_chat(world, span_notice("This world is stopping. Station worlds are not saved yet, so this round ends here. Returning you to the lobby."))
-		result = list("ok" = TRUE, "saved" = FALSE)
+	var/saves = babylon_stop_saves()
+	if(saves && (!ready || boot_error))
+		// It never finished starting (or failed to): there is nothing new to save, and refusing
+		// would leave the world stuck in an error state.
+		saves = FALSE
+		to_chat(world, span_notice("This world is stopping before it finished starting; nothing is saved. Returning you to the lobby."))
 	else
-		to_chat(world, span_notice("This world is stopping. Saving progress and returning players to the lobby."))
+		to_chat(world, span_notice(babylon_stop_message(saves)))
+	if(saves)
 		// save_world keeps both physics and player controls paused until process exit.
 		result = save_world()
+	else
+		// Worlds that are not saved stop at once and report success: the supervisor would
+		// otherwise keep them in an error state and never clean them up.
+		result = list("ok" = TRUE, "saved" = FALSE)
 	if(!result["ok"])
 		draining = FALSE
 		return result

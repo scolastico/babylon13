@@ -23,7 +23,7 @@
 	// The Babylon rules (rules.dm) are not compiled in: normal tg rounds.
 	result["events_fire"] = !(SSevents.ss_flags & SS_NO_FIRE) && !(SSgamemode.ss_flags & SS_NO_FIRE)
 	result["several_levels"] = world.maxz > 1
-	result["saving_unavailable"] = !!save_world()["error"]
+	result["saving_available"] = babylon_station_saving_available()
 	return result
 
 /// Station worlds run SPLURT's storytellers without a vote; Creative Plane and tutorials do not.
@@ -52,7 +52,7 @@
 	return result
 
 /// The save engine's per-level step in the station format (persistence.dm save_level()):
-/// every record and turf carries its level's z. Station saves stay refused (Task D1).
+/// every record and turf carries its level's z.
 /datum/babylon_save/proc/test_station_save_level()
 	var/list/result = list()
 	var/list/levels = persisted_levels()
@@ -102,6 +102,8 @@
 	result["latejoin_source"] = latejoin_source
 	result["round_mode"] = round_mode
 	result["round_started_by"] = round_started_by
+	result["persisted_levels"] = persisted_levels()
+	result["last_save"] = last_save_report
 	return result
 
 /// Late-joiners arrive on the station (station_round.dm), not in tg's last-resort spawn.
@@ -148,7 +150,7 @@
 	result["member_status_owner_online"] = babylon_round_status_for(FALSE, TRUE, "Owner Key") == "Waiting for Owner Key to start the round. Tick READY to get a job when it starts."
 	result["member_status_owner_offline"] = babylon_round_status_for(FALSE, FALSE, "Owner Key") == "Owner Key is offline. Only they or an admin can start this round; you can OBSERVE or return to the lobby."
 	result["owner_key_not_empty"] = !!babylon_world_owner_name()
-	result["next_start_fresh_without_saving"] = !babylon_station_saving_available() && babylon_next_start_text() == "Next time this world starts, it begins a fresh round." && !babylon_next_start_text(TRUE)
+	result["next_start_text_follows_saving"] = babylon_next_start_text() == babylon_next_start_message(babylon_world_saves(), FALSE) && babylon_next_start_text(TRUE) == babylon_next_start_message(babylon_world_saves(), TRUE)
 	result["next_start_fresh_when_not_persistent"] = babylon_next_start_message(FALSE, FALSE) == "Next time this world starts, it begins a fresh round."
 	result["next_start_resume_for_owner_only"] = !babylon_next_start_message(TRUE, FALSE) && !!findtext(babylon_next_start_message(TRUE, TRUE), "picks up from its last autosave before the round ended. To begin fresh, reset or roll back the world in the lobby.")
 	result["owner_may_start"] = babylon_round_starter_allowed(owner, "owner", FALSE, FALSE)
@@ -222,3 +224,185 @@
 	result["menu_says_starting"] = !!findtext(babylon_title_additions(null, "menuref"), "Starting your tutorial")
 	result["refresh_all_is_safe_in_a_running_round"] = isnull(babylon_refresh_starter_titles(TRUE))
 	return result
+
+/// An open, free tile near the middle of level z for a test marker, or null.
+/datum/babylon_save/proc/test_marker_turf(z, list/skipped_tiles)
+	var/best
+	var/best_distance = INFINITY
+	var/center_x = round(world.maxx / 2)
+	var/center_y = round(world.maxy / 2)
+	for(var/turf/open/tile in block(1, 1, z, world.maxx, world.maxy, z))
+		if(isspaceturf(tile) || isopenspaceturf(tile) || tile.is_blocked_turf(TRUE) || skipped_tiles[tile] || istype(tile.loc, /area/shuttle))
+			continue
+		if(islava(tile) || ischasm(tile) || iswaterturf(tile))
+			continue
+		var/distance = abs(tile.x - center_x) + abs(tile.y - center_y)
+		if(distance < best_distance)
+			best = tile
+			best_distance = distance
+	return best
+
+/// Multi-z save, first half (smoke_station.py runs it on icebox): markers on the station's first
+/// level and on a level without the station trait, a locker emptied by hand and an animal; then a
+/// real save, checked on disk. Returns the markers for test_multiz_restored() after a restart.
+/datum/babylon_save/proc/test_multiz_save_roundtrip()
+	var/list/result = list()
+	var/list/levels = persisted_levels()
+	result["several_levels"] = length(levels) > 1
+	var/clean = TRUE
+	var/station_level
+	var/other_level
+	for(var/z in levels)
+		var/datum/space_level/space = SSmapping.z_list[z]
+		var/list/traits = space.traits
+		if(traits[ZTRAIT_CENTCOM] || traits[ZTRAIT_RESERVED])
+			clean = FALSE
+		if(traits[ZTRAIT_STATION])
+			station_level = station_level || z
+		else
+			other_level = other_level || z
+	result["no_centcom_or_reserved"] = clean
+	result["station_level_saved"] = station_level == station_z
+	result["non_station_level_saved"] = !!other_level
+	var/list/skipped = checkpoint_skipped_tiles()
+	var/list/markers = list()
+	for(var/z in list(station_level, other_level))
+		var/turf/spot = test_marker_turf(z, skipped)
+		if(!spot)
+			continue
+		var/obj/item/paper/marker = new(spot)
+		marker.name = "babylon marker z[z]"
+		markers += list(list("name" = marker.name, "x" = spot.x, "y" = spot.y, "z" = spot.z))
+	result["markers_placed"] = length(markers) == 2
+	var/turf/station_spot = test_marker_turf(station_level, skipped)
+	// A locker fills itself the first time it opens: emptied by hand, it must stay empty after a
+	// restart (contents_initialized is saved).
+	var/obj/structure/closet/emcloset/locker = new(station_spot)
+	locker.name = "babylon marker locker"
+	var/list/lying = station_spot.contents.Copy()
+	locker.dump_contents()
+	var/dumped = 0
+	for(var/obj/item/content in station_spot)
+		if(!(content in lying))
+			qdel(content)
+			dumped++
+	result["locker_emptied"] = dumped > 0 && locker.contents_initialized
+	var/mob/living/basic/cow/cow = new(station_spot)
+	cow.name = "babylon marker cow"
+	cow.real_name = cow.name
+	// It stays put and alive until the save (the ice moon's caves are cold and full of plasma).
+	QDEL_NULL(cow.ai_controller)
+	ADD_TRAIT(cow, TRAIT_GODMODE, "babylon_test")
+	var/list/saved = save_world()
+	result["saved"] = !!saved["ok"]
+	result["several_levels_written"] = saved["levels"] == length(levels)
+	var/base = "data/babylon/saves/[saved["generation"]]"
+	var/state_text = file2text("[base]/state.json")
+	var/list/state = json_decode(state_text)
+	result["format_version"] = state["version"] == BABYLON_STATION_STATE_VERSION
+	var/list/files = list()
+	var/files_exist = TRUE
+	for(var/list/level as anything in state["levels"])
+		files += level["file"]
+		if(!fexists("[base]/[level["file"]]") || !islist(level["traits"]))
+			files_exist = FALSE
+	var/list/expected_files = list()
+	for(var/z in levels)
+		expected_files += "z[z].dmm"
+	result["level_files"] = files_exist && !length(files - expected_files) && !length(expected_files - files)
+	var/list/map_config = state["map_config"]
+	result["map_config"] = islist(map_config) && !!map_config["map_name"]
+	var/list/round_state = state["round"]
+	result["round_recorded"] = islist(round_state) && round_state["started"] == (SSticker.HasRoundStarted() ? 1 : 0)
+	result["characters_is_an_object"] = !!findtext(state_text, "\"characters\":{}")
+	var/found = 0
+	for(var/list/record as anything in state["records"])
+		var/list/fields = record["fields"]
+		// An empty fields object comes back from JSON as a plain list.
+		if(!islist(fields) || !("name" in fields))
+			continue
+		for(var/list/marker as anything in markers)
+			if(fields["name"] == marker["name"] && record["z"] == marker["z"] && record["x"] == marker["x"] && record["y"] == marker["y"])
+				found++
+	result["markers_saved_with_z"] = found == length(markers) && found
+	var/animal_saved = FALSE
+	for(var/list/record as anything in state["records"])
+		var/list/fields = record["fields"]
+		if(record["type"] == "[cow.type]" && islist(fields) && ("name" in fields) && fields["name"] == cow.name)
+			animal_saved = TRUE
+	result["animal_saved"] = animal_saved
+	result["markers"] = json_encode(markers)
+	result["station_time"] = max(1, round(SSticker.HasRoundStarted() ? STATION_TIME_PASSED() : 1))
+	return result
+
+/// Multi-z save, second half: after a stop (saved) and a start from that save, the same levels
+/// are back with their traits, the markers lie where they were, the emptied locker is still
+/// empty, the animal is back and a started round resumed with its clock.
+/datum/babylon_save/proc/test_multiz_restored(encoded_markers, saved_station_time, round_was_started)
+	var/list/result = list()
+	var/list/state = load_resume_data()
+	result["restored_from_save"] = islist(state) && babylon_restoring_saved_levels() && last_save == state["generation"]
+	var/list/levels = persisted_levels()
+	var/list/saved_levels = state["levels"]
+	result["same_level_count"] = length(levels) == length(saved_levels)
+	var/same_traits = length(levels) == length(saved_levels)
+	var/same_z = TRUE
+	for(var/index in 1 to min(length(levels), length(saved_levels)))
+		var/list/saved_level = saved_levels[index]
+		var/datum/space_level/space = SSmapping.z_list[levels[index]]
+		var/list/traits = space.traits
+		var/list/saved_traits = saved_level["traits"]
+		for(var/trait in saved_traits | traits)
+			if(!(trait in traits) || !(trait in saved_traits) || "[traits[trait]]" != "[saved_traits[trait]]")
+				same_traits = FALSE
+		if(saved_level["file"] != "z[levels[index]].dmm")
+			same_z = FALSE
+	result["same_traits"] = same_traits
+	result["same_z_numbers"] = same_z
+	var/list/markers = json_decode(encoded_markers)
+	var/found = 0
+	for(var/list/marker as anything in markers)
+		var/turf/spot = locate(marker["x"], marker["y"], marker["z"])
+		for(var/obj/item/paper/paper in spot)
+			if(paper.name == marker["name"])
+				found++
+				break
+	result["markers_restored"] = length(markers) == 2 && found == length(markers)
+	var/obj/structure/closet/emcloset/locker
+	for(var/obj/structure/closet/emcloset/candidate in world)
+		if(candidate.name == "babylon marker locker")
+			locker = candidate
+			break
+	result["locker_restored"] = !!locker
+	result["locker_still_empty"] = locker && locker.contents_initialized && !(locate(/obj/item) in locker.contents)
+	var/cow_back = FALSE
+	for(var/mob/living/basic/cow/cow in GLOB.mob_living_list)
+		if(cow.name == "babylon marker cow" && (cow.z in levels))
+			cow_back = TRUE
+	result["animal_restored"] = cow_back
+	if(!cow_back)
+		var/list/names = list()
+		for(var/mob/living/basic/cow/cow in GLOB.mob_living_list)
+			names += "[cow.name]@[cow.x],[cow.y],[cow.z]"
+		result["cows_found"] = "cows: [names.Join("; ")]"
+	if(text2num("[round_was_started]"))
+		result["round_resumed"] = round_mode == "resume" && SSticker.HasRoundStarted()
+		result["station_time_continues"] = STATION_TIME_PASSED() >= text2num("[saved_station_time]")
+	else
+		result["round_held"] = round_mode == "hold"
+	return result
+
+/// Diagnostics, not asserted: BYOND's profiler around one level's save step. Returns the procs
+/// with the most self time as JSON text. Hands out save ids in the live world.
+/datum/babylon_save/proc/test_profile_save_level(z)
+	world.Profile(PROFILE_RESTART)
+	var/started = REALTIMEOFDAY
+	var/list/level = save_level(text2num("[z]"))
+	var/elapsed = (REALTIMEOFDAY - started) * 100
+	var/list/profile = json_decode(world.Profile(PROFILE_REFRESH, format = "json"))
+	world.Profile(PROFILE_STOP)
+	var/list/top = list()
+	for(var/list/entry as anything in profile)
+		if(entry["self"] > 0.2)
+			top += list(list("name" = entry["name"], "self" = entry["self"], "total" = entry["total"], "calls" = entry["calls"]))
+	return json_encode(list("ms" = elapsed, "records" = length(level["records"]), "procs" = top))

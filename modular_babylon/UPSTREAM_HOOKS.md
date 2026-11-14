@@ -64,6 +64,26 @@ The round is held with `SSticker.SetTimeLeft(-1)` and started with
 (`container_nav`), `declare_completion` → `standard_reboot`, the ticker's
 pre-game countdown and `setup()`, and the storyteller's roundstart event procs.
 
+Station saves (`modular_babylon/code/persistence_levels.dm`, station build only)
+need no upstream edits either. A world restoring from a save (its
+`data/next_map.json` names `_maps/babylon/saved`) overrides `SSmapping`
+`Initialize` (the map config's level traits come from the save, no height
+autosetup, no space/wilderness levels), `LoadGroup` (only the "Station" group
+loads), `setup_ruins`, `setup_rivers`, `run_map_terrain_generation`,
+`run_map_terrain_population` and `SSminor_mapping.Initialize`; every override
+falls through to tg's proc otherwise. Shuttles are saved as the turf beneath
+them (`baseturf_skipover/shuttle` in the tile's baseturfs) and stationary docks
+keep `shuttle_id`, size, `roundstart_template` and `json_key` in the saved map.
+After an upstream merge, re-check `SSmapping.Initialize`/`loadWorld` (new
+generated levels or terrain steps must be skipped when restoring), the
+stationary port vars and `/obj/docking_port/mobile/jumpToNullSpace` (how a
+shuttle tile's underlying turf and area are found), and
+`/datum/map_config/LoadConfig`'s trait defaults.
+The master's restore-wait hook (`code/controllers/master.dm`, both builds)
+counts its waiting rounds as loop iterations: a station restore takes long
+enough that the failsafe otherwise restarted the controller in the middle of
+initialization.
+
 `modular_babylon/code/moderation.dm` grants lobby admins (`BABYLON_ADMINS`) full
 game-admin rights on admission, removes mentors (no mentor is loaded, admins
 are not made mentors, Mentorhelp and Mentorwho are gone) and relays adminhelps

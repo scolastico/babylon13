@@ -1,10 +1,8 @@
 // Apply saved physical configuration BEFORE Initialize creates cable/pipe nodes.
 // Version 1 maps omitted these assignments due to an unparenthesized `in`.
 /datum/babylon_save/proc/preload_atom(atom/thing)
-	if(!resume_data && fexists("data/babylon/resume-state.json"))
-		resume_data = json_decode(file2text("data/babylon/resume-state.json"))
-		for(var/list/record as anything in resume_data["records"])
-			resume_records[record["id"]] = record
+	if(!resume_data)
+		load_resume_data()
 	var/list/record = resume_records[thing.babylon_save_id]
 	if(!record)
 		return
@@ -20,6 +18,16 @@
 			// Version 1 omitted the port mask; use the RPD/dispenser default.
 			// Inferring it from dir prevents adding branches after recovery.
 			thing.vars["initialize_directions"] = ALL_CARDINALS
+
+/// Reads data/babylon/resume-state.json (staged by the supervisor) once: resume_data, and
+/// resume_records by save id. Returns the state, or null for a fresh world.
+/datum/babylon_save/proc/load_resume_data()
+	if(resume_data || !fexists("data/babylon/resume-state.json"))
+		return resume_data
+	resume_data = json_decode(file2text("data/babylon/resume-state.json"))
+	for(var/list/record as anything in resume_data["records"])
+		resume_records[record["id"]] = record
+	return resume_data
 
 /datum/babylon_save/proc/encode_gas(datum/gas_mixture/gas)
 	if(!gas)
@@ -174,9 +182,16 @@
 		var/obj/machinery/power/apc/apc = thing
 		record["has_terminal"] = !isnull(apc.terminal)
 	var/list/references = record["references"]
-	for(var/field in reference_fields)
-		if(field in thing.vars)
-			references[field] = encode_value(thing.vars[field])
+	// Looking a name up in vars scans every var: the present fields are cached per type.
+	var/list/present_references = reference_fields_by_type[thing.type]
+	if(isnull(present_references))
+		present_references = list()
+		for(var/field in reference_fields)
+			if(field in thing.vars)
+				present_references += field
+		reference_fields_by_type[thing.type] = present_references
+	for(var/field in present_references)
+		references[field] = encode_value(thing.vars[field])
 	if(istype(thing, /obj/structure/frame/machine))
 		capture_machine_frame(thing, record)
 	if(istype(thing, /obj/machinery/power/smes))
@@ -190,11 +205,17 @@
 		for(var/datum/reagent/chem as anything in thing.reagents.reagent_list)
 			chems += list(list("type" = "[chem.type]", "volume" = chem.volume, "purity" = chem.purity))
 		record["reagents"] = chems
-	for(var/field in list("air_contents", "air1", "air2", "air3", "absorbed_gasmix"))
-		if(field in thing.vars)
-			var/datum/gas_mixture/mix = thing.vars[field]
-			if(istype(mix))
-				record[field] = encode_gas(mix)
+	var/list/present_gases = gas_fields_by_type[thing.type]
+	if(isnull(present_gases))
+		present_gases = list()
+		for(var/field in list("air_contents", "air1", "air2", "air3", "absorbed_gasmix"))
+			if(field in thing.vars)
+				present_gases += field
+		gas_fields_by_type[thing.type] = present_gases
+	for(var/field in present_gases)
+		var/datum/gas_mixture/mix = thing.vars[field]
+		if(istype(mix))
+			record[field] = encode_gas(mix)
 	if(istype(thing, /obj/machinery/atmospherics/pipe))
 		var/obj/machinery/atmospherics/pipe/pipe = thing
 		if(pipe.parent?.air)
@@ -238,6 +259,10 @@
 			background_programs += program.filename
 		record["background_programs"] = background_programs
 	records += list(record)
+	// A mob's contents are its organs and body parts: only Babylon's drones keep their items here
+	// (their hands and storage); other mobs are saved by type and core fields only.
+	if(ismob(thing) && !istype(thing, /mob/living/basic/drone))
+		return record
 	for(var/obj/child in thing.contents)
 		if(QDELETED(child))
 			continue
@@ -247,17 +272,33 @@
 			capture(child, records, save_id)
 	return record
 
-/datum/babylon_save/proc/metadata(atom/thing, is_turf = FALSE)
+/datum/babylon_save/proc/metadata(atom/thing, is_turf = FALSE, with_id = TRUE)
 	var/list/entries = list()
 	var/list/fields = metadata_fields_by_type[thing.type]
 	if(isnull(fields))
 		fields = list()
-		for(var/field in structural_fields)
+		for(var/field in structural_fields | type_metadata_fields(thing))
 			if(field in thing.vars)
 				fields += field
 		metadata_fields_by_type[thing.type] = fields
-	if(!is_turf)
+	if(!is_turf && with_id)
 		entries += "babylon_save_id = \"[assign_id(thing)]\""
+	// Most turfs keep their type's values: their entry depends only on the type and the air,
+	// and is built once per save (whole levels of rock and snow were most of a save's time).
+	var/turf_key
+	if(is_turf)
+		turf_key = "[thing.type]"
+		for(var/field in fields)
+			if(thing.vars[field] != initial(thing.vars[field]))
+				turf_key = null
+				break
+		if(turf_key)
+			if(isopenturf(thing) && !isspaceturf(thing))
+				var/turf/open/open_tile = thing
+				var/datum/gas_mixture/tile_gas = open_tile.return_air()
+				turf_key += "|[tile_gas.to_string()]"
+			if(turf_metadata_cache[turf_key])
+				return turf_metadata_cache[turf_key]
 	for(var/field in fields)
 		var/value = thing.vars[field]
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (field in list("req_access", "req_one_access")))
@@ -266,15 +307,27 @@
 		var/turf/open/open = thing
 		var/datum/gas_mixture/gas = open.return_air()
 		entries += "initial_gas_mix = [tgm_encode(gas.to_string())]"
-	return length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
+	. = length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
+	if(turf_key)
+		turf_metadata_cache[turf_key] = .
 
-/datum/babylon_save/proc/save_world()
+/datum/babylon_save
+	/// Type -> the reference_fields / gas mixture fields its instances have (capture()).
+	var/list/reference_fields_by_type = list()
+	var/list/gas_fields_by_type = list()
+	/// "type|air" -> the saved map entry of a turf that keeps its type's values (one save only).
+	var/list/turf_metadata_cache = list()
+	/// The last successful save's result (generation, objects, levels, bytes, timings).
+	var/list/last_save_report
+
+/// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced
+/// (a tutorial's save back to its pending copy).
+/datum/babylon_save/proc/save_world(force = FALSE)
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
-	// The engine saves one Babylon level; station maps (multi-z) cannot be saved yet.
-	if(babylon_is_station_build())
-		return list("error" = "This world cannot be saved yet")
+	if(!force && !babylon_world_saves())
+		return list("error" = "This world is not saved")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
 	busy = TRUE
@@ -293,7 +346,51 @@
 		draining = FALSE
 	release_checkpoint()
 	busy = FALSE
+	if(result["ok"])
+		last_save_report = result
 	return result
+
+/// This world saves checkpoints: it is persistent (the world's setting) and not a tutorial
+/// instance, which only lives while it runs. Other worlds never autosave, hide their save verbs
+/// and stop without a save.
+/proc/babylon_world_saves()
+	return babylon_persistence_enabled() && !GLOB.babylon_world?.is_tutorial()
+
+/// Starts the autosave countdown every 15 minutes while players are connected (both builds'
+/// tick_players()). Worlds that are not saved never count down.
+/datum/babylon_save/proc/schedule_autosave()
+	if(!autosave_due(length(GLOB.clients)))
+		return
+	next_autosave_at = world.time + 15 MINUTES + 30 SECONDS
+	INVOKE_ASYNC(src, PROC_REF(countdown_autosave))
+
+/// The autosave countdown should start now, with this many players connected.
+/datum/babylon_save/proc/autosave_due(connected)
+	return babylon_world_saves() && connected && world.time >= next_autosave_at - 30 SECONDS && !autosave_countdown_active && !draining
+
+// Keep the possession/reconnect loop responsive during the warning period.
+// The authenticated control API may allow an unoccupied drone for isolated tests.
+/datum/babylon_save/proc/countdown_autosave(allow_unoccupied = FALSE)
+	if(autosave_countdown_active)
+		return
+	autosave_countdown_active = TRUE
+	autosave_notices = list()
+	var/remaining = 30
+	for(var/seconds_left in list(30, 10, 5, 1))
+		if(remaining > seconds_left)
+			sleep((remaining - seconds_left) SECONDS)
+		if(!allow_unoccupied && !length(GLOB.clients))
+			autosave_countdown_active = FALSE
+			return
+		var/message = seconds_left == 1 ? "Babylon autosave now." : "Babylon autosave in [seconds_left] seconds."
+		autosave_notices += list(list("remaining" = seconds_left, "at" = world.time, "message" = message))
+		to_chat(world, span_notice(message))
+		remaining = seconds_left
+	// Give the client a full second to receive/render "now" before freezing.
+	sleep(1 SECONDS)
+	if((allow_unoccupied || length(GLOB.clients)) && !busy)
+		save_world()
+	autosave_countdown_active = FALSE
 
 // Only snapshot capture is frozen. Serialization and disk writes use detached data.
 /datum/babylon_save/proc/release_checkpoint()
@@ -323,6 +420,56 @@
 /datum/babylon_save/proc/save_format_version()
 	return BABYLON_STATE_VERSION
 
+/// Extra map variables written for this atom's type in the saved map (structural_fields are
+/// written for every type). Babylon has none; the station build adds the docking ports' setup.
+/datum/babylon_save/proc/type_metadata_fields(atom/thing)
+	return list()
+
+/// Effects are not saved (spawners, helpers, overlays), apart from decals. The station build
+/// also keeps landmarks that its rounds need.
+/datum/babylon_save/proc/saves_effect(obj/effect/effect)
+	return istype(effect, /obj/effect/decal) || istype(effect, /obj/effect/turf_decal)
+
+/// The tile's floor decals (warning lines, trim) as map entries. A turf decal turns into an
+/// element on its turf when it loads and deletes itself, so without these every save lost them.
+/datum/babylon_save/proc/turf_decal_entries(turf/tile)
+	var/list/decals = list()
+	SEND_SIGNAL(tile, COMSIG_ATOM_DECALS_ROTATING, decals)
+	if(!length(decals))
+		return list()
+	var/list/entries = list()
+	for(var/datum/element/decal/decal as anything in decals)
+		var/list/decal_data = decal.get_rotated_parameters(tile.dir, tile.dir)
+		// Only plain floor decals: cleanable, described or smoothing ones come from elsewhere.
+		if(decal_data["cleanable"] || decal_data["desc"] || !isnull(decal_data["smoothing"]) || !decal_data["icon"])
+			continue
+		var/list/vars_text = list("icon = [tgm_encode(decal_data["icon"])]", "icon_state = [tgm_encode(decal_data["icon_state"])]", "dir = [decal_data["dir"]]", "layer = [decal_data["layer"]]", "alpha = [decal_data["alpha"]]")
+		if(istext(decal_data["color"]))
+			vars_text += "color = [tgm_encode(decal_data["color"])]"
+		entries += "/obj/effect/turf_decal{\n\t[vars_text.Join(";\n\t")]\n\t}"
+	return entries
+
+/// Whether an object on a tile gets a state.json record (and a save id), or only its entry in
+/// the saved map. Babylon records everything; the station build leaves out scenery (plants,
+/// rocks, decals), which was most of a planet level's objects.
+/datum/babylon_save/proc/saves_record(obj/object)
+	return TRUE
+
+/// Tiles saved as what lies beneath them, without their contents: list(turf = list(turf type,
+/// area type)). The station build leaves its shuttles out this way (they load again at their
+/// docks). Babylon has none.
+/datum/babylon_save/proc/checkpoint_skipped_tiles()
+	return list()
+
+/// Whether a non-space turf's temperature and air go into state.json "turfs" (the map's
+/// initial_gas_mix already holds its air). Babylon keeps every one.
+/datum/babylon_save/proc/saves_turf_air(turf/tile)
+	return TRUE
+
+/// The z a saved turf record's z is loaded at in this world. Babylon: the same.
+/datum/babylon_save/proc/restored_level_z(saved_z)
+	return saved_z
+
 /// The z-levels a checkpoint saves, in load order. Babylon: its one station level.
 /datum/babylon_save/proc/persisted_levels()
 	return list(station_z)
@@ -334,7 +481,7 @@
 /// Saves one z-level: list("map_text" = its .dmm (a single-level TGM map), "records" = saved
 /// objects (state.json "records"), "turfs" = room air and temperature (state.json "turfs")).
 /// Records and turfs carry their z from BABYLON_STATION_STATE_VERSION on; Babylon's do not.
-/datum/babylon_save/proc/save_level(z, list/mobs_by_turf = checkpoint_mobs())
+/datum/babylon_save/proc/save_level(z, list/mobs_by_turf = checkpoint_mobs(), list/skipped_tiles = checkpoint_skipped_tiles())
 	var/list/records = list()
 	var/list/turfs = list()
 	var/list/headers = list()
@@ -347,6 +494,25 @@
 		grid += "\n([x],1,1) = {\"\n"
 		for(var/y in world.maxy to 1 step -1)
 			var/turf/tile = locate(x, y, z)
+			var/list/beneath = skipped_tiles[tile]
+			if(beneath)
+				// Only the docks under it stay, so the skipped thing (a shuttle) can load there again.
+				var/list/kept = list()
+				for(var/obj/docking_port/stationary/dock in tile)
+					if(istype(dock, /obj/docking_port/stationary/transit) || QDELETED(dock))
+						continue
+					kept += "[dock.type][metadata(dock)]"
+					capture(dock, records, null)
+				kept += "[beneath[1]]"
+				kept += "[beneath[2]]"
+				var/beneath_header = "(\n[kept.Join(",\n")])\n"
+				var/beneath_key = dictionary[beneath_header]
+				if(!beneath_key)
+					beneath_key = calculate_tgm_header_index(key_index++, 3)
+					dictionary[beneath_header] = beneath_key
+					headers += "\"[beneath_key]\" = [beneath_header]"
+				grid += "[beneath_key]\n"
+				continue
 			// Most of the 255x255 map is empty space. Reuse identical headers
 			// instead of inspecting and encoding its vars 60,000 times.
 			var/area/room = get_area(tile)
@@ -356,7 +522,7 @@
 				if(empty_space_keys[space_signature])
 					grid += "[empty_space_keys[space_signature]]\n"
 					continue
-			if(!isspaceturf(tile))
+			if(!isspaceturf(tile) && saves_turf_air(tile))
 				var/list/turf_data = list("x" = x, "y" = y, "temperature" = tile.temperature)
 				if(isopenturf(tile))
 					var/turf/open/open = tile
@@ -372,9 +538,13 @@
 					var/obj/machinery/power/terminal/terminal = object
 					if(istype(terminal.master, /obj/machinery/power/apc))
 						continue
-				if(istype(object, /obj/effect) && !istype(object, /obj/effect/decal) && !istype(object, /obj/effect/turf_decal))
+				if(istype(object, /obj/effect) && !saves_effect(object))
 					continue
 				if(object.flags_1 & HOLOGRAM_1)
+					continue
+				if(!saves_record(object))
+					// Scenery: the saved map's entry is all there is to it.
+					objects += "[object.type][metadata(object, FALSE, FALSE)]"
 					continue
 				objects += "[object.type][metadata(object)]"
 				capture(object, records, null)
@@ -382,6 +552,7 @@
 				if(!QDELETED(saved_mob))
 					objects += "[saved_mob.type][metadata(saved_mob)]"
 					capture(saved_mob, records, null)
+			objects += turf_decal_entries(tile)
 			objects += "[tile.type][metadata(tile, TRUE)]"
 			objects += "[room.type]"
 			var/header = "(\n[objects.Join(",\n")])\n"
@@ -407,9 +578,15 @@
 	var/list/turfs = list()
 	// z (as text) -> the level's map text
 	var/list/level_maps = list()
+	turf_metadata_cache = list()
 	var/list/mobs_by_turf = checkpoint_mobs()
+	var/list/skipped_tiles = checkpoint_skipped_tiles()
+	// z (as text) -> list(milliseconds, records) of its capture, for the save's report.
+	var/list/level_costs = list()
 	for(var/z in persisted_levels())
-		var/list/level = save_level(z, mobs_by_turf)
+		var/level_started = REALTIMEOFDAY
+		var/list/level = save_level(z, mobs_by_turf, skipped_tiles)
+		level_costs["[z]"] = list((REALTIMEOFDAY - level_started) * 100, length(level["records"]))
 		records += level["records"]
 		turfs += level["turfs"]
 		level_maps["[z]"] = level["map_text"]
@@ -423,9 +600,17 @@
 	checkpoint_capture_ms = (REALTIMEOFDAY - checkpoint_started) * 100
 	release_checkpoint()
 	CHECK_TICK
+	var/bytes = 0
 	for(var/z_text in level_maps)
+		bytes += length(level_maps[z_text])
 		rustg_file_write(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")
-	rustg_file_write(json_encode(state), "[base]/state.json")
+	var/state_text = json_encode(state)
+	// json_encode writes an empty list as []; the save contract's "characters" is an object
+	// (services/supervisor/fixtures/README.md). Babylon's state has no such key.
+	// (Brackets and braces spelled as characters: DM string literals treat them specially.)
+	state_text = replacetext(state_text, "\"characters\":[ascii2text(91)][ascii2text(93)]", "\"characters\":[ascii2text(123)][ascii2text(125)]")
+	bytes += length(state_text)
+	rustg_file_write(state_text, "[base]/state.json")
 	// latest.json is committed only after every generation file is present.
 	var/complete = fexists("[base]/state.json")
 	for(var/z_text in level_maps)
@@ -437,7 +622,10 @@
 	last_save = generation
 	rustg_file_write(json_encode(list("generation" = generation, "saved_at" = time2text(world.realtime, "YYYY-MM-DD hh:mm:ss"), "objects" = length(records))), "data/babylon/saves/latest.json")
 	to_chat(world, span_notice("Babylon saved: [generation]."))
-	return list("ok" = TRUE, "generation" = generation, "objects" = length(records), "capture_ms" = checkpoint_capture_ms, "total_ms" = (REALTIMEOFDAY - checkpoint_started) * 100)
+	var/total_ms = (REALTIMEOFDAY - checkpoint_started) * 100
+	// The simulation is paused for capture_ms: keep an eye on it for large (multi-level) maps.
+	log_world("Babylon saved [generation]: [length(level_maps)] level(s), [length(records)] objects, [length(turfs)] turf records, [bytes] bytes; capture [checkpoint_capture_ms] ms, total [total_ms] ms.")
+	return list("ok" = TRUE, "generation" = generation, "objects" = length(records), "capture_ms" = checkpoint_capture_ms, "total_ms" = total_ms, "levels" = length(level_maps), "bytes" = bytes, "level_costs" = level_costs)
 
 /datum/babylon_save/proc/restore_world()
 	if(!fexists("data/babylon/resume-state.json"))
@@ -455,6 +643,7 @@
 	for(var/atom/thing in world)
 		if(thing.babylon_save_id)
 			restored_atoms[thing.babylon_save_id] = thing
+		CHECK_TICK
 	var/list/used_children = list()
 	for(var/list/record as anything in records)
 		var/save_id = record["id"]
@@ -494,12 +683,27 @@
 			for(var/list/chem as anything in record["reagents"])
 				thing.reagents.add_reagent(text2path(chem["type"]), chem["volume"], added_purity = chem["purity"], no_react = TRUE)
 		CHECK_TICK
+	// A closed locker takes in whatever lies or stands on its tile when the map loads (animals
+	// too). Saved objects and mobs beside it go back onto their tile, before the regenerated
+	// contents are removed below.
+	for(var/list/record as anything in records)
+		if(record["parent"])
+			continue
+		var/atom/movable/thing = restored_atoms[record["id"]]
+		if(!istype(thing) || isturf(thing.loc))
+			continue
+		var/turf/tile = locate(record["x"], record["y"], isnull(record["z"]) ? station_z : restored_level_z(record["z"]))
+		if(tile)
+			thing.forceMove(tile)
+		CHECK_TICK
 	// Remove regenerated default inventory which was not in the saved inventory.
 	for(var/list/record as anything in records)
 		var/atom/thing = restored_atoms[record["id"]]
 		if(!thing)
 			continue
-		if(istype(thing, /obj/item) || istype(thing, /obj/machinery) || istype(thing, /mob/living/basic/drone))
+		// Lockers, cabinets and bookcases fill themselves on load as well: without them a
+		// world's lockers refilled on every restart.
+		if(istype(thing, /obj/item) || istype(thing, /obj/machinery) || istype(thing, /obj/structure) || istype(thing, /mob/living/basic/drone))
 			for(var/obj/item/extra in thing.contents.Copy())
 				if(!(extra in used_children))
 					qdel(extra)
@@ -624,7 +828,9 @@
 		CHECK_TICK
 	for(var/list/record as anything in state["turfs"])
 		// Babylon's turfs carry no z: they are on the station level.
-		var/turf/tile = locate(record["x"], record["y"], isnull(record["z"]) ? station_z : record["z"])
+		var/turf/tile = locate(record["x"], record["y"], isnull(record["z"]) ? station_z : restored_level_z(record["z"]))
+		if(!tile)
+			continue
 		tile.temperature = record["temperature"]
 		if(record["gas"] && isopenturf(tile))
 			var/turf/open/open = tile
@@ -668,6 +874,7 @@
 				alarm.select_mode(alarm, text2path(record["alarm_mode"]), should_apply = FALSE)
 		if(istype(thing, /obj/machinery/atmospherics/components/unary/airlock_pump))
 			restore_cycle_pump(thing, record)
+		CHECK_TICK
 
 	for(var/list/record as anything in records)
 		var/atom/thing = restored_atoms[record["id"]]
@@ -686,6 +893,7 @@
 				control.track = record["fields"]["track"]
 		if(istype(thing, /obj/item/modular_computer) && record["active_program"])
 			programs_to_resume[thing] = record
+		CHECK_TICK
 	restore_session_state(state)
 	play_time = isnum(state["play_time"]) ? state["play_time"] : 0
 	to_chat(world, span_notice("Babylon resumed from [last_save]."))
