@@ -5,7 +5,7 @@
 // the form helpful. Answers come back through lobbyResult().
 // Plain ES5 like loading.js, for BYOND's embedded browser.
 
-var lobbyState = { ref: '', ckey: '', admin: 0, worlds: [], maps: [], limits: {}, player_limit: 1 };
+var lobbyState = { ref: '', ckey: '', admin: 0, worlds: [], maps: [], limits: {}, player_limit: 1, discord: {} };
 var lobbyModal = null;
 var lobbyRequestCounter = 0;
 var lobbyToasts = [];
@@ -14,21 +14,25 @@ var lobbyReturnFocus = null;
 
 var LOBBY_VISIBILITY = [
   { id: 'private', label: 'Private', help: 'Only you, your members and server admins can join.' },
-  { id: 'showcase', label: 'Showcase', help: 'Members build. Guests visit as visible ghosts who can look around and chat.' },
-  { id: 'password', label: 'Password', help: 'Guests who know the password can join and play.' },
+  { id: 'showcase', label: 'Showcase', help: 'Members play. Guests visit as visible ghosts who can look around and chat.' },
+  { id: 'password', label: 'Password-protected', help: 'Guests who know the password can join and play.' },
   { id: 'public', label: 'Public', help: 'Anyone can join and play.' }
 ];
 var LOBBY_GROUPS = {
   babylon: { label: 'Babylon', help: 'Rebuild a station from scratch as a construction drone.' },
-  creative_plane: { label: 'Creative Plane', help: 'An empty, flat plane to build anything on. Pick a size.' },
+  creative_plane: { label: 'Creative Plane', help: 'An empty, flat plane to build anything on. Like on station maps, the round starts when you press Start round.' },
   station: { label: 'Stations', help: 'A regular station round on a classic map. The round starts when you press Start round.' }
 };
 var LOBBY_CREATIVE_HELP = 'Everyone in this world gets the Creative panel: spawn items, fly, godmode and more. Only inside this world.';
 var LOBBY_PERSISTENT_HELP = 'Saves automatically. Turn off for throwaway rounds; an unsaved world does not count against your saved-world limit.';
-var LOBBY_GRADIENTS = [
-  ['#1f6f68', '#173a52'], ['#2d4f8a', '#1b2a44'], ['#5a3f8c', '#232a4a'],
-  ['#7a5a22', '#2b2a33'], ['#1f5f7a', '#122536'], ['#6b3448', '#26223a']
-];
+// Placeholder colours for maps without a preview image, chosen per map (fallback per group).
+var LOBBY_PLACEHOLDERS = {
+  babylon: ['#1f6f68', '#173a52'], creative_plane: ['#4b3f8c', '#1f2a4a'], station: ['#2d4f8a', '#1b2a44'],
+  boxstation: ['#2d4f8a', '#1b2a44'], metastation: ['#1f5f7a', '#122536'], deltastation: ['#7a5a22', '#2b2a33'],
+  icebox: ['#3f7d9a', '#1a2f45'], tramstation: ['#2f6b4f', '#16302a'], kilostation: ['#4f5d73', '#1e2633'],
+  northstar: ['#3b4a8c', '#1a2040'], pubbystation: ['#6e5a3a', '#2a2420']
+};
+var LOBBY_SIZE_AREAS = { S: '50\u00d750', M: '100\u00d7100', L: '200\u00d7200' };
 
 // --- Small helpers ------------------------------------------------------------------------
 
@@ -53,7 +57,19 @@ function lobbyTrim(value) { return String(value === null || value === undefined 
 function lobbyEl(id) { return document.getElementById(id); }
 
 function lobbyUpdateState(state) {
-  if (state && typeof state === 'object') lobbyState = state;
+  if (!state || typeof state !== 'object') return;
+  var wasLinked = !!(lobbyState.discord && lobbyState.discord.linked);
+  lobbyState = state;
+  var modal = lobbyModal;
+  if (!modal) return;
+  if (modal.type === 'discord' && !wasLinked && state.discord && state.discord.linked) {
+    lobbyClose();
+    lobbyToast('Discord linked' + (state.discord.name ? ' as ' + state.discord.name : '') + '.');
+  } else if (modal.refreshOnState && !modal.busy) {
+    // Only dialogs that asked for it (Members after a change) redraw on a refresh.
+    modal.refreshOnState = false;
+    lobbyRenderModal();
+  }
 }
 
 /// Navigates to a lobby.dm action. The payload is JSON in one urlencoded parameter.
@@ -153,7 +169,7 @@ function lobbyInitials(name) {
   for (var i = 0; i < words.length && letters.length < 2; i++) {
     if (words[i]) letters += words[i].charAt(0).toUpperCase();
   }
-  if (letters.length < 2 && words[0]) letters = words[0].substr(0, 2).charAt(0).toUpperCase() + words[0].substr(1, 1).toLowerCase();
+  if (letters.length < 2 && words[0]) letters = words[0].substr(0, 2).toUpperCase();
   return letters || '?';
 }
 
@@ -163,9 +179,7 @@ function lobbyPreviewHtml(card) {
   if (map && map.preview_url) {
     return '<span class="map-preview"><img src="' + lobbyEsc(map.preview_url) + '" alt=""><span class="map-check" aria-hidden="true">&#10003;</span></span>';
   }
-  var hash = 0;
-  for (var i = 0; i < card.key.length; i++) hash = (hash * 31 + card.key.charCodeAt(i)) % 100003;
-  var colors = LOBBY_GRADIENTS[hash % LOBBY_GRADIENTS.length];
+  var colors = LOBBY_PLACEHOLDERS[map && map.id] || LOBBY_PLACEHOLDERS[card.group] || LOBBY_PLACEHOLDERS.station;
   var art = card.group === 'creative_plane' ? ' grid' : (card.group === 'babylon' ? ' rings' : '');
   var initials = card.group === 'babylon' ? 'B13' : lobbyInitials(card.name);
   return '<span class="map-preview" aria-hidden="true"><span class="map-art' + art + '" style="background:linear-gradient(135deg,' +
@@ -255,10 +269,18 @@ function lobbyFocusables(root) {
   if (!root || !root.querySelectorAll) return [];
   var found = root.querySelectorAll(LOBBY_FOCUSABLE);
   var list = [];
+  var checked = {};
+  for (var c = 0; c < found.length; c++) if (found[c].type === 'radio' && found[c].checked) checked[found[c].name] = true;
+  var seen = {};
   for (var i = 0; i < found.length; i++) {
-    // Radio groups: only the checked radio (or the first) is a tab stop.
-    if (found[i].type === 'radio' && !found[i].checked) continue;
-    list.push(found[i]);
+    var item = found[i];
+    if (item.getAttribute && item.getAttribute('tabindex') === '-1') continue;
+    // Radio groups are one tab stop: the checked radio, or the first one.
+    if (item.type === 'radio') {
+      if (checked[item.name] ? !item.checked : seen[item.name]) continue;
+      seen[item.name] = true;
+    }
+    list.push(item);
   }
   return list;
 }
@@ -277,6 +299,8 @@ function lobbyRenderModal() {
   var active = document.activeElement;
   var sameView = modal.renderedView === lobbyModalView(modal);
   var focusId = sameView && active && active.id ? active.id : '';
+  var backdrop = lobbyEl('modal-backdrop');
+  var scroll = sameView && backdrop ? backdrop.scrollTop : 0;
   root.innerHTML = lobbyModalHtml(modal);
   modal.renderedView = lobbyModalView(modal);
   lobbyBodyClass(true);
@@ -288,6 +312,27 @@ function lobbyRenderModal() {
   if (target && target.focus) {
     try { target.focus(); } catch (e) { /* not focusable in this browser */ }
   }
+  // A redraw (a toggle, a size, busy) keeps the dialog where the player scrolled it to...
+  backdrop = lobbyEl('modal-backdrop');
+  if (backdrop && scroll) backdrop.scrollTop = scroll;
+  // ...except that a new error is scrolled into view (it is also repeated in the footer).
+  if (modal.scrollToError) {
+    modal.scrollToError = false;
+    var error = root.querySelector ? root.querySelector('.modal-error') : null;
+    if (error && error.scrollIntoView) {
+      try { error.scrollIntoView(true); } catch (e) { /* older browser */ }
+    }
+  }
+}
+
+/// Shows an error in the open dialog (top and footer) and keeps the dialog open.
+function lobbyFail(message) {
+  var modal = lobbyModal;
+  if (!modal) return false;
+  modal.error = String(message);
+  modal.scrollToError = true;
+  lobbyRenderModal();
+  return false;
 }
 
 function lobbyModalView(modal) { return modal.type + ':' + (modal.step || '') + ':' + (modal.loading ? 1 : 0); }
@@ -297,7 +342,8 @@ function lobbyKeydown(event) {
   if (!lobbyModal || !event) return true;
   var key = event.keyCode || event.which;
   if (key === 27) {
-    lobbyClose();
+    // A request in flight keeps its dialog, so its answer (an error) is not lost.
+    if (!lobbyModal.busy) lobbyClose();
     lobbyPrevent(event);
     return false;
   }
@@ -335,7 +381,7 @@ function lobbyPrevent(event) {
 function lobbyBackdrop(event) {
   event = event || window.event;
   var target = event && (event.target || event.srcElement);
-  if (target && target.id === 'modal-backdrop') lobbyClose();
+  if (target && target.id === 'modal-backdrop' && lobbyModal && !lobbyModal.busy) lobbyClose();
 }
 
 if (document.addEventListener) document.addEventListener('keydown', lobbyKeydown, false);
@@ -369,9 +415,8 @@ function lobbyResult(encoded) {
   }
   modal.busy = false;
   if (data.error) {
-    modal.error = String(data.error);
     modal.loading = false;
-    lobbyRenderModal();
+    lobbyFail(data.error);
     return;
   }
   if (modal.type === 'checkpoints' && modal.loading) {
@@ -386,6 +431,15 @@ function lobbyResult(encoded) {
     modal.command = String(data.command || '');
     modal.invite = !!data.invite;
     lobbyRenderModal();
+    return;
+  }
+  if (modal.type === 'members') {
+    // Members stays open for more changes; its list updates with the next refresh.
+    modal.fields.member = '';
+    modal.error = '';
+    modal.refreshOnState = true;
+    lobbyRenderModal();
+    if (data.notice) lobbyToast(data.notice);
     return;
   }
   lobbyClose();
@@ -492,13 +546,60 @@ function lobbyPickSize(button) {
   return false;
 }
 
+/// Arrow keys move between the sizes of a card (a radio group with one tab stop).
+function lobbySizeKey(event, button) {
+  event = event || window.event;
+  var key = event.keyCode || event.which;
+  var step = key === 37 || key === 38 ? -1 : (key === 39 || key === 40 ? 1 : 0);
+  if (!step) return true;
+  var card = lobbyCardForMap(button.getAttribute('data-map'));
+  if (!card) return true;
+  var index = 0;
+  for (var i = 0; i < card.maps.length; i++) if (card.maps[i].id === button.getAttribute('data-map')) index = i;
+  var next = card.maps[(index + step + card.maps.length) % card.maps.length];
+  lobbyChooseMap(card, next.id);
+  var target = lobbyEl('size-' + next.id);
+  if (target && target.focus) target.focus();
+  lobbyPrevent(event);
+  return false;
+}
+
+/// "S · 50×50" from the server's catalog description, or the plain size.
+function lobbySizeLabel(map) {
+  var match = /(\d+)\s*x\s*(\d+)/i.exec(map.description || '');
+  var area = match ? match[1] + '\u00d7' + match[2] : LOBBY_SIZE_AREAS[map.size];
+  return map.size + (area ? ' \u00b7 ' + area : '');
+}
+
+/// The catalog build of a world's map: 'babylon' (drone builder) or 'station' (tg round).
+function lobbyBuild(world) {
+  var map = world && lobbyMap(world.map);
+  return map ? map.build : 'babylon';
+}
+
+function lobbyRemoveMember(button) {
+  var modal = lobbyModal;
+  if (!modal || modal.busy) return false;
+  var who = button.getAttribute('data-member');
+  modal.removing = who;
+  return lobbyRequest('member', { world: modal.world, member: who, role: 'remove' }, 'Removing...');
+}
+
+function lobbyStopFromSettings() {
+  var modal = lobbyModal;
+  if (!modal) return false;
+  var world = lobbyWorld(modal.world);
+  if (!world) return false;
+  lobbyModal = null;
+  lobbyOpenModal({ type: 'confirm', action: 'stop', world: world.id, fields: { confirm_name: '' } });
+  return false;
+}
+
 function lobbyWizardStep(step) {
   var modal = lobbyModal;
   if (!modal || modal.type !== 'create' || modal.busy) return false;
   if (step === 'details' && !lobbyMap(modal.fields.map)) {
-    modal.error = 'Choose a map first.';
-    lobbyRenderModal();
-    return false;
+    return lobbyFail('Choose a map first.');
   }
   modal.error = '';
   modal.step = step;
@@ -578,11 +679,7 @@ function lobbyCreate(join) {
   else if (info.totalFull) error = 'You have reached your limit of ' + info.maxTotal + ' worlds. Delete one to create another.';
   else if (modal.fields.persistent && info.savedFull) error = 'You have reached your limit of ' + info.maxSaved + ' saved worlds. Turn Persistent off, or delete a saved world.';
   else error = lobbySettingsPayload(modal.fields, payload, true, null);
-  if (error) {
-    modal.error = error;
-    lobbyRenderModal();
-    return false;
-  }
+  if (error) return lobbyFail(error);
   if (join) payload.join = 1;
   return lobbyRequest('create', payload, join ? 'Creating and starting...' : 'Creating...');
 }
@@ -601,32 +698,20 @@ function lobbySubmit() {
     if (!error && payload.persistent && world.persistent === 0 && info.savedFull) {
       error = 'You have reached your limit of ' + info.maxSaved + ' saved worlds, so this world cannot be made persistent.';
     }
-    if (error) {
-      modal.error = error;
-      lobbyRenderModal();
-      return false;
-    }
+    if (error) return lobbyFail(error);
     return lobbyRequest('edit', payload, 'Saving...');
   }
   if (modal.type === 'join') {
     var joinPayload = { world: modal.world, password: String(modal.fields.password || '') };
-    if (!joinPayload.password) {
-      modal.error = 'Enter the world password.';
-      lobbyRenderModal();
-      return false;
-    }
+    if (!joinPayload.password) return lobbyFail('Enter the world password.');
     if (modal.spectate) joinPayload.spectate = 1;
     return lobbyRequest('join', joinPayload, 'Joining...');
   }
   if (modal.type === 'members') {
     var member = lobbyTrim(modal.fields.member);
-    if (!member || member.length > 64) {
-      modal.error = 'Enter a BYOND account name.';
-      lobbyRenderModal();
-      return false;
-    }
-    var role = modal.fields.role === 'remove' ? 'remove' : 'member';
-    return lobbyRequest('member', { world: modal.world, member: member, role: role }, role === 'remove' ? 'Removing...' : 'Adding...');
+    if (!member || member.length > 64) return lobbyFail('Enter a BYOND account name.');
+    modal.removing = '';
+    return lobbyRequest('member', { world: modal.world, member: member, role: 'member' }, 'Adding...');
   }
   // Confirmations and the checkpoint picker never submit on Enter: they need an explicit click.
   return false;
@@ -689,8 +774,10 @@ function lobbyDialog(modal, options) {
     '<h2 id="modal-title">' + lobbyEsc(options.title) + '</h2>' +
     (options.subtitle ? '<p id="modal-subtitle">' + lobbyEsc(options.subtitle) + '</p>' : '') +
     '</div><button type="button" class="modal-close" aria-label="Close" onclick="return lobbyClose()">&times;</button></header>';
-  var error = modal.error ? '<div class="modal-error" role="alert">' + lobbyEsc(modal.error) + '</div>' : '';
-  var inner = error + '<div class="modal-body">' + options.body + '</div><footer class="modal-foot">' + options.footer + '</footer>';
+  var error = modal.error ? '<div class="modal-error">' + lobbyEsc(modal.error) + '</div>' : '';
+  // The error is repeated next to the buttons, which stay in view (sticky footer).
+  var footError = modal.error ? '<span class="foot-error" role="alert">' + lobbyEsc(modal.error) + '</span>' : '';
+  var inner = error + '<div class="modal-body">' + options.body + '</div><footer class="modal-foot">' + footError + options.footer + '</footer>';
   if (options.form) inner = '<form onsubmit="return lobbySubmit()" novalidate autocomplete="off">' + inner + '</form>';
   return '<div class="modal-backdrop" id="modal-backdrop" onmousedown="lobbyBackdrop(event)">' +
     '<div class="modal' + (options.wide ? ' wide' : '') + (options.danger ? ' danger' : '') + '" role="' +
@@ -716,18 +803,31 @@ function lobbyCreateMapHtml(modal) {
   if (info.totalFull) {
     body += '<div class="callout">You have reached your limit of ' + info.maxTotal + ' worlds. Delete a world you no longer need to create a new one.</div>';
   }
-  var first = true;
+  var discord = lobbyState.discord || {};
+  if (discord.link && discord.require_create && !discord.linked) {
+    body += '<div class="callout">This server needs a linked Discord account before you can create a world. ' +
+      '<button type="button" class="button small" onclick="lobbyModal = null; return lobbyOpenDiscordLink()">Link Discord</button></div>';
+  }
+  var inRow = false;
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
+    // Groups with a single card (Babylon, Creative Plane) share a row.
+    var single = group.cards.length === 1;
+    if (single && !inRow) {
+      body += '<div class="map-row">';
+      inRow = true;
+    } else if (!single && inRow) {
+      body += '</div>';
+      inRow = false;
+    }
     body += '<section class="map-group" aria-label="' + lobbyEsc(group.label) + '"><h3>' + lobbyEsc(group.label) + '</h3>' +
       (group.help ? '<p>' + lobbyEsc(group.help) + '</p>' : '') + '<div class="map-grid">';
     for (var c = 0; c < group.cards.length; c++) {
       var card = group.cards[c];
       var selected = modal.fields.card === card.key;
       var shown = selected ? lobbyFind(card.maps, 'id', modal.fields.map) || card.maps[0] : card.maps[0];
-      var description = card.maps.length > 1 && !selected ? (LOBBY_GROUPS[card.group] ? LOBBY_GROUPS[card.group].help : shown.description) : shown.description;
-      var autofocus = selected || (!modal.fields.card && first);
-      first = false;
+      var description = card.maps.length > 1 && !selected ? 'Pick a size below.' : shown.description;
+      var autofocus = selected;
       body += '<div class="map-card' + (selected ? ' selected' : '') + '">' +
         '<button type="button" class="map-pick" id="map-' + lobbyEsc(card.key.replace(/[^a-z0-9_]/g, '-')) + '" data-card="' + lobbyEsc(card.key) +
         '" aria-pressed="' + (selected ? 'true' : 'false') + '"' + (autofocus ? ' data-autofocus="1"' : '') +
@@ -736,12 +836,13 @@ function lobbyCreateMapHtml(modal) {
         '<span class="map-desc">' + lobbyEsc(description) + '</span></span></button>';
       if (card.maps.length > 1) {
         body += '<div class="sizes" role="radiogroup" aria-label="' + lobbyEsc(card.name) + ' size">';
+        var stop = selected ? modal.fields.map : card.maps[0].id;
         for (var s = 0; s < card.maps.length; s++) {
           var sized = card.maps[s];
           var on = selected && sized.id === modal.fields.map;
           body += '<button type="button" class="size' + (on ? ' selected' : '') + '" id="size-' + lobbyEsc(sized.id) + '" role="radio" aria-checked="' +
-            (on ? 'true' : 'false') + '" data-map="' + lobbyEsc(sized.id) + '" title="' + lobbyEsc(sized.description) +
-            '" onclick="return lobbyPickSize(this)">' + lobbyEsc(sized.size) + '</button>';
+            (on ? 'true' : 'false') + '" tabindex="' + (sized.id === stop ? '0' : '-1') + '" data-map="' + lobbyEsc(sized.id) + '" title="' + lobbyEsc(sized.description) +
+            '" onclick="return lobbyPickSize(this)" onkeydown="return lobbySizeKey(event, this)">' + lobbyEsc(lobbySizeLabel(sized)) + '</button>';
         }
         body += '</div>';
       }
@@ -749,6 +850,7 @@ function lobbyCreateMapHtml(modal) {
     }
     body += '</div></section>';
   }
+  if (inRow) body += '</div>';
   if (!groups.length) body += '<div class="empty">No maps are available right now.</div>';
   return lobbyDialog(modal, {
     title: 'Choose a map', step: 'New world · step 1 of 2', wide: true, form: true,
@@ -761,18 +863,19 @@ function lobbyCreateMapHtml(modal) {
   });
 }
 
-function lobbyToggleHtml(id, name, title, help, checked, disabledReason) {
+function lobbyToggleHtml(id, name, title, help, checked, disabledReason, note) {
   return '<label class="toggle' + (disabledReason ? ' disabled' : '') + '" for="' + id + '">' +
-    '<input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + (disabledReason ? ' disabled' : '') +
+    '<input type="checkbox" id="' + id + '"' + (checked ? ' checked' : '') + (disabledReason || (lobbyModal && lobbyModal.busy) ? ' disabled' : '') +
     ' onclick="lobbyField(\'' + name + '\', this.checked ? 1 : 0, true)">' +
     '<span class="switch" aria-hidden="true"></span><span class="toggle-text"><b>' + lobbyEsc(title) + '</b><small>' + lobbyEsc(help) + '</small>' +
-    (disabledReason ? '<small class="why">' + lobbyEsc(disabledReason) + '</small>' : '') + '</span></label>';
+    (disabledReason ? '<small class="why">' + lobbyEsc(disabledReason) + '</small>' : '') +
+    (note ? '<small class="note">' + lobbyEsc(note) + '</small>' : '') + '</span></label>';
 }
 
 /// Name, description, who can join, password, capacity and the two flags.
 function lobbySettingsHtml(modal, options) {
   var f = modal.fields;
-  var locked = options.locked ? ' disabled' : '';
+  var locked = options.locked || modal.busy ? ' disabled' : '';
   var html = '<div class="field"><label for="f-name">World name</label><input type="text" id="f-name" maxlength="60" data-autofocus="1" value="' +
     lobbyEsc(f.name) + '" oninput="lobbyField(\'name\', this.value)"' + locked + '></div>' +
     '<div class="field"><label for="f-description">Description <small>(optional)</small></label><textarea id="f-description" maxlength="500" rows="3" oninput="lobbyField(\'description\', this.value)"' +
@@ -799,7 +902,8 @@ function lobbySettingsHtml(modal, options) {
   html += '<div class="toggles" role="group" aria-label="World type"><span class="field-label">World type</span>' +
     lobbyToggleHtml('f-creative', 'creative', 'Creative', LOBBY_CREATIVE_HELP, f.creative, options.locked ? options.lockReason : '') +
     lobbyToggleHtml('f-persistent', 'persistent', 'Persistent', LOBBY_PERSISTENT_HELP, f.persistent,
-      options.locked ? options.lockReason : options.persistentReason) + '</div>';
+      options.locked ? options.lockReason : options.persistentReason,
+      !f.persistent && options.world && options.world.persistent !== 0 ? 'Existing checkpoints are kept and used again if you turn this back on.' : '') + '</div>';
   return html;
 }
 
@@ -846,7 +950,11 @@ function lobbyEditHtml(modal) {
   body += lobbySettingsHtml(modal, {
     creating: false, world: world, locked: running, lockReason: 'Stop the world to change this.', persistentReason: persistentReason
   });
-  var buttons = running ? [{ label: 'Close', onclick: 'return lobbyClose()', cancel: true }] : [
+  var canStop = world.state === 'running' || world.state === 'error';
+  var buttons = running ? [
+    { label: 'Close', onclick: 'return lobbyClose()', cancel: true },
+    { label: world.persistent === 0 ? 'Stop world...' : 'Save and stop...', kind: 'danger', onclick: 'return lobbyStopFromSettings()', disabled: !canStop }
+  ] : [
     { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true },
     { label: 'Save settings', kind: 'primary', submit: true, busy: true, id: 'modal-submit' }
   ];
@@ -857,7 +965,7 @@ function lobbyJoinHtml(modal) {
   var world = lobbyWorld(modal.world) || { name: 'this world' };
   var body = '<p>' + lobbyEsc(world.name) + ' is protected by a password. Ask its owner if you do not know it.</p>' +
     '<div class="field"><label for="join-password">World password</label><input type="password" id="join-password" maxlength="128" data-autofocus="1" value="' +
-    lobbyEsc(modal.fields.password) + '" oninput="lobbyField(\'password\', this.value)"></div>';
+    lobbyEsc(modal.fields.password) + '" oninput="lobbyField(\'password\', this.value)"' + (modal.busy ? ' disabled' : '') + '></div>';
   return lobbyDialog(modal, {
     title: 'Join ' + world.name, form: true, body: body,
     footer: lobbyButtons(modal, [
@@ -868,22 +976,30 @@ function lobbyJoinHtml(modal) {
 }
 
 function lobbyMembersHtml(modal) {
-  var world = lobbyWorld(modal.world) || { name: 'this world' };
-  var role = modal.fields.role === 'remove' ? 'remove' : 'member';
-  var body = '<p class="muted">Members can start this world while you are away, join it even when it is private, and build in it.</p>' +
-    '<div class="field"><label for="f-member">BYOND account</label><input type="text" id="f-member" maxlength="64" data-autofocus="1" value="' +
-    lobbyEsc(modal.fields.member) + '" oninput="lobbyField(\'member\', this.value)"></div>' +
-    '<fieldset class="choice-group"><legend>Change</legend><div class="choices">' +
-    '<label class="choice' + (role === 'member' ? ' selected' : '') + '" for="role-member"><input type="radio" name="role" id="role-member" value="member"' +
-    (role === 'member' ? ' checked' : '') + ' onclick="lobbyField(\'role\', this.value, true)"><b>Add as member</b><small>Grant access to this world.</small></label>' +
-    '<label class="choice' + (role === 'remove' ? ' selected' : '') + '" for="role-remove"><input type="radio" name="role" id="role-remove" value="remove"' +
-    (role === 'remove' ? ' checked' : '') + ' onclick="lobbyField(\'role\', this.value, true)"><b>Remove access</b><small>The account becomes a guest again.</small></label>' +
-    '</div></fieldset>';
+  var world = lobbyWorld(modal.world) || { name: 'this world', members: [] };
+  var station = lobbyBuild(world) === 'station';
+  var members = world.members || [];
+  var body = '<p class="muted">' + (station
+    ? 'Members can start this world and join it even when it is private. Only you (or an admin) can press Start round, so the round waits for you.'
+    : 'Members can start this world while you are away, join it even when it is private, and build in it.') + '</p>';
+  if (members.length) {
+    body += '<ul class="member-list" aria-label="Current members">';
+    for (var i = 0; i < members.length; i++) {
+      var removing = modal.busy && modal.removing === members[i];
+      body += '<li><span>' + lobbyEsc(members[i]) + '</span><button type="button" class="button small danger" data-member="' + lobbyEsc(members[i]) +
+        '" onclick="return lobbyRemoveMember(this)"' + (modal.busy ? ' disabled' : '') + '>' + (removing ? 'Removing...' : 'Remove') + '</button></li>';
+    }
+    body += '</ul>';
+  } else {
+    body += '<p class="empty small">No members yet.</p>';
+  }
+  body += '<div class="field"><label for="f-member">Add a BYOND account</label><input type="text" id="f-member" maxlength="64" data-autofocus="1" value="' +
+    lobbyEsc(modal.fields.member) + '" oninput="lobbyField(\'member\', this.value)"' + (modal.busy ? ' disabled' : '') + '></div>';
   return lobbyDialog(modal, {
     title: 'Members', subtitle: world.name, form: true, body: body,
     footer: lobbyButtons(modal, [
-      { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true },
-      { label: role === 'remove' ? 'Remove access' : 'Add member', kind: role === 'remove' ? 'danger' : 'primary', submit: true, busy: true, id: 'modal-submit' }
+      { label: 'Close', onclick: 'return lobbyClose()', cancel: true },
+      { label: 'Add member', kind: 'primary', submit: true, busy: !modal.removing, id: 'modal-submit' }
     ])
   });
 }
@@ -924,13 +1040,18 @@ function lobbyCheckpointsHtml(modal) {
     body = '<p>This world has no saved checkpoints yet. It saves automatically while it runs.</p>';
   } else {
     body = '<p class="muted">Newest first. Restoring a checkpoint rewinds the world to that moment.</p><ul class="checkpoints" role="radiogroup" aria-label="Saved checkpoints">';
+    var focusSet = false;
     for (var p = 0; p < points.length; p++) {
       var point = points[p];
       var current = !!point.current;
       var on = modal.fields.generation === point.generation;
       var id = 'cp-' + p;
+      // Focus starts on the selected checkpoint, or the first one that can be restored.
+      var focus = on || (!modal.fields.generation && !current && !focusSet);
+      if (focus) focusSet = true;
       body += '<li><label class="checkpoint' + (on ? ' selected' : '') + (current ? ' current' : '') + '" for="' + id + '">' +
         '<input type="radio" name="checkpoint" id="' + id + '" value="' + lobbyEsc(point.generation) + '"' + (on ? ' checked' : '') +
+        (focus ? ' data-autofocus="1"' : '') +
         (current ? ' disabled' : '') + ' onclick="lobbyField(\'generation\', this.value, true)">' +
         '<span class="when">' + lobbyEsc(lobbyCheckpointLabel(point.generation)) + '</span>' +
         (point.objects !== undefined ? '<small>' + lobbyEsc(point.objects) + ' objects</small>' : '') +
@@ -985,7 +1106,7 @@ function lobbyConfirmHtml(modal) {
       title: saved ? 'Save and stop this world?' : 'Stop this world?', danger: !saved,
       body: '<div class="' + (saved ? 'callout info' : 'consequence') + '"><p>' + (saved
         ? 'The world saves a final checkpoint, then stops. Everyone still in ' + name + ' is returned to the lobby.'
-        : name + ' is not saved: <b>everything built since it started is lost</b> when it stops. Everyone still in it is returned to the lobby.') + '</p></div>',
+        : name + ' is not saved: <b>all progress since it started is lost</b> when it stops. Everyone still in it is returned to the lobby.') + '</p></div>',
       footer: lobbyButtons(modal, [
         { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true, autofocus: true },
         { label: saved ? 'Save and stop' : 'Stop without saving', kind: saved ? 'primary' : 'danger solid', onclick: 'return lobbyConfirm()', busy: true, id: 'modal-confirm' }
@@ -999,7 +1120,8 @@ function lobbyConfirmHtml(modal) {
   var matches = lobbyTrim(modal.fields.confirm_name) === lobbyTrim(world.name);
   var body = '<div class="consequence">' + consequence + '</div>' +
     '<div class="field"><label for="confirm-name">Type <b>' + lobbyEsc(world.name) + '</b> to confirm</label>' +
-    '<input type="text" id="confirm-name" data-autofocus="1" value="' + lobbyEsc(modal.fields.confirm_name) + '" oninput="lobbyConfirmName(this.value)"></div>';
+    '<input type="text" id="confirm-name" data-autofocus="1" value="' + lobbyEsc(modal.fields.confirm_name) + '" oninput="lobbyConfirmName(this.value)"' +
+    (modal.busy ? ' disabled' : '') + '></div>';
   return lobbyDialog(modal, {
     title: reset ? 'Reset world?' : 'Delete world?', danger: true, body: body,
     footer: lobbyButtons(modal, [

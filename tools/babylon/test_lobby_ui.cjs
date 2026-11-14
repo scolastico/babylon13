@@ -101,6 +101,7 @@ const worlds = [
   world(hex(3), { state: 'running', creative: 1 }),
   world(hex(4), { owner: 'someone', role: 'guest', visibility: 'password', state: 'running', name: 'Locked' }),
 ];
+const stationWorld = world(hex(6), { map: 'metastation', name: 'Meta' });
 render(worlds);
 
 // --- Create wizard: map picker -------------------------------------------------------------
@@ -110,7 +111,13 @@ assert.match(modalHtml(), /role="dialog" aria-modal="true"/);
 assert.match(modalHtml(), /Choose a map/);
 assert.match(body.className, /modal-open/);
 assert.equal((modalHtml().match(/data-card="group:creative_plane"/g) || []).length, 1, 'Creative Plane is a single card');
-for (const size of ['S', 'M', 'L']) assert.match(modalHtml(), new RegExp('data-map="creative_plane_' + size.toLowerCase() + '"[^>]*>' + size + '<'));
+for (const [size, area] of [['S', '50×50'], ['M', '100×100'], ['L', '200×200']]) {
+  assert.match(modalHtml(), new RegExp('data-map="creative_plane_' + size.toLowerCase() + '"[^>]*>' + size + ' · ' + area + '<'), 'size buttons name the floor');
+}
+assert.match(modalHtml(), /Creative Plane<\/span><span class="map-desc">Pick a size below\.</, 'an unselected Creative Plane card asks for a size');
+assert.doesNotMatch(modalHtml(), /data-autofocus="1"[^>]*onclick="return lobbyPickMap/, 'no card is focused before one is chosen');
+assert.match(modalHtml(), /<div class="map-row"><section class="map-group" aria-label="Babylon">.*<\/section><section class="map-group" aria-label="Creative Plane">.*<\/section><\/div><section class="map-group" aria-label="Stations">/,
+  'single-card groups share a row');
 for (const label of ['Babylon', 'Creative Plane', 'Stations']) assert.match(modalHtml(), new RegExp('<h3>' + label + '</h3>'), label + ' group');
 assert.match(modalHtml(), /IceBoxStation<span class="badge multiz">Multi-level<\/span>/, 'multi-z maps carry a badge');
 assert.doesNotMatch(modalHtml(), /MetaStation<span class="badge multiz">/);
@@ -129,7 +136,18 @@ assert.equal(modal().fields.creative, 1, 'Creative Plane suggests creative mode'
 assert.equal(modal().fields.name, 'My Creative Plane');
 context.lobbyPickSize(button({ 'data-map': 'creative_plane_l' }));
 assert.equal(modal().fields.map, 'creative_plane_l');
-assert.match(modalHtml(), /class="size selected"[^>]*aria-checked="true" data-map="creative_plane_l"/);
+assert.match(modalHtml(), /class="size selected"[^>]*aria-checked="true" tabindex="0" data-map="creative_plane_l"/);
+assert.match(modalHtml(), /aria-checked="false" tabindex="-1" data-map="creative_plane_s"/, 'one tab stop per size group');
+// Arrow keys move between sizes (roving tabindex).
+let arrowPrevented = false;
+context.lobbySizeKey({ keyCode: 37, preventDefault() { arrowPrevented = true; } }, button({ 'data-map': 'creative_plane_l' }));
+assert.equal(modal().fields.map, 'creative_plane_m');
+assert.equal(arrowPrevented, true);
+context.lobbySizeKey({ keyCode: 39, preventDefault() {} }, button({ 'data-map': 'creative_plane_m' }));
+assert.equal(modal().fields.map, 'creative_plane_l');
+context.lobbySizeKey({ keyCode: 39, preventDefault() {} }, button({ 'data-map': 'creative_plane_l' }));
+assert.equal(modal().fields.map, 'creative_plane_s', 'arrows wrap around');
+context.lobbyPickSize(button({ 'data-map': 'creative_plane_l' }));
 assert.equal(navigations.length, 0);
 
 // --- Create wizard: details -------------------------------------------------------------------
@@ -176,12 +194,20 @@ assert.deepEqual(sent.payload, {
 assert.equal(modal().busy, true);
 assert.match(modalHtml(), /Creating and starting\.\.\./);
 expectNoRequest(() => context.lobbySubmit(), 'a busy dialog does not send twice');
+assert.match(modalHtml(), /id="f-name"[^>]* disabled>/, 'fields are disabled while the request runs');
+// While a request runs, Esc and the backdrop do not close the dialog, so its answer is not lost.
+keyHandlers.forEach(fn => fn({ keyCode: 27, preventDefault() {} }));
+context.lobbyBackdrop({ target: { id: 'modal-backdrop' } });
+assert.equal(modal().type, 'create', 'a busy dialog ignores Esc and the backdrop');
 
 // Supervisor errors are shown inline; the dialog stays open with the values.
 context.lobbyResult(JSON.stringify({ request: 1, error: 'Your total world limit has been reached' }));
 assert.equal(modal().type, 'create');
 assert.equal(modal().busy, false);
-assert.match(modalHtml(), /class="modal-error" role="alert">Your total world limit has been reached/);
+assert.match(modalHtml(), /class="modal-error">Your total world limit has been reached/);
+assert.match(modalHtml(), /<footer class="modal-foot"><span class="foot-error" role="alert">Your total world limit has been reached<\/span>/,
+  'the error is repeated next to the buttons');
+assert.equal(modal().scrollToError, false, 'the error was scrolled into view once');
 assert.match(modalHtml(), /value="Sandbox typed"/);
 context.lobbyCreate(0);
 sent = lastRequest();
@@ -309,13 +335,34 @@ assert.equal(sent.action, 'edit');
 assert.deepEqual(sent.payload, { world: hex(2), name: 'World ' + hex(2), description: '', visibility: 'private', max_players: 8, creative: 0, persistent: 1 });
 context.lobbyClose();
 
+// Members: the current list with a remove button each, and an add field; the dialog stays open.
+render(worlds.map(w => w.id === hex(1) ? Object.assign({}, w, { members: ['alice', 'bob'] }) : w).concat([stationWorld]));
 context.lobbyOpenWorld('members', button({ 'data-id': hex(1) }));
+assert.match(modalHtml(), /<li><span>alice<\/span><button type="button" class="button small danger" data-member="alice"/);
+assert.match(modalHtml(), /Members can start this world while you are away/, 'Babylon wording');
 context.lobbyField('member', 'Some Friend');
-context.lobbyField('role', 'remove', true);
 context.lobbySubmit();
 sent = lastRequest();
-assert.deepEqual(sent.payload, { world: hex(1), member: 'Some Friend', role: 'remove' });
+assert.deepEqual(sent.payload, { world: hex(1), member: 'Some Friend', role: 'member' });
+context.lobbyResult(JSON.stringify({ request: sent.request, ok: 1, notice: 'Some Friend is now a member.' }));
+assert.equal(modal().type, 'members', 'Members stays open after a change');
+assert.equal(modal().fields.member, '', 'the add field is cleared');
+const membersWrites = writes['modal-root'];
+render(worlds.map(w => w.id === hex(1) ? Object.assign({}, w, { members: ['alice', 'bob', 'somefriend'] }) : w).concat([stationWorld]));
+assert.ok(writes['modal-root'] > membersWrites, 'the member list refreshes after a change');
+assert.match(modalHtml(), /data-member="somefriend"/);
+context.lobbyRemoveMember(button({ 'data-member': 'bob' }));
+sent = lastRequest();
+assert.deepEqual(sent.payload, { world: hex(1), member: 'bob', role: 'remove' });
+assert.match(modalHtml(), /Removing\.\.\./);
+context.lobbyResult(JSON.stringify({ request: sent.request, error: 'Invalid membership change' }));
+assert.match(modalHtml(), /foot-error" role="alert">Invalid membership change/);
 context.lobbyClose();
+context.lobbyOpenWorld('members', button({ 'data-id': hex(6) }));
+assert.match(modalHtml(), /Only you \(or an admin\) can press Start round, so the round waits for you\./, 'station wording');
+assert.match(modalHtml(), /No members yet\./);
+context.lobbyClose();
+render(worlds);
 
 assert.equal(context.lobbyJoin(button({ 'data-id': hex(4), 'data-password': '1' })), false, 'a password join opens a dialog instead of the link');
 assert.match(modalHtml(), /<input type="password" id="join-password"/, 'the join password is a password input');
@@ -344,6 +391,61 @@ context.lobbyClose();
 // Answers for a dialog that was closed become toasts.
 context.lobbyResult(JSON.stringify({ request: 999, error: 'Late failure' }));
 assert.match(toastHtml(), /Late failure/);
+
+// --- Discord ----------------------------------------------------------------------------------
+render(worlds, null, { discord: { link: 1, linked: 0, require_create: 1 } });
+context.lobbyOpenCreate();
+assert.match(modalHtml(), /needs a linked Discord account before you can create a world/, 'the wizard says early that Discord is required');
+context.lobbyClose();
+context.lobbyOpenDiscordLink();
+sent = lastRequest();
+context.lobbyResult(JSON.stringify({ request: sent.request, ok: 1, command: '/link code:ABC123', invite: 0 }));
+render(worlds, null, { discord: { link: 1, linked: 1, name: 'joschua', require_create: 1 } });
+assert.equal(modal(), null, 'the link dialog closes once the account is linked');
+assert.match(toastHtml(), /Discord linked as joschua\./);
+render(worlds);
+
+// --- Settings of a running world offer the stop ------------------------------------------------
+context.lobbyOpenWorld('edit', button({ 'data-id': hex(3) }));
+assert.match(modalHtml(), /onclick="return lobbyStopFromSettings\(\)">Save and stop\.\.\.</);
+context.lobbyStopFromSettings();
+assert.equal(modal().type, 'confirm');
+assert.equal(modal().action, 'stop');
+context.lobbyClose();
+
+// --- The page shell survives hostile world names -----------------------------------------------
+// lobby.dm embeds the first state in an inline <script>renderLobby(...)</script>. Its JSON goes
+// through lobby_script_json; this ports that proc's escape table from lobby.dm and checks that a
+// world named like markup can neither end the script nor open an HTML comment in it.
+{
+  const dm = fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/lobby.dm'), 'utf8');
+  assert.match(dm, /<script>renderLobby\(\[lobby_script_json\(json_encode\(data\)\)\]\);<\/script>/, 'the shell embeds its state via lobby_script_json');
+  const table = {};
+  for (const m of dm.matchAll(/"(.)" = "\\\\u([0-9a-f]{4})"/g)) table[m[1]] = '\\u' + m[2];
+  for (const m of dm.matchAll(/escapes\[ascii2text\((\d+)\)\] = "\\\\u([0-9a-f]{4})"/g)) table[String.fromCharCode(Number(m[1]))] = '\\u' + m[2];
+  assert.deepEqual(Object.keys(table).sort(), ['&', '<', '>', '\u2028', '\u2029'].sort(), 'escape table found in lobby.dm');
+  const scriptJson = value => {
+    let text = JSON.stringify(value);
+    for (const [character, escape] of Object.entries(table)) text = text.split(character).join(escape);
+    return text;
+  };
+  // Captured from BYOND 516 (lobby_script_json run in DreamDaemon) for the same data.
+  assert.equal(scriptJson({ name: '</script><!--<script>a&b>\u2028x', n: 1 }),
+    '{"name":"\\u003c/script\\u003e\\u003c!--\\u003cscript\\u003ea\\u0026b\\u003e\\u2028x","n":1}');
+  const hostile = world(hex(7), { name: '</script><!--<script>alert(1)//', description: '</SCRIPT >\u2028\u2029 & more' });
+  const data = { html: '<p>shell</p>', view: 'mine', revision: 1000, complete: 1, state: state([hostile]) };
+  const shell = '<script>renderLobby(' + scriptJson(JSON.stringify(data)) + ');</script>';
+  const body = shell.slice('<script>'.length, shell.length - '</script>'.length);
+  assert.equal(body.search(/<\/script/i), -1, 'nothing ends the script early');
+  assert.equal(body.indexOf('<'), -1, 'no markup at all inside the script (no <!-- either)');
+  vm.runInContext(body, context);
+  assert.equal(elements['browser-content'].innerHTML, '<p>shell</p>', 'the shell still renders');
+  assert.equal(context.lobbyState.worlds[0].name, hostile.name, 'the name arrives unchanged');
+  assert.equal(context.lobbyState.worlds[0].description, hostile.description);
+  context.lobbyOpenWorld('delete', button({ 'data-id': hex(7) }));
+  assert.match(modalHtml(), /&lt;\/script&gt;&lt;!--&lt;script&gt;alert\(1\)\/\//, 'and is shown escaped');
+  context.lobbyClose();
+}
 
 // Losing the connection removes every dialog.
 context.lobbyOpenCreate();
