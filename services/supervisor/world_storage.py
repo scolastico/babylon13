@@ -29,3 +29,34 @@ def delete_world_data(data_directory, world):
     if target.exists():
         checked(target, trash)  # Recheck immediately before recursive deletion.
         shutil.rmtree(target)
+
+
+def reset_world_data(root):
+    """Remove a stopped world's saves so its next start is fresh.
+
+    Removes data/babylon (checkpoints, resume state), _maps/babylon/active.dmm and
+    _maps/babylon/saved/ below the world directory ``root``. Nothing else is touched.
+    """
+    root = Path(root)
+    if root.is_symlink() or not root.exists():
+        if root.is_symlink():
+            raise ValueError("Unsafe world reset target")
+        return
+    resolved = root.resolve()
+    targets = (Path("data/babylon"), Path("_maps/babylon/active.dmm"), Path("_maps/babylon/saved"))
+    for relative in targets:
+        path = root / relative
+        # No part of the path below the world may be a link: it could point outside the world.
+        walked = root
+        for part in relative.parts:
+            walked = walked / part
+            if walked.is_symlink() or getattr(walked, "is_junction", lambda: False)():
+                raise ValueError("Unsafe world reset target")
+        if path.exists() and resolved not in path.resolve().parents:
+            raise ValueError("Unsafe world reset target")
+    for relative in targets:
+        path = root / relative
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)

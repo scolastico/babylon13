@@ -24,7 +24,8 @@ from urllib.parse import parse_qs, urlsplit
 from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
-from world_storage import delete_world_data
+from world_storage import delete_world_data, reset_world_data
+from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
 
@@ -80,6 +81,19 @@ def password_matches(password, stored):
     salt, digest = stored.split(":")
     actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1)
     return hmac.compare_digest(actual.hex(), digest)
+
+
+def world_flag(value, name):
+    """A boolean from a lobby payload: true/false, 1/0 or "1"/"0"; anything else is refused."""
+    if value is True or value == "1" or (type(value) is int and value == 1):
+        return 1
+    if value is False or value == "0" or (type(value) is int and value == 0):
+        return 0
+    raise Denied("%s must be on or off" % name)
+
+
+# Shipped with the repository; used when the configuration names no catalog.
+DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "_maps/babylon/catalog.json"
 
 
 class Driver:
@@ -209,11 +223,20 @@ class Driver:
 class Supervisor:
     def __init__(self, config, driver=None, clock=time.time):
         self.config = config
+        config.setdefault("max_total_worlds_per_player", 20)
         self.clock = clock
         self.lock = threading.RLock()
         self.deletion_lock = threading.Lock()
         self.driver = driver or Driver(config)
         self.admins = {ckey(k) for k in config.get("admins", [])}
+        # A malformed catalog is a clear error at supervisor start.
+        if config.get("map_catalog"):
+            catalog_path = Path(config["map_catalog"])
+        elif config.get("template_directory"):
+            catalog_path = Path(config["template_directory"]) / "_maps/babylon/catalog.json"
+        else:
+            catalog_path = DEFAULT_CATALOG
+        self.catalog = load_catalog(catalog_path)
         Path(config["data_directory"]).mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(Path(config["data_directory"]) / "supervisor.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -244,6 +267,11 @@ class Supervisor:
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(worlds)")}
         if "last_used" not in columns:
             self.db.execute("ALTER TABLE worlds ADD COLUMN last_used REAL")
+        for column, definition in (("map", "TEXT NOT NULL DEFAULT 'babylon'"), ("creative", "INTEGER NOT NULL DEFAULT 0"),
+                                   ("persistent", "INTEGER NOT NULL DEFAULT 1"), ("kind", "TEXT NOT NULL DEFAULT 'world'"),
+                                   ("tutorial", "TEXT")):
+            if column not in columns:
+                self.db.execute("ALTER TABLE worlds ADD COLUMN %s %s" % (column, definition))
         # Admin tickets may ask to spectate (an observer instead of a drone).
         if "spectate" not in {row[1] for row in self.db.execute("PRAGMA table_info(tickets)")}:
             self.db.execute("ALTER TABLE tickets ADD COLUMN spectate INTEGER DEFAULT 0")
@@ -633,8 +661,12 @@ class Supervisor:
                     role = self.role(actor, world)
                     if world["visibility"] == "private" and role == "guest":
                         continue
+                    # Tutorial instances belong to their player alone.
+                    if world["kind"] != "world" and role not in ("owner", "admin"):
+                        continue
                     run = self.row("SELECT * FROM runs WHERE world=?", (world["id"],))
-                    worlds.append({k: world[k] for k in ("id", "owner", "name", "description", "visibility", "max_players")})
+                    worlds.append({k: world[k] for k in ("id", "owner", "name", "description", "visibility", "max_players",
+                                                       "map", "creative", "persistent", "kind")})
                     worlds[-1].update(role=role, state=run["state"] if run else "stopped",
                                       players=len(json.loads(run["players"])) if run else 0,
                                       last_save=run["last_save"] if run else self.last_save(world["id"]),
@@ -642,7 +674,7 @@ class Supervisor:
                                       last_active=time.strftime("%Y-%m-%d %H:%M", time.localtime(world["last_used"])))
                 if self.shutting_down:
                     self.restart_screen_shown.add(actor)
-                return {"ok": True, "worlds": worlds, "admin": actor in self.admins, "server_notice": self.server_notice,
+                return {"ok": True, "worlds": worlds, "maps": public_catalog(self.catalog), "admin": actor in self.admins, "server_notice": self.server_notice,
                         "restarting": self.shutting_down, "discord": self.discord_state(actor),
                         "delete_unused_worlds_after_days": self.config.get("delete_unused_worlds_after_days", 60),
                         "limits": {k: v for k, v in self.config.items() if k.startswith("max_")}}
@@ -650,19 +682,24 @@ class Supervisor:
                 raise Denied("The server is restarting. Try again in a minute.")
             if action == "create":
                 self.require_discord(actor, "create")
-                count = self.row("SELECT count(*) n FROM worlds WHERE owner=?", (actor,))["n"]
+                map_id = data.get("map", "babylon")
+                if not isinstance(map_id, str) or map_id not in self.catalog:
+                    raise Denied("Unknown map")
+                creative = world_flag(data.get("creative", 0), "Creative mode")
+                persistent = world_flag(data.get("persistent", 1), "Persistence")
                 # Server administrators are not bound by the per-owner limits.
-                if actor not in self.admins and count >= self.config["max_worlds_per_player"]:
-                    raise Denied("Your world limit has been reached")
+                if actor not in self.admins:
+                    self.check_world_limits(actor, persistent)
                 fields = self.settings(data)
                 world_id = secrets.token_hex(16)
-                self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used) VALUES(?,?,?,?,?,?,?,?,?)",
-                                (world_id, actor, *fields, self.clock(), self.clock()))
+                # Tutorial rows are made by the supervisor itself, never from a payload.
+                self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,creative,persistent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (world_id, actor, *fields, self.clock(), self.clock(), map_id, creative, persistent))
                 self.audit(actor, action, world_id)
                 return {"ok": True, "id": world_id}
             world = self.world(data.get("world"))
             role = self.role(actor, world)
-            if action in ("edit", "stop", "member", "checkpoints", "rollback"):
+            if action in ("edit", "stop", "member", "checkpoints", "rollback", "reset"):
                 if role not in ("owner", "admin"):
                     raise Denied("Only the owner or a server administrator can do that")
                 run = self.row("SELECT * FROM runs WHERE world=?", (world["id"],))
@@ -682,12 +719,29 @@ class Supervisor:
                     self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
                     self.audit(actor, "rollback:" + result["generation"], world["id"])
                     return result
+                elif action == "reset":
+                    if data.get("confirm") not in (True, 1, "1"):
+                        raise Denied("Confirm that all saves of this world will be permanently deleted")
+                    if run:
+                        raise Denied("Stop the world before resetting it")
+                    try:
+                        reset_world_data(Path(self.config["data_directory"]) / "worlds" / world["id"])
+                    except (OSError, ValueError) as error:
+                        log("Resetting %s failed: %s" % (self.describe(world["id"]), error))
+                        raise Denied("The world's data could not be reset") from None
+                    self.db.execute("DELETE FROM tickets WHERE world=?", (world["id"],))
                 elif action == "edit":
+                    # Every setting, the creative/persistent flags included, needs a stopped world.
                     if run:
                         raise Denied("Stop the world before editing its settings")
                     fields = self.settings(data, world)
-                    self.db.execute("UPDATE worlds SET name=?,description=?,visibility=?,password=?,max_players=? WHERE id=?",
-                                    (*fields, world["id"]))
+                    creative = world_flag(data.get("creative", world["creative"]), "Creative mode")
+                    persistent = world_flag(data.get("persistent", world["persistent"]), "Persistence")
+                    if persistent and not world["persistent"] and actor not in self.admins:
+                        self.check_world_limits(world["owner"], 1, ignore=world["id"])
+                    # The map and kind are fixed at creation.
+                    self.db.execute("UPDATE worlds SET name=?,description=?,visibility=?,password=?,max_players=?,creative=?,persistent=? WHERE id=?",
+                                    (*fields, creative, persistent, world["id"]))
                     self.db.execute("DELETE FROM tickets WHERE world=?", (world["id"],))
                 elif action == "member":
                     who = ckey(data.get("member", ""))
@@ -743,6 +797,15 @@ class Supervisor:
             self.audit(actor, "ticket", world["id"])
             return {"ok": True, "address": f"byond://{self.config['public_host']}:{run['port']}?babylon_ticket={token}"}
 
+    def check_world_limits(self, owner, persistent, ignore=None):
+        """Persistent worlds count against max_worlds_per_player, all normal worlds against the total."""
+        rows = self.db.execute("SELECT persistent FROM worlds WHERE owner=? AND kind='world' AND id IS NOT ?",
+                               (owner, ignore)).fetchall()
+        if persistent and sum(r[0] == 1 for r in rows) >= self.config["max_worlds_per_player"]:
+            raise Denied("Your world limit has been reached")
+        if len(rows) >= self.config.get("max_total_worlds_per_player", 20):
+            raise Denied("Your total world limit has been reached")
+
     def last_save(self, world_id):
         path = Path(self.config["data_directory"]) / "worlds" / world_id / "data/babylon/saves/latest.json"
         try:
@@ -756,6 +819,8 @@ class Supervisor:
             self.checkpoints.retain(world["id"])
         except CheckpointError as error:
             raise Denied(str(error)) from None
+        if world["map"] not in self.catalog:
+            raise Denied("This world's map is no longer available")
         runs = [dict(r) for r in self.db.execute("SELECT r.*, w.owner FROM runs r LEFT JOIN worlds w ON w.id=r.world")]
         # Admin worlds run outside the limit; they only need a free port.
         if world["owner"] not in self.admins and sum(r["owner"] not in self.admins for r in runs) >= self.config["max_running_worlds"]:
@@ -904,6 +969,9 @@ def load_config(path):
     config.setdefault("kept_save_points_per_world", 4)
     config.setdefault("delete_unused_worlds_after_days", 60)
     config.setdefault("afk_timeout_seconds", 900)
+    config.setdefault("max_total_worlds_per_player", 20)
+    if type(config["max_total_worlds_per_player"]) is not int or config["max_total_worlds_per_player"] < 1:
+        raise ValueError("max_total_worlds_per_player must be a positive integer")
     if type(config["afk_timeout_seconds"]) is not int or config["afk_timeout_seconds"] < 0:
         raise ValueError("afk_timeout_seconds must be a nonnegative integer (0 disables AFK kicks)")
     if type(config["delete_unused_worlds_after_days"]) is not int or config["delete_unused_worlds_after_days"] < 0:
@@ -923,6 +991,8 @@ def load_config(path):
         raise ValueError("public_host must be a hostname or IPv4 address")
     for key in ("data_directory", "template_directory", "config_directory", "dreamdaemon"):
         config[key] = str(Path(config[key]).resolve())
+    config["map_catalog"] = str(Path(config.get("map_catalog") or
+                                     Path(config["template_directory"]) / "_maps/babylon/catalog.json").resolve())
     return config
 
 

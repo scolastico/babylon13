@@ -16,6 +16,7 @@ DEFAULTS = {
     'lobby_port': 1361, 'api_port': 1360, 'world_port_first': 1400, 'world_port_last': 1420,
     'max_running_worlds': 4, 'max_players_per_world': 4, 'max_worlds_per_player': 3,
     'max_running_worlds_per_player': 1, 'kept_save_points_per_world': 4,
+    'max_total_worlds_per_player': 20,
     'delete_unused_worlds_after_days': 60, 'empty_grace_seconds': 120,
     'startup_timeout_seconds': 300, 'ticket_lifetime_seconds': 60,
     'shutdown_timeout_seconds': 180,
@@ -86,7 +87,7 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
     address = 'byond://%s:%s' % (host, values['lobby_port'])
     config = {key: values[key] for key in (
         'max_running_worlds', 'max_players_per_world', 'max_worlds_per_player',
-        'max_running_worlds_per_player', 'kept_save_points_per_world',
+        'max_running_worlds_per_player', 'kept_save_points_per_world', 'max_total_worlds_per_player',
         'delete_unused_worlds_after_days', 'empty_grace_seconds',
         'startup_timeout_seconds', 'ticket_lifetime_seconds', 'afk_timeout_seconds')}
     discord = discord_settings(env, address, env.get('BABYLON_DATA_DIRECTORY', '/data'))
@@ -94,7 +95,9 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
     config.update(listen_host='127.0.0.1', listen_port=values['api_port'], public_host=host,
                   bind_address='0.0.0.0', lobby_address=address, lobby_secret=secret, admins=admins,
                   data_directory=env.get('BABYLON_DATA_DIRECTORY', '/data'),
-                  template_directory=str(template), config_directory=str(runtime / 'game-config'),
+                  template_directory=str(template),
+                  map_catalog=env.get('BABYLON_MAP_CATALOG', '').strip() or str(template / '_maps/babylon/catalog.json'),
+                  config_directory=str(runtime / 'game-config'),
                   dreamdaemon='/opt/byond/bin/DreamDaemon', port_first=first, port_last=last,
                   # Optional server-side music (see CLUSTER.md); worlds play nothing without it.
                   music_directory=env.get('BABYLON_MUSIC_DIRECTORY', '/music').strip())

@@ -337,5 +337,185 @@ class Policies(unittest.TestCase):
         self.assertEqual(self.s.dispatch("owner", "list", {})["worlds"], [])
 
 
+class WorldTypes(unittest.TestCase):
+    """Map, creative/persistent flags, limits and reset."""
+    setUp, tearDown, create, start, ticket = Policies.setUp, Policies.tearDown, Policies.create, Policies.start, Policies.ticket
+
+    def make(self, owner="owner", **data):
+        return self.s.dispatch(owner, "create", dict(name="World", **data))["id"]
+
+    def test_migration_defaults_babylon(self):
+        import sqlite3
+        self.s.db.close()
+        path = Path(self.temp.name) / "supervisor.sqlite3"
+        path.unlink()
+        for suffix in ("-wal", "-shm"):
+            Path(str(path) + suffix).unlink(missing_ok=True)
+        old = sqlite3.connect(path)
+        old.executescript("""CREATE TABLE worlds (id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
+            description TEXT NOT NULL, visibility TEXT NOT NULL, password TEXT, max_players INTEGER NOT NULL,
+            created REAL NOT NULL, last_used REAL);
+            INSERT INTO worlds VALUES('a','owner','Old','','private',NULL,2,1,1);""")
+        old.commit()
+        old.close()
+        self.s = Supervisor(self.config, self.driver, lambda: self.now)
+        row = self.s.row("SELECT * FROM worlds WHERE id='a'")
+        self.assertEqual((row["map"], row["persistent"], row["creative"], row["kind"], row["tutorial"]),
+                         ("babylon", 1, 0, "world", None))
+
+    def test_create_with_map_and_flags(self):
+        plain = self.s.row("SELECT * FROM worlds WHERE id=?", (self.make(),))
+        self.assertEqual((plain["map"], plain["creative"], plain["persistent"], plain["kind"]), ("babylon", 0, 1, "world"))
+        w = self.make(map="creative_plane_m", creative="1", persistent=0, kind="tutorial", tutorial="x")
+        row = self.s.row("SELECT * FROM worlds WHERE id=?", (w,))
+        self.assertEqual((row["map"], row["creative"], row["persistent"], row["kind"], row["tutorial"]),
+                         ("creative_plane_m", 1, 0, "world", None))
+
+    def test_create_unknown_map_denied(self):
+        for data in ({"map": "nope"}, {"map": ""}, {"map": None}, {"map": 5}, {"map": "../babylon"}):
+            with self.assertRaises(Denied):
+                self.make(**data)
+
+    def test_flag_values_are_normalised_strictly(self):
+        for value in (True, False, 1, 0, "1", "0"):
+            self.make(creative=value, persistent=value)
+        for bad in ("true", "yes", 2, -1, None, "", 1.0, [], "01"):
+            for key in ("creative", "persistent"):
+                with self.assertRaises(Denied, msg=repr((key, bad))):
+                    self.make(**{key: bad})
+        self.assertEqual(len(self.s.dispatch("owner", "list", {})["worlds"]), 6)
+
+    def test_non_persistent_worlds_use_total_limit(self):
+        self.s.config["max_worlds_per_player"] = 4
+        for _ in range(4):
+            self.make()
+        with self.assertRaises(Denied):
+            self.make()
+        for _ in range(16):
+            self.make(persistent=0)
+        with self.assertRaises(Denied):
+            self.make(persistent=0)
+        self.assertEqual(self.s.row("SELECT count(*) n FROM worlds")["n"], 20)
+        # Admins are exempt from both limits.
+        for _ in range(21):
+            self.make("admin")
+
+    def test_total_limit_is_configurable_and_per_player(self):
+        self.s.config["max_total_worlds_per_player"] = 2
+        self.make(persistent=0)
+        self.make(persistent=0)
+        with self.assertRaises(Denied):
+            self.make(persistent=0)
+        self.make("other")
+
+    def test_turning_persistence_on_respects_the_limit(self):
+        self.s.config["max_worlds_per_player"] = 1
+        self.make()
+        w = self.make(persistent=0)
+        with self.assertRaises(Denied):
+            self.s.dispatch("owner", "edit", dict(world=w, persistent=1))
+
+    def test_flags_edit_requires_stopped(self):
+        w = self.make()
+        run = self.start(w)
+        for data in ({"creative": 1}, {"persistent": 0}):
+            with self.assertRaises(Denied):
+                self.s.dispatch("owner", "edit", dict(world=w, **data))
+        self.s.dispatch("owner", "stop", dict(world=w))
+        self.s.tick()
+        self.assertFalse(self.s.row("SELECT * FROM runs WHERE world=?", (w,)))
+        self.s.dispatch("owner", "edit", dict(world=w, creative="1", persistent=False, max_players=1))
+        row = self.s.row("SELECT * FROM worlds WHERE id=?", (w,))
+        self.assertEqual((row["creative"], row["persistent"], row["max_players"], row["map"]), (1, 0, 1, "babylon"))
+        with self.assertRaises(Denied):
+            self.s.dispatch("owner", "edit", dict(world=w, creative="yes"))
+        # The map is immutable and a payload cannot retarget the kind.
+        self.s.dispatch("owner", "edit", dict(world=w, map="metastation", kind="tutorial", name="Renamed"))
+        row = self.s.row("SELECT * FROM worlds WHERE id=?", (w,))
+        self.assertEqual((row["map"], row["kind"], row["name"]), ("babylon", "world", "Renamed"))
+
+    def test_reset_removes_saves_and_requires_confirm(self):
+        w = self.make()
+        root = Path(self.temp.name) / "worlds" / w
+        (root / "data/babylon/saves").mkdir(parents=True)
+        (root / "data/babylon/saves/note.txt").write_text("x")
+        (root / "_maps/babylon/saved").mkdir(parents=True)
+        (root / "_maps/babylon/saved/x.dmm").write_text("x")
+        (root / "_maps/babylon/active.dmm").write_text("x")
+        (root / "_maps/babylon/lore.json").write_text("{}")
+        (root / "babylon-config").mkdir()
+        for data in ({}, {"confirm": 0}, {"confirm": "no"}, {"confirm": False}):
+            with self.assertRaises(Denied):
+                self.s.dispatch("owner", "reset", dict(world=w, **data))
+        with self.assertRaises(Denied):
+            self.s.dispatch("stranger", "reset", dict(world=w, confirm=True))
+        self.assertTrue((root / "data/babylon").exists())
+        self.start(w)
+        with self.assertRaises(Denied):
+            self.s.dispatch("owner", "reset", dict(world=w, confirm=True))
+        self.s.dispatch("owner", "stop", dict(world=w))
+        self.s.tick()
+        self.assertTrue(self.s.dispatch("owner", "reset", dict(world=w, confirm=True))["ok"])
+        self.assertFalse((root / "data/babylon").exists())
+        self.assertFalse((root / "_maps/babylon/saved").exists())
+        self.assertFalse((root / "_maps/babylon/active.dmm").exists())
+        self.assertTrue((root / "_maps/babylon/lore.json").exists())
+        self.assertTrue((root / "babylon-config").exists())
+        self.assertTrue(self.s.row("SELECT * FROM worlds WHERE id=?", (w,)))
+        # An administrator may reset too, and a world with no files is fine.
+        self.assertTrue(self.s.dispatch("admin", "reset", dict(world=w, confirm="1"))["ok"])
+
+    def test_reset_world_data_refuses_links(self):
+        from world_storage import reset_world_data
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        (outside / "keep").write_text("keep")
+        root = Path(self.temp.name) / "w"
+        (root / "data").mkdir(parents=True)
+        (root / "data/babylon").symlink_to(outside)
+        with self.assertRaises(ValueError):
+            reset_world_data(root)
+        self.assertTrue((outside / "keep").exists())
+        reset_world_data(Path(self.temp.name) / "missing")
+
+    def test_unknown_map_start_denied(self):
+        w = self.make()
+        self.s.db.execute("UPDATE worlds SET map='gone' WHERE id=?", (w,))
+        with self.assertRaises(Denied):
+            self.s.dispatch("owner", "join", dict(world=w))
+        self.assertEqual(self.driver.starts, 0)
+        self.assertFalse(self.s.row("SELECT * FROM runs WHERE world=?", (w,)))
+
+    def test_tutorial_rows_hidden_from_list(self):
+        public = self.make(visibility="public")
+        hidden = {}
+        for kind in ("tutorial", "tutorial_edit"):
+            w = self.make("owner", visibility="public")
+            self.s.db.execute("UPDATE worlds SET kind=? WHERE id=?", (kind, w))
+            hidden[kind] = w
+        ids = lambda actor: {x["id"] for x in self.s.dispatch(actor, "list", {})["worlds"]}
+        self.assertIn(public, ids("stranger"))
+        self.assertTrue(set(hidden.values()).isdisjoint(ids("stranger")))
+        self.assertTrue(set(hidden.values()) <= ids("owner"))
+        self.assertTrue(set(hidden.values()) <= ids("admin"))
+
+    def test_list_reports_maps_and_world_fields(self):
+        w = self.make(map="icebox", creative=1)
+        result = self.s.dispatch("owner", "list", {})
+        self.assertIn("icebox", [m["id"] for m in result["maps"]])
+        self.assertTrue(all("map_json" not in m for m in result["maps"]))
+        item = next(x for x in result["worlds"] if x["id"] == w)
+        self.assertEqual((item["map"], item["creative"], item["persistent"], item["kind"]), ("icebox", 1, 1, "world"))
+        self.assertIn("max_total_worlds_per_player", result["limits"])
+
+    def test_malformed_catalog_stops_the_supervisor(self):
+        from catalog import CatalogError
+        bad = Path(self.temp.name) / "catalog.json"
+        bad.write_text("{}")
+        with self.assertRaises(CatalogError):
+            Supervisor(dict(self.config, data_directory=self.temp.name + "/other", map_catalog=str(bad)),
+                       self.driver, lambda: self.now)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,136 @@
+{
+  "maps": [
+    {
+      "id": "babylon",
+      "name": "Babylon",
+      "description": "The classic Babylon builder world: you are a drone and build your own station.",
+      "group": "babylon",
+      "size": null,
+      "build": "babylon",
+      "map_json": null,
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "creative_plane_s",
+      "name": "Creative Plane S",
+      "description": "An empty creative plane with a 50x50 buildable floor.",
+      "group": "creative_plane",
+      "size": "S",
+      "build": "station",
+      "map_json": "babylon/creative_plane_s.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "creative_plane_m",
+      "name": "Creative Plane M",
+      "description": "An empty creative plane with a 100x100 buildable floor.",
+      "group": "creative_plane",
+      "size": "M",
+      "build": "station",
+      "map_json": "babylon/creative_plane_m.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "creative_plane_l",
+      "name": "Creative Plane L",
+      "description": "An empty creative plane with a 200x200 buildable floor.",
+      "group": "creative_plane",
+      "size": "L",
+      "build": "station",
+      "map_json": "babylon/creative_plane_l.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "boxstation",
+      "name": "BoxStation",
+      "description": "The classic station layout.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "boxstation.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "metastation",
+      "name": "MetaStation",
+      "description": "A compact, dense station.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "metastation.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "deltastation",
+      "name": "DeltaStation",
+      "description": "A large two-wing station.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "deltastation.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "icebox",
+      "name": "IceBox Station",
+      "description": "A multi-level station on an ice moon.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "icebox.json",
+      "preview": null,
+      "multiz": true
+    },
+    {
+      "id": "tramstation",
+      "name": "Tramstation",
+      "description": "A multi-level station with a central tram.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "tramstation.json",
+      "preview": null,
+      "multiz": true
+    },
+    {
+      "id": "kilostation",
+      "name": "KiloStation",
+      "description": "A compact station with a long main corridor.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "kilostation.json",
+      "preview": null,
+      "multiz": false
+    },
+    {
+      "id": "northstar",
+      "name": "North Star",
+      "description": "A four-level station.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "northstar.json",
+      "preview": null,
+      "multiz": true
+    },
+    {
+      "id": "pubbystation",
+      "name": "PubbyStation",
+      "description": "A small, cozy station.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "pubbystation.json",
+      "preview": null,
+      "multiz": false
+    }
+  ]
+}
