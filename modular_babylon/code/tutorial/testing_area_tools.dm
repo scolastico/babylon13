@@ -601,3 +601,48 @@
 			portable.air_contents.remove(portable.air_contents.total_moles())
 	babylon_area_test_cleanup(setup, made)
 	return result
+
+/// A pasted ID card keeps its trim, access (with its wildcards counted in its slots), holder and
+/// assignment, through the same capture and reconcile steps as a save (babylon_capture_settings,
+/// babylon_after_restore). Review D2 S-B.
+/datum/babylon_save/proc/test_area_tools_paste_id_card()
+	var/list/result = list()
+	var/list/rect = area_test_rect()
+	var/z = rect[5]
+	var/x1 = rect[1]
+	var/y1 = rect[2]
+	var/datum/babylon_area_session/setup
+	var/list/made = list()
+	try
+		setup = area_test_setup(rect)
+		var/obj/item/card/id/advanced/gold/card = new(locate(x1, y1, z))
+		made += card
+		SSid_access.apply_trim_to_card(card, /datum/id_trim/job/captain)
+		card.registered_name = "Paste Captain"
+		card.add_wildcards(list(ACCESS_CENT_GENERAL), mode = FORCE_ADD_ALL)
+		card.update_label()
+		var/list/before = card.access.Copy()
+		var/session_wildcards = length(card.wildcard_slots)
+		var/datum/babylon_area_session/session = babylon_area_test_session("paste_id_card")
+		session.select(x1, y1, z, x1, y1, z)
+		session.copy(null)
+		session.arm_paste()
+		session.click(locate(x1 + 8, y1 + 2, z))
+		result["paste_ok"] = session.paste(null)["ok"]
+		var/obj/item/card/id/advanced/gold/pasted = locate() in locate(x1 + 8, y1 + 2, z)
+		result["pasted"] = !!pasted
+		result["trim_kept"] = istype(pasted?.trim, /datum/id_trim/job/captain)
+		result["access_kept"] = !!pasted && !length(pasted.access ^ before)
+		result["holder_kept"] = pasted?.registered_name == "Paste Captain"
+		var/counted = FALSE
+		for(var/slot in pasted?.wildcard_slots)
+			var/list/info = pasted.wildcard_slots[slot]
+			if(ACCESS_CENT_GENERAL in info["usage"])
+				counted = TRUE
+		result["wildcard_counted"] = counted && length(pasted.wildcard_slots) >= session_wildcards
+		session.undo(null)
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_area_tools_paste_id_card failed: [error] ([error.file]:[error.line])")
+	babylon_area_test_cleanup(setup, made)
+	return result

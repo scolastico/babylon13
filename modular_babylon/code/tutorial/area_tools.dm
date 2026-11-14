@@ -637,6 +637,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		if(value == initial(thing.vars[field]))
 			continue
 		settings[field] = value
+	// What a variable cannot carry (an ID card's trim), as the save engine captures it.
+	thing.babylon_capture_settings(settings)
 	return length(settings) ? settings : null
 
 /// Puts captured settings (babylon_area_capture_settings) on a pasted object.

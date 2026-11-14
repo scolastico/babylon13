@@ -217,11 +217,7 @@
 	if(istype(thing, /obj/machinery/power/apc))
 		var/obj/machinery/power/apc/apc = thing
 		record["has_terminal"] = !isnull(apc.terminal)
-	if(istype(thing, /obj/item/card/id))
-		var/obj/item/card/id/card = thing
-		// The trim (job icon, assignment, which accesses need no wildcard) is a singleton datum:
-		// saved by type, applied again by babylon_after_restore().
-		fields["babylon_trim"] = card.trim ? "[card.trim.type]" : null
+	thing.babylon_capture_settings(fields)
 	var/list/references = record["references"]
 	// Looking a name up in vars scans every var: the present fields are cached per type.
 	var/list/present_references = reference_fields_by_type[thing.type]
@@ -1311,18 +1307,34 @@
 		// No longer offered in the ghosts' joinable mob list either.
 		qdel(control)
 
+/// Adds what a plain variable cannot carry to an atom's saved fields (a save's record fields and an
+/// area-tool copy's settings: the one path for both), for its babylon_after_restore() to apply.
+/atom/proc/babylon_capture_settings(list/fields)
+	return
+
 // ID cards: a card made from its type has its type's trim and access (often none: a captain's gold
-// card gets its trim from the outfit). The saved trim goes back on, then the saved access and the
-// holder's name and assignment (typed_fields); its bank account is the holder's (characters).
+// card gets its trim from the outfit). The trim is a singleton datum, kept by type; access, holder
+// and assignment are typed_fields; its bank account is the holder's (characters).
+/obj/item/card/id/babylon_capture_settings(list/fields)
+	if(trim)
+		fields["babylon_trim"] = "[trim.type]"
+
+/// The saved access, holder and assignment were written over the variables already (a restore
+/// and a paste both do that first). The saved trim goes back on, and the access is split again into
+/// the trim's own accesses and wildcards, so the card's wildcard slots count them.
 /obj/item/card/id/babylon_after_restore(list/fields)
-	var/trim_path = istext(fields["babylon_trim"]) ? text2path(fields["babylon_trim"]) : null
-	var/list/saved_access = ("access" in fields) ? GLOB.babylon_save.decode_value(fields["access"]) : null
+	var/trim_path = fields["babylon_trim"]
+	if(istext(trim_path))
+		trim_path = text2path(trim_path)
+	var/list/saved_access = islist(access) ? access.Copy() : list()
 	var/saved_assignment = assignment
-	if(ispath(trim_path, /datum/id_trim) && SSid_access.trim_singletons_by_path[trim_path])
-		SSid_access.apply_trim_to_card(src, trim_path, copy_access = FALSE)
-	if(islist(saved_access))
-		access = saved_access.Copy()
-	if(("assignment" in fields))
+	if(ispath(trim_path, /datum/id_trim) && SSid_access.trim_singletons_by_path[trim_path] && SSid_access.apply_trim_to_card(src, trim_path, copy_access = FALSE))
+		var/datum/id_trim/applied = trim
+		access = saved_access & applied.access
+		add_wildcards(saved_access - applied.access, mode = FORCE_ADD_ALL)
+	else
+		access = saved_access
+	if("assignment" in fields)
 		assignment = saved_assignment
 	update_label()
 	update_icon()
