@@ -1210,6 +1210,16 @@ def load_config(path):
     return config
 
 
+# Actions a world child may call with its run id and secret. serve() authenticates each of them with
+# Supervisor.child() before the handler runs; every other action needs the lobby secret instead.
+CHILD_ACTIONS = {
+    "redeem": lambda service, data: service.redeem(data.get("run"), data.get("secret", ""), data.get("ticket", ""), data.get("actor", "")),
+    "ahelp": lambda service, data: service.relay_ahelp(data.get("run"), data.get("secret", ""), data),
+    "world_manage": lambda service, data: service.manage_world(data.get("run"), data.get("secret", ""), data),
+    "round_ended": lambda service, data: service.round_ended(data.get("run"), data.get("secret", "")),
+}
+
+
 def serve(config, service=None):
     service = service or Supervisor(config)
 
@@ -1235,14 +1245,11 @@ def serve(config, service=None):
                     if len(self.path) > 16384:
                         raise Denied("Request too large")
                     data = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query, keep_blank_values=True).items()}
-                if data.get("action") == "redeem":
-                    result = service.redeem(data.get("run"), data.get("secret", ""), data.get("ticket", ""), data.get("actor", ""))
-                elif data.get("action") == "ahelp":
-                    result = service.relay_ahelp(data.get("run"), data.get("secret", ""), data)
-                elif data.get("action") == "world_manage":
-                    result = service.manage_world(data.get("run"), data.get("secret", ""), data)
-                elif data.get("action") == "round_ended":
-                    result = service.round_ended(data.get("run"), data.get("secret", ""))
+                handler = CHILD_ACTIONS.get(data.get("action"))
+                if handler:
+                    # Every child action is authenticated here, whatever the handler does with the run.
+                    service.child(data.get("run"), data.get("secret", ""))
+                    result = handler(service, data)
                 else:
                     if not hmac.compare_digest(str(data.get("secret", "")), config["lobby_secret"]):
                         raise Denied("Invalid lobby credentials")
