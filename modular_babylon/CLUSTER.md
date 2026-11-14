@@ -742,6 +742,124 @@ the world is deleted when it stops), **Accept** (moves it to `published/`) or
 Deleting or accepting a tutorial does not disturb copies that are running: every
 copy is prepared from its own files when it starts.
 
+### Building a tutorial: the tutorial wand
+
+A tutorial is made of hidden **tutorial objects** placed in the world with the
+**tutorial wand** (Creative panel → Tools). The wand works in every Creative world.
+While it is in your hand you see every tutorial object as a small icon with its id;
+nobody else does, and players of a tutorial never see them. Use the wand in your hand
+to open its window and choose what a click does:
+
+- **Place**: pick an object from the palette (grouped Triggers / Actions / Markers,
+  each with a one-line description) and click a tile. Its settings open at once.
+- **Configure**: click an object (or an NPC) to open its settings. Several objects on
+  one tile offer a list.
+- **NPC**: pick a preset (Guide, Bystander, bruised/burned/poisoned/bleeding/sick or
+  unconscious patient, broken leg) and click a tile; the NPC appears at once.
+- **Delete**: click an object (or an NPC) to remove it.
+- **Select** (area tools, a small WorldEdit): click one corner, then the opposite
+  corner; the selection is outlined for you and its size shown ("12×8 (96 tiles)").
+  The window then offers:
+  - **Copy** the selection to your clipboard (tiles, objects with what is inside
+    closets and boxes, reagents, tutorial objects).
+  - **Paste…**, then click the tile that becomes the copy's **bottom-left (south-west)**
+    corner; the footprint is outlined (red where it can't go) and **Confirm paste**
+    builds it. Paste stays on, so a room can be pasted several times side by side.
+    Tutorial objects in the copy get an **id suffix** (Auto: the first free `_2`, `_3`
+    …; Custom; or Keep ids when they are free), and their links to each other (actions,
+    After, targets …) and their zones follow; links to objects outside the copy stay.
+    "Keep the target where the copy has space" (on by default) leaves those tiles alone.
+  - **Fill** or **Border** with a floor, wall or structure picked from a searchable
+    list (optionally only empty tiles).
+  - **Clear**: removes objects, mobs and tutorial objects, tiles become plating (or the
+    picked floor or wall). It asks first.
+  - **Undo** your last paste, fill, border or clear (one step; any new operation replaces
+    it, and the window says so). Undoing a fill or border is exact. Undoing a paste or
+    clear rebuilds the whole rectangle as it was before, so later changes there are undone
+    too, and it is approximate: floor markings and machine settings are lost. Tutorial ids
+    taken in the meantime get a suffix instead of being duplicated.
+
+  Limits: at most 10,000 tiles and 20,000 objects at once, on one deck, inside the map.
+  Protected tiles and objects (indestructible: the Creative Plane's edge, vault parts,
+  unique machines) are never changed, copied or removed; they are outlined in red, and a
+  paste over a protected tile is refused. A copy turns floors and walls the tools can't
+  build (lava, airless floors …) into plating. Players are never deleted, including a
+  ghosted player's body: they are moved to the nearest free tile outside the area. After
+  an operation you wait 2 seconds plus 1 second per 1000 tiles; only one operation runs
+  in the world at a time. Every operation is logged. Rotating a paste is not supported.
+  A paste keeps the target's areas (rooms) and leaves a copied APC out where the area
+  already has one; copied floor markings and machine settings beyond their build state
+  are not carried over. Mobs are not copied; NPC spawners come along and make their NPC
+  again.
+
+Right-clicking the wand while holding it switches to the next mode.
+
+Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
+other by id, like airlock ids. A marker with the id **start** is where players begin
+(without one they start at the arrivals). Renaming an object updates every link to it;
+an id that is already taken is refused. The settings window offers the existing ids in
+searchable drop-downs (with what each object does), opens a linked object with one
+click and points out problems inline (an id nobody has, a trigger where an action is
+expected, a target with nothing on its tile). A trigger's action list can also create
+a new action right there ("+ New Message" ...). The wand's **Overview** lists every object with
+its problems and warns about a missing start marker, triggers that can never fire,
+unused actions and a tutorial without a Complete action; **Go there** jumps to an
+object.
+
+**Triggers** wait for the player and then run their **actions** in order:
+
+| Trigger | Fires when |
+| --- | --- |
+| Tutorial starts | the tutorial starts for the player (once) |
+| Zone | the player enters a rectangle (Pick corners, then click two tiles) |
+| Holding | the player holds an item of a type (optionally exactly that type) |
+| Used on | the player uses an item of a type on a marker's object or an NPC |
+| Condition | gas in a zone, power (area power, APC or SMES charge), fluid in a container, a structure at a marker, an NPC's health/damage/alive/dead/disease/awake state becomes true |
+| Button | the player presses it (a visible button) |
+| Say | the player says a phrase (any part, case ignored) |
+| Timer | some seconds after it was enabled |
+
+Every trigger has: **Actions** (ordered ids), **Fire only once**, **Starts listening**
+(at the beginning, after another trigger fired, or when an Enable action switches it
+on), **Cooldown** and **Delay**. A newly placed trigger listens after the trigger placed
+before it, so steps chain in the order you build them. Zone, holding and condition
+triggers fire when their condition *becomes* true; a gas zone covers at most 1000
+tiles.
+
+| Action | Does |
+| --- | --- |
+| Message | a green "Guide" box in the player's chat, or a speaker (NPC or marked object) says it to the player (a Guide box with the speaker's name when the player is too far away or the speaker is out cold); `[player]` becomes the player's name; optional **objective** that stays on the player's screen until the next one |
+| Point | a bouncing arrow over the target for the player; optionally a speaker points at it again and again |
+| Highlight | outlines the target (only the player sees it) |
+| Make NPC vulnerable | an NPC that was unhurtable can be hurt from now on |
+| Teleport | moves the player to a marker |
+| Spawn NPC | (re)creates an NPC spawner's NPC |
+| Give item | puts an item in the player's hand |
+| Enable/disable triggers | chains steps: only the next step's triggers listen |
+| Sound | plays one of a dozen sounds for the player |
+| Complete | the "Tutorial complete!" screen with **Back to lobby** |
+
+Point and Highlight last until the next step's trigger fires (or some seconds, or a
+chosen trigger). Each action can wait (**Delay**) after the ones before it. **Preview**
+in an action's settings runs it for you alone. Everything a tutorial shows or says goes
+to its player only, so several players in one world never see each other's steps; NPCs
+spawned by an action are shared by everyone in the world.
+
+**NPC spawners** create a human standing still (no AI): name, outfit (common job
+outfits or a search; ids and gear are left out), species, facing, **Spawn at the
+start**, **Unhurtable until made vulnerable**, and **effects**, each with a chance from
+0 to 100 %: brute/burn damage on a body part, toxin and suffocation damage, a wound, a
+disease (never contagious), a reagent in the blood (from a list of medicines, common
+poisons and a few drugs), unconsciousness for some seconds, bleeding. Names allow
+letters, digits, spaces and simple punctuation. The spawner is saved, never its NPC; the
+NPC is created again when the world starts and for every run.
+
+**Test run** (wand window) plays your tutorial for you alone, from the start marker
+or where you stand, and shows which triggers listen now; other builders can test at
+the same time without crossing. **Reset NPCs** (on by default) creates the NPCs again
+when a test starts. Stop resets the run, not the world. In a tutorial play instance the run starts by itself
+when the player arrives at the start marker.
+
 ## AFK return to the lobby
 
 Worlds send inactive players back to the lobby after 900 seconds (15 minutes) by default.

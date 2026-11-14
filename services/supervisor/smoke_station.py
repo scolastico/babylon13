@@ -434,6 +434,14 @@ def main():
             run = wait_ready(world)
             tutorial = dict(test_tutorial_round=checks(run, "test_tutorial_round"),
                             world_flags=checks(run, "test_station_world_flags"))
+            # Tutorial objects, triggers, actions and NPCs in a running tutorial round.
+            # Every test reports before any failure is raised, so one run shows all problems.
+            for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
+                         "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip"):
+                result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
+                tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
+            for proc, got in tutorial.items():
+                assert got and all(got.values()), (proc, got)
             stop(world)
             # A tutorial instance is not saved and is deleted once it stops.
             assert not (data / "worlds" / world / "data/babylon/saves/latest.json").exists(), "a tutorial world saved"
