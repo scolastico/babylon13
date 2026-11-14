@@ -386,7 +386,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	for(var/datum/babylon_tick_listener/listener as anything in tick_listeners)
 		if(listener.step && (COMSIG_BABYLON_WORLD_TICK in listener._signal_procs?[src]))
 			listening++
-	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 3 : 1)
+	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 4 : 2)
 	// A failing listener does not keep the listeners after it from their step.
 	var/datum/tick_source = new
 	var/datum/babylon_tick_listener/failing = new(tick_source, CALLBACK(src, PROC_REF(test_tick_listener_fails)))

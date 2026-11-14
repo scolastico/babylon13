@@ -226,7 +226,8 @@ def main():
             entry["test_station_emergency_dock"] = checks(run, "test_station_emergency_dock")
             # The shared modules' tests (testing_common.dm), as the Babylon smoke runs them.
             for proc in ("test_sfw_content", "test_showcase_visitor", "test_moderation", "test_play_time",
-                         "test_music_loops", "test_creative_machines"):
+                         "test_music_loops", "test_creative_machines",
+                         "test_creative_panel_actions"):
                 entry[proc] = checks(run, proc)
             entry["test_non_persistent_never_saves"] = checks(run, "test_non_persistent_never_saves")
             entry["test_save_controls"] = checks(run, "test_save_controls")

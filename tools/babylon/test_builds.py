@@ -11,17 +11,23 @@ CODE = "modular_babylon/code/"
 
 SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", "showcase", "spectator",
           "sfw", "links", "storyteller", "moderation", "world_players", "interface", "music",
-          "music_loops", "play_time", "testing_common", "creative/machines", "creative/testing_machines"}
+          "music_loops", "play_time", "testing_common", "creative/machines", "creative/testing_machines",
+          "creative/machine_types_stub", "creative/powers", "creative/spawning", "creative/teleport",
+          "creative/events", "creative/supermatter", "creative/panel", "creative/testing_creative"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
 STATION_ONLY = {"station_session", "station_round", "persistence_levels", "testing_station", "creative/plane",
                 "creative/testing_plane"}
 
 
+def module_name(relative):
+    """A module's name: its path below modular_babylon/code/ without .dm ("creative/panel")."""
+    return Path(relative).with_suffix("").as_posix()
+
+
 def modules(dme):
     text = (ROOT / dme).read_text()
-    # Modules are named by their path below modular_babylon/code without .dm ("creative/machines").
-    return {name[:-3] for name in re.findall(r'#include "' + CODE + r'([^"]+\.dm)"', text)}
+    return {module_name(name) for name in re.findall(r'#include "' + CODE + r'([^"]+\.dm)"', text)}
 
 
 class BuildSplitTest(unittest.TestCase):
@@ -38,7 +44,7 @@ class BuildSplitTest(unittest.TestCase):
         self.assertEqual(STATION_ONLY - station, set())
 
     def test_every_module_is_classified(self):
-        files = {path.relative_to(ROOT / CODE).with_suffix("").as_posix() for path in (ROOT / CODE).rglob("*.dm")}
+        files = {module_name(path.relative_to(ROOT / CODE)) for path in (ROOT / CODE).rglob("*.dm")}
         self.assertEqual(files - SHARED - BABYLON_ONLY - STATION_ONLY, set())
 
     def test_station_build_defines(self):

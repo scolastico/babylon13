@@ -40,6 +40,12 @@ new Babylon-only `tgui/packages/tgui/interfaces/BabylonInteraction.tsx`
 instead of SPLURT's `MobInteraction` window. After an upstream merge, re-check
 newly added lewd interactions, designs, reactions and verbs against it.
 
+The Creative panel (`modular_babylon/code/creative/`, both builds) adds the new
+Babylon-only `tgui/packages/tgui/interfaces/BabylonCreative.tsx` (with its
+`BabylonCreative.test.tsx`); no upstream file is edited. After an upstream
+merge, re-check new round events and spawnable types against its blacklists
+(`babylon_creative_event_blocked`, `babylon_creative_spawn_blocked`).
+
 Babylon has no storyteller yet. `modular_babylon/code/storyteller.dm` runs an
 inert `/datum/storyteller/babylon` in every Babylon world (no events, no
 antagonists), refuses the storyteller vote and any other storyteller, and keeps

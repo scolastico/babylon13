@@ -592,7 +592,55 @@ countdown, no save verbs, and stopping them ends at once without a save (and nev
 leaves them in an error state). A world stopped before it finished starting is not
 saved either.
 
-## Creative machines
+## Creative mode
+
+Worlds with the **Creative** flag (any map) give every player in a body a **Creative**
+action button and a **Creative panel** verb (Babylon tab). Showcase visitors, spectating
+admins, ghosts and the new-player lobby get neither. The panel's tabs:
+
+- **Self**: godmode, noclip (turning it off moves you out of any wall to the nearest
+  free spot) and a full heal that also revives. Godmode and noclip also sit as quick
+  toggles at the right of the tab row.
+- **Spawn**: curated categories (creative machines, tools, construction materials,
+  machines, structures, items, floors & walls, atmospherics, medical & chemistry,
+  clothing & armor, food & kitchen, lighting & decor, security, mobs) and a search over
+  everything spawnable (common nicknames such as "metal", "rglass" or "insuls" work too),
+  into your hands or at your feet. Stacks spawn as one stack (a full stack unless you
+  pick an amount); anything else up to 10 copies. At most 20 spawns every 10 seconds per
+  player, and at most 50 living creative-spawned mobs per world. Not spawnable
+  (`babylon_creative_spawn_blocked`, `modular_babylon/code/creative/spawning.dm`): ERP
+  content (`babylon_type_is_erp`, `sfw.dm`), debug and admin items, abstract types, the
+  nuke and its disk, the station charter, antagonist summoners, cluster and spawner
+  grenades, endless mob nests, singularities, tesla balls and the singularity beacon,
+  spreading cores (mold, fleshmind, vines, xeno weed nodes), shuttle consoles and
+  dockers, CentCom/ERT/deathsquad IDs, mobs that make more mobs (legions, regal rats,
+  broodmothers, eggs, positronic brains), and the circuit board of anything blocked.
+- **Teleport**: to coordinates, an area, another player in this world, a tutorial
+  marker, or back to where you were before the last teleport; only this world's own
+  levels (never CentCom or transit space). Without noclip you land on the nearest free
+  spot. Teleporting takes you out of chairs, vehicles, mechs and closets.
+- **Events**: tg round events that may run here, at most 3 every 30 seconds per player.
+  Antagonist, ghost-role and player-targeting events, spreading events (vines,
+  fleshmind, mold), shuttle events, dynamic tweaks, level-wide disasters (dark
+  matt-eor, sandstorms, ICARUS sunbeam, armageddon CME) and admin-only events (weight
+  or max occurrences 0) are not offered. Babylon worlds never fire events on their own;
+  ones started here still run.
+- **Kits**: a tool kit (toolbelt, insulated gloves, loaded RCD, RPD) and the tutorial
+  wand.
+
+The **supermatter** stays spawnable (engine tutorials), but in creative and tutorial
+worlds a delamination only explodes, irradiates and causes hallucinations: it never
+makes a singularity, a tesla ball or a resonance cascade.
+
+Creative players can still end a station round the normal way (calling the shuttle at
+a communications console); that is allowed and works like in any round.
+
+The panel has no VV, proc calls, SDQL, bans or announcements and only acts on the
+player's own body. Every action is in the game log as `BABYLON CREATIVE:` with the
+player's key. If Creative is switched off while the world runs, panels close, powers
+and buttons are taken back and events started from panels end.
+
+### Creative machines
 
 Creative worlds can spawn four creative machines from the Creative panel (purple tint,
 "creative" in the name). Only the Creative Plane maps come with some; research and cargo
@@ -625,7 +673,7 @@ say "Creative mode is off in this world" when examined. In a Creative world,
 
 The settings are saved with the world.
 
-## Creative Plane
+### Creative Plane
 
 The **Creative Plane** maps (S, M, L) are an empty floor to try things out on, best with
 Creative mode on. They are station-build worlds: the owner starts the round, and players
