@@ -30,8 +30,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 	/// How long the world waits for the cooldown check, and for the supervisor's copy of a snapshot.
 	var/check_timeout = 30 SECONDS
 	var/copy_timeout = 3 MINUTES
-	/// The supervisor's cooldown between submissions (hours), as its last check said.
-	var/cooldown_hours = 6
+	/// The supervisor's cooldown between submissions (hours), as its last check said; null before.
+	var/cooldown_hours
 	/// The request type (tests use one that answers late).
 	var/call_type = /datum/babylon_supervisor_call
 

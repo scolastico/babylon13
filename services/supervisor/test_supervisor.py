@@ -477,6 +477,19 @@ class Policies(unittest.TestCase):
         token = self.ticket(w, "admin")
         self.assertTrue(self.s.redeem(run["id"], run["secret"], token, "admin")["ok"])
 
+    def test_late_redeem_keeps_the_ticket(self):
+        # The world waits wait_seconds for its redeem; one that only got the lock after that is
+        # refused without spending the ticket or adding a session (the player's retry works).
+        w = self.create()
+        run = self.start(w)
+        token = self.ticket(w, "one")
+        late = time.monotonic() - 40
+        with self.assertRaisesRegex(Denied, "timed out"):
+            self.s.redeem(run["id"], run["secret"], token, "one", received=late, patience="30")
+        self.assertFalse(self.s.row("SELECT * FROM sessions WHERE ckey='one'"))
+        # In time (or without a deadline) the same ticket is admitted.
+        self.assertTrue(self.s.redeem(run["id"], run["secret"], token, "one", received=time.monotonic(), patience="30")["ok"])
+
     def test_settings_validation(self):
         for payload in ({"visibility": "invalid"}, {"visibility": "password"},
                         {"max_players": 999}, {"max_players": 0}, {"name": ""}):

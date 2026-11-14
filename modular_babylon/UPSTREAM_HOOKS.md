@@ -151,7 +151,7 @@ upstream merge, check new player verbs and the `infobuttons` controls.
 | `code/game/machinery/computer/atmos_computers/_air_sensor.dm` | Skip fresh-map automatic vent claiming for restored sensors. |
 | `code/__HELPERS/priority_announce.dm` | Suppress round announcements and command reports in the builder world (not in the station build). |
 | `modular_zubbers/code/modules/storyteller/divergency_report.dm` | Suppress round-start station-trait reporting (not in the station build). |
-| `code/modules/client/client_procs.dm` | Validate single-use lobby admission before registering a child client or creating an avatar. Enforce showcase play mode and restrict visitor Topics/clicks before target dispatch. Standalone builds restrict access to their configured owner. |
+| `code/modules/client/client_procs.dm` | Validate single-use lobby admission before registering a child client or creating an avatar; a refused client goes back to the lobby with the refusal's notice (`babylon_lobby_link()`). Enforce showcase play mode and restrict visitor Topics/clicks before target dispatch. Standalone builds restrict access to their configured owner. |
 | `code/modules/escape_menu/escape_menu.dm` | Add the Discord button (`modular_babylon/code/links.dm`) to Resources when `DISCORDURL` is set. |
 | `code/controllers/subsystem/verbs.dm` | Enforce the visitor verb allowlist for native/context verbs, including verbs belonging to world objects. |
 | `code/_onclick/drag_drop.dm` | Reject showcase visitor mouse-down/up, drag and drop before target handlers or signals run. |

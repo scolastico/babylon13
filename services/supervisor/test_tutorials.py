@@ -3,6 +3,7 @@ and copy (lobby actions), and the end of tutorial instances."""
 import json
 import os
 from pathlib import Path
+import threading
 import time
 import unittest
 import unittest.mock
@@ -117,6 +118,40 @@ class Submit(TutorialFixture):
         self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")
         self.assertFalse(back.exists())
         self.assertFalse((saved / "tutorial-snapshot").exists())
+
+    def test_redeem_is_answered_while_a_submission_is_copied(self):
+        # The snapshot copy runs outside the service lock: logins to other worlds are not held up
+        # by a long multi-level copy (they would time out after 30 s), and a second submission by
+        # the same author waits for the first.
+        world, run = self.creative_run()
+        other = self.make("player")
+        other_run = self.start(other, "player")
+        token = test_supervisor.Policies.ticket(self, other, "player")
+        copying, release = threading.Event(), threading.Event()
+        real_copy = self.s.tutorials.create_pending
+
+        def slow_copy(*args):
+            copying.set()
+            release.wait(10)
+            return real_copy(*args)
+
+        result = {}
+        with unittest.mock.patch.object(self.s.tutorials, "create_pending", side_effect=slow_copy):
+            worker = threading.Thread(target=lambda: result.update(tid=self.submit(run)))
+            worker.start()
+            self.assertTrue(copying.wait(10))
+            answered = self.s.redeem(other_run["id"], other_run["secret"], token, "player",
+                                     received=time.monotonic(), patience="30")
+            self.assertTrue(answered["ok"])
+            with self.assertRaisesRegex(Denied, "being stored right now"):
+                self.submit(run)
+            release.set()
+            worker.join(10)
+        self.assertEqual(self.tutorial(result["tid"])["status"], "pending")
+        # The reservation is gone; the cooldown now applies.
+        self.assertFalse(self.s.submitting)
+        with self.assertRaisesRegex(Denied, "another tutorial in"):
+            self.submit(run)
 
     def test_submit_check_and_actor_must_own_the_world(self):
         world, run = self.creative_run()

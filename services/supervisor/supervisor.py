@@ -47,6 +47,18 @@ def plain_text(value):
     return html.unescape(re.sub(r"<[^>]*>", "", value)).strip()
 
 
+def directory_size(path):
+    """Bytes of the plain files below path (for the logs); 0 when it is gone."""
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
 def clean_text(value, multiline=False):
     """Player-written text (world names, descriptions): no control or bidirectional-override
     characters, which could spoof how a name looks. HTML/Markdown is escaped where it is shown."""
@@ -530,6 +542,10 @@ class Supervisor:
         self.ahelp_admins_online = None
         self.checkpoints = Checkpoints(config["data_directory"], config.get("kept_save_points_per_world", 4))
         self.tutorials = TutorialStore(config["data_directory"])
+        # Snapshot copies run outside self.lock (they can take a while on a multi-level map); these
+        # reserve them: authors with a submission being stored, tutorials being saved back.
+        self.submitting = set()
+        self.saving_back = set()
         # Set by the Discord bot: called with a submitted tutorial (a dict) to tell the reviewers.
         self.tutorial_notify = None
         self.tutorials.clean_trash()
@@ -1143,6 +1159,8 @@ class Supervisor:
     def tutorial_submit(self, run_id, secret, data):
         """Copies a snapshot generation of the world into pending/<id>/ for review.
 
+        The checks and a reservation happen under the lock, the copy without it (a multi-level save
+        takes a while; nothing else should wait for it), the row and the cooldown under the lock again.
         The cooldown starts only once the tutorial is stored: a failed copy can be retried at once."""
         source = None
         try:
@@ -1153,6 +1171,8 @@ class Supervisor:
                 if not 1 <= len(title) <= TUTORIAL_TITLE_MAX or len(description) > TUTORIAL_DESCRIPTION_MAX:
                     raise Denied("Use a title of 1–%d characters and a description up to %d characters"
                                  % (TUTORIAL_TITLE_MAX, TUTORIAL_DESCRIPTION_MAX))
+                if actor in self.submitting:
+                    raise Denied("A submission of yours is being stored right now; wait for it to finish")
                 wait = self.submit_wait(actor)
                 if wait:
                     raise Denied("You can submit another tutorial in %s" % self.duration(wait))
@@ -1162,22 +1182,31 @@ class Supervisor:
                 tutorial = dict(id=tid, title=title, description=description, author=actor, status="pending",
                                 map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
                                 reviewed_by=None, source_world=world["id"], based_on=world.get("copied_from"))
+                meta = dict(tutorial, generation=data["generation"], based_on=self.based_on(tutorial))
+                self.submitting.add(actor)
+            try:
+                started = time.monotonic()
                 try:
-                    self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"],
-                                                                    based_on=self.based_on(tutorial)))
+                    self.tutorials.create_pending(tid, source, meta)
                 except (OSError, TutorialError) as error:
                     log("Storing the tutorial from %s failed: %s" % (self.describe(world["id"]), error))
                     raise Denied("The tutorial could not be stored: %s" % (
                         error if isinstance(error, TutorialError) else "the save could not be copied")) from None
-                try:
-                    self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world,based_on)"
-                                    " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world,:based_on)",
-                                    tutorial)
-                    self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, now))
-                    self.audit(actor, "tutorial_submit:" + tid, world["id"])
-                except Exception:
-                    self.tutorials.remove("pending", tid)
-                    raise
+                log("Tutorial copy %s (submission): %.1f s, %.1f MB" % (tid, time.monotonic() - started,
+                                                                        directory_size(source) / 2 ** 20))
+                with self.lock, self.db:
+                    try:
+                        self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world,based_on)"
+                                        " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world,:based_on)",
+                                        tutorial)
+                        self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, self.clock()))
+                        self.audit(actor, "tutorial_submit:" + tid, world["id"])
+                    except Exception:
+                        self.tutorials.remove("pending", tid)
+                        raise
+            finally:
+                with self.lock:
+                    self.submitting.discard(actor)
         finally:
             # The world's snapshot is no checkpoint: gone once copied or refused (the world deletes it too).
             if source is not None:
@@ -1206,31 +1235,47 @@ class Supervisor:
                 log(f"Telling the reviewers about a tutorial failed: {error}")
 
     def tutorial_save_back(self, run_id, secret, data):
-        """An admin in an edit world overwrites the pending tutorial's snapshot with a new generation."""
-        with self.lock, self.db:
-            run = self.child(run_id, secret)
-            world = self.world(run["world"])
-            if not self.world_policy(world)["can_save_back_tutorial"]:
-                raise Denied("Only a world that edits a pending tutorial can save back to it")
-            actor = ckey(str(data.get("actor", "")))
-            if actor not in self.admins:
-                raise Denied("Only server administrators can save back to a pending tutorial")
-            tutorial = self.tutorial_row(world["tutorial"])
-            if tutorial["status"] != "pending":
-                raise Denied("This tutorial is no longer pending, so it can't be changed from here")
-            source = self.generation_source(world["id"], data.get("generation"))
+        """An admin in an edit world overwrites the pending tutorial's snapshot with a new generation.
+        The copy runs outside the lock; the tutorial is reserved meanwhile (accept, reject and delete
+        wait for it)."""
+        source = None
+        try:
+            with self.lock, self.db:
+                run = self.child(run_id, secret)
+                world = self.world(run["world"])
+                if not self.world_policy(world)["can_save_back_tutorial"]:
+                    raise Denied("Only a world that edits a pending tutorial can save back to it")
+                actor = ckey(str(data.get("actor", "")))
+                if actor not in self.admins:
+                    raise Denied("Only server administrators can save back to a pending tutorial")
+                tutorial = self.tutorial_row(world["tutorial"])
+                if tutorial["status"] != "pending":
+                    raise Denied("This tutorial is no longer pending, so it can't be changed from here")
+                if tutorial["id"] in self.saving_back:
+                    raise Denied("This tutorial is being saved back right now; wait for it to finish")
+                source = self.generation_source(world["id"], data.get("generation"))
+                self.saving_back.add(tutorial["id"])
             try:
-                self.tutorials.replace_save(tutorial["id"], source)
-                self.tutorials.update_meta("pending", tutorial["id"], updated=self.clock(), generation=data["generation"])
-            except (OSError, TutorialError) as error:
-                log("Saving back tutorial %s failed: %s" % (tutorial["id"], error))
-                raise Denied("The tutorial could not be saved back; the pending copy is unchanged") from None
+                started = time.monotonic()
+                try:
+                    self.tutorials.replace_save(tutorial["id"], source)
+                    self.tutorials.update_meta("pending", tutorial["id"], updated=self.clock(), generation=data["generation"])
+                except (OSError, TutorialError) as error:
+                    log("Saving back tutorial %s failed: %s" % (tutorial["id"], error))
+                    raise Denied("The tutorial could not be saved back; the pending copy is unchanged") from None
+                log("Tutorial copy %s (save back): %.1f s, %.1f MB" % (tutorial["id"], time.monotonic() - started,
+                                                                       directory_size(source) / 2 ** 20))
+                with self.lock, self.db:
+                    self.db.execute("UPDATE tutorials SET updated=? WHERE id=?", (self.clock(), tutorial["id"]))
+                    self.audit(actor, "tutorial_save_back:" + tutorial["id"], world["id"])
             finally:
-                # The edit world's snapshot is no checkpoint: gone once copied or refused.
+                with self.lock:
+                    self.saving_back.discard(tutorial["id"])
+        finally:
+            # The edit world's snapshot is no checkpoint: gone once copied or refused.
+            if source is not None:
                 self.discard_tutorial_snapshot(source)
-            self.db.execute("UPDATE tutorials SET updated=? WHERE id=?", (self.clock(), tutorial["id"]))
-            self.audit(actor, "tutorial_save_back:" + tutorial["id"], world["id"])
-            return {"ok": True, "tutorial": tutorial["id"]}
+        return {"ok": True, "tutorial": tutorial["id"]}
 
     def tutorial_list(self, actor):
         admin = actor in self.admins
@@ -1280,6 +1325,9 @@ class Supervisor:
                     if not pending:
                         raise Denied("Only pending tutorials can be edited")
                     return self.edit_tutorial(actor, tutorial, cleanup)
+                if action in ("tutorial_accept", "tutorial_reject", "tutorial_delete") and tutorial["id"] in self.saving_back:
+                    # Its files are being replaced outside the lock (tutorial_save_back).
+                    raise Denied("An admin is saving this tutorial back right now. Try again in a moment.")
                 if action in ("tutorial_reject", "tutorial_delete") and data.get("confirm") not in (True, 1, "1"):
                     raise Denied("Confirm that the tutorial will be permanently deleted")
                 if action == "tutorial_accept":
@@ -1477,9 +1525,23 @@ class Supervisor:
             raise Denied("Invalid child credentials")
         return run
 
-    def redeem(self, run_id, secret, token, actor):
+    # Seconds before the world's own deadline at which a redeem gives up (so the world never hears
+    # a late success it has already stopped waiting for).
+    REDEEM_MARGIN = 2
+
+    def redeem(self, run_id, secret, token, actor, received=None, patience=None):
+        """Admits a ticket. received: when the request arrived (time.monotonic()); patience: the
+        seconds the world waits for this answer. A redeem that only gets the lock after the world
+        gave up is refused without spending the ticket, so the player's next try still works."""
         with self.lock, self.db:
             run = self.child(run_id, secret)
+            try:
+                patience = float(patience) if patience is not None else None
+            except (TypeError, ValueError):
+                patience = None
+            if received is not None and patience and time.monotonic() > received + patience - self.REDEEM_MARGIN:
+                log("A redeem for %s waited too long for the supervisor; the ticket stays valid" % self.describe(run["world"]))
+                raise Denied("Admission timed out; join again from the lobby")
             ticket = self.row("SELECT * FROM tickets WHERE hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
             if not ticket or ticket["run"] != run_id or ticket["world"] != run["world"] or ticket["ckey"] != ckey(actor) or ticket["expires"] <= self.clock() or run["state"] != "running":
                 raise Denied("Admission expired or invalid; reconnect through the lobby")
@@ -1732,7 +1794,8 @@ def load_config(path):
 # Actions a world child may call with its run id and secret. serve() authenticates each of them with
 # Supervisor.child() before the handler runs; every other action needs the lobby secret instead.
 CHILD_ACTIONS = {
-    "redeem": lambda service, data: service.redeem(data.get("run"), data.get("secret", ""), data.get("ticket", ""), data.get("actor", "")),
+    "redeem": lambda service, data: service.redeem(data.get("run"), data.get("secret", ""), data.get("ticket", ""), data.get("actor", ""),
+                                                   data.get("_received"), data.get("wait_seconds")),
     "ahelp": lambda service, data: service.relay_ahelp(data.get("run"), data.get("secret", ""), data),
     "world_manage": lambda service, data: service.manage_world(data.get("run"), data.get("secret", ""), data),
     "round_ended": lambda service, data: service.round_ended(data.get("run"), data.get("secret", "")),
@@ -1769,6 +1832,8 @@ def serve(config, service=None):
                     data = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query, keep_blank_values=True).items()}
                 handler = CHILD_ACTIONS.get(data.get("action"))
                 if handler:
+                    # When it arrived, before any wait for the service lock (redeem's deadline).
+                    data["_received"] = time.monotonic()
                     # Each handler authenticates itself (Supervisor.child under the service lock);
                     # test_contracts checks that every entry rejects bad credentials.
                     result = handler(service, data)

@@ -206,6 +206,40 @@ describe('BabylonCreative Tutorial tab', () => {
     expect(screen.queryByText('Enter a title to submit.')).toBeNull();
   });
 
+  it('leaves the cooldown out when the server has none', () => {
+    withTutorial({ cooldown_hours: 0 });
+    openTab('Tutorial');
+    expect(screen.queryByText(/after the cooldown/)).toBeNull();
+    expect(screen.getByText(/can't change it afterwards/)).toBeDefined();
+  });
+
+  it('keeps an open confirm but disables it while nothing can be sent', () => {
+    withTutorial({});
+    let view: ReturnType<typeof render> | undefined;
+    act(() => {
+      view = render(<BabylonCreative />);
+    });
+    act(() => {
+      fireEvent.click(screen.getAllByText('Tutorial')[0]);
+    });
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
+        target: { value: 'First aid' },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Submit for review…'));
+    });
+    // A cooldown arrives while the confirm is open: it stays, but can't be confirmed.
+    withTutorial({ blocked: 'cooldown', blocked_text: 'Cooldown: 4 min.' });
+    act(() => {
+      view?.rerender(<BabylonCreative />);
+    });
+    expect(screen.getByText('Cooldown: 4 min.')).toBeDefined();
+    const yes = screen.getByText('Yes, submit').closest('.Button');
+    expect(isDisabled(yes)).toBe(true);
+  });
+
   it('confirms a submission before sending it', () => {
     withTutorial({});
     openTab('Tutorial');

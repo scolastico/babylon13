@@ -206,6 +206,8 @@ var/global/babylon_byond_1686_slot_pad_drone_test_1
 // babylon.dme
 #elif defined(BABYLON_STATION) && defined(BABYLON_TESTING)
 // babylon-station-test.dme
+var/global/babylon_byond_1686_slot_pad_station_test_1
+var/global/babylon_byond_1686_slot_pad_station_test_2
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 #endif

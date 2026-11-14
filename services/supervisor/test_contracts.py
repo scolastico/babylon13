@@ -55,9 +55,11 @@ class ChildActions(unittest.TestCase):
     def test_every_supervisor_request_is_bounded(self):
         # world.Export blocks with no timeout of its own (arch-review C5): a hung supervisor would
         # stall logins, the round end or a lobby page. Only the background call datums block;
-        # everything else goes through babylon_supervisor_request_within() / lobby_export_within().
+        # everything else goes through babylon_supervisor_request_within() / lobby_export_start() + lobby_await().
         allowed = {"babylon_supervisor_request(": {"/datum/babylon_supervisor_call/proc/perform"},
-                   "world.Export(": {"/proc/babylon_supervisor_request", "/datum/lobby_request/proc/perform"}}
+                   "world.Export(": {"/proc/babylon_supervisor_request", "/datum/lobby_request/proc/perform"},
+                   # A proc reference starts the blocking call elsewhere (INVOKE_ASYNC, CALLBACK, addtimer).
+                   "babylon_supervisor_request)": set(), "/proc/babylon_supervisor_request,": set()}
         sources = dict(dm_sources())
         sources.update({path: path.read_text(encoding="utf-8") for path in sorted((DM.parent / "lobby").glob("*.dm"))})
         found = {call: set() for call in allowed}
