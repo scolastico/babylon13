@@ -110,6 +110,15 @@
 		return FALSE
 	return field == "name" || babylon_save_text(default) != default
 
+/// A plane without its multi-z offset (PLANE_TO_TRUE). Saves and copies store this: a level loads
+/// at a z whose offset Initialize applies again (turfs, SET_PLANE_IMPLICIT), so an offset plane
+/// would be offset twice, and a level restored at another z needs that z's offset anyway.
+/proc/babylon_true_plane(plane)
+	if(!isnum(plane))
+		return plane
+	var/true_plane = PLANE_TO_TRUE(plane)
+	return isnum(true_plane) ? true_plane : plane
+
 /datum/babylon_save/proc/encode_value(value)
 	if(istext(value))
 		return babylon_save_text(value)
@@ -165,6 +174,8 @@
 		capture_fields_by_type[thing.type] = capture_fields
 	for(var/field in capture_fields)
 		var/value = thing.vars[field]
+		if(field == "plane")
+			value = babylon_true_plane(value)
 		if(babylon_save_keeps_default_text(thing, field, value))
 			continue
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (field in list_fields))
@@ -343,7 +354,8 @@
 	if(is_turf)
 		turf_key = "[thing.type]"
 		for(var/field in fields)
-			if(thing.vars[field] != initial(thing.vars[field]))
+			var/current = field == "plane" ? babylon_true_plane(thing.plane) : thing.vars[field]
+			if(current != initial(thing.vars[field]))
 				turf_key = null
 				break
 		if(turf_key)
@@ -353,6 +365,8 @@
 				return turf_metadata_cache[turf_key]
 	for(var/field in fields)
 		var/value = thing.vars[field]
+		if(field == "plane")
+			value = babylon_true_plane(value)
 		if(babylon_save_keeps_default_text(thing, field, value))
 			continue
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (islist(value) && (field in list_map_fields)))
@@ -1041,9 +1055,13 @@
 				shown.vis_contents += overlay
 				LAZYADD(shown.managed_vis_overlays, overlay)
 		// Rendering order is runtime-editable and update_appearance may reset it.
-		for(var/field in list("layer", "plane", "pixel_x", "pixel_y", "pixel_z", "alpha"))
+		for(var/field in list("layer", "pixel_x", "pixel_y", "pixel_z", "alpha"))
 			if((field in record["fields"]) && (field in thing.vars))
 				thing.vars[field] = decode_value(record["fields"][field])
+		// The plane is saved without its multi-z offset (older saves with it); this z's offset
+		// goes back on.
+		if(("plane" in record["fields"]) && ("plane" in thing.vars))
+			SET_PLANE_IMPLICIT(thing, babylon_true_plane(decode_value(record["fields"]["plane"])))
 		CHECK_TICK
 	// Restore gases only after parts and network topology are complete.
 	// copy_from preserves volume; version 2 also stores the actual volume.

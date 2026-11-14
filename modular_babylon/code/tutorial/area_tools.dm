@@ -591,6 +591,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		if(!issaved(thing.vars[field]))
 			continue
 		var/value = thing.vars[field]
+		// Without the source deck's multi-z offset: Initialize adds the target deck's
+		// (babylon_true_plane, persistence.dm).
+		if(field == "plane")
+			value = babylon_true_plane(value)
 		if(babylon_save_keeps_default_text(thing, field, value))
 			continue
 		if(islist(value))
@@ -617,6 +621,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/datum/babylon_save/engine = GLOB.babylon_save
 	var/list/settings = list()
 	for(var/field in engine.setting_fields(thing))
+		// The plane is in the copy's map (babylon_area_metadata), where Initialize offsets it for
+		// the target deck; set again afterwards, it would carry the source deck's offset.
+		if(field == "plane")
+			continue
 		var/value = thing.vars[field]
 		if(islist(value))
 			if(!(field in engine.list_fields))

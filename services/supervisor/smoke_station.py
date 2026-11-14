@@ -314,6 +314,8 @@ def main():
         entry["links"] = dict(before=links_before, after=links_after)
         compare_links(links_before, links_after)
         assert links_after["lift_buttons_linked"], links_after
+        # A copy pasted on that deck gets the deck's plane offset once.
+        entry["test_area_paste_planes"] = checks(run, "test_area_paste_planes")
         stop(world)
         return entry
 

@@ -575,3 +575,82 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	current.mapping_url = real_url
 	result["positions_only_with_url"] = !without_url && with_url
 	return result
+
+/// The atom's plane is its true plane with the multi-z offset of its own z: what a fresh map gives
+/// it. A plane offset twice, or with another deck's offset, fails.
+/proc/babylon_plane_consistent(atom/thing)
+	if(!SSmapping.max_plane_offset)
+		return TRUE
+	var/turf/tile = get_turf(thing)
+	if(!tile)
+		return TRUE
+	var/true_plane = PLANE_TO_TRUE(thing.plane)
+	if(isnull(true_plane))
+		return FALSE
+	return thing.plane == GET_NEW_PLANE(true_plane, GET_Z_PLANE_OFFSET(tile.z))
+
+/// Turfs and objects of one level whose plane is not consistent: list(turfs, objects).
+/proc/babylon_plane_mismatches(z)
+	var/turfs = 0
+	var/objects = 0
+	for(var/turf/tile as anything in block(1, 1, z, world.maxx, world.maxy, z))
+		if(!babylon_plane_consistent(tile))
+			turfs++
+		for(var/obj/thing in tile)
+			if(!babylon_plane_consistent(thing))
+				objects++
+		CHECK_TICK
+	return list(turfs, objects)
+
+/// A copy pasted on a deck with a plane offset: its turfs and objects get that deck's plane, not
+/// the source's offset again (area_tools.dm babylon_area_metadata). Station multi-z smoke only;
+/// reports offset_deck = FALSE elsewhere.
+/datum/babylon_save/proc/test_area_paste_planes()
+	var/list/result = list()
+	var/deck
+	for(var/z in SSmapping.levels_by_trait(ZTRAIT_STATION))
+		if(SSmapping.max_plane_offset && GET_Z_PLANE_OFFSET(z) > 0)
+			deck = z
+			break
+	result["offset_deck"] = !!deck
+	if(!deck)
+		return result
+	// Two free 3x1 floor runs on that deck: the copy and where it goes.
+	var/list/runs = list()
+	for(var/turf/open/floor/tile in block(2, 2, deck, world.maxx - 4, world.maxy - 1, deck))
+		var/free = TRUE
+		for(var/dx in 0 to 2)
+			var/turf/step = locate(tile.x + dx, tile.y, deck)
+			if(!istype(step, /turf/open/floor) || step.is_blocked_turf(TRUE) || length(step.contents) || babylon_area_locked(step))
+				free = FALSE
+				break
+		if(!free)
+			continue
+		if(length(runs) && get_dist(runs[1], tile) < 6)
+			continue
+		runs += tile
+		if(length(runs) == 2)
+			break
+	result["free_floor"] = length(runs) == 2
+	if(length(runs) < 2)
+		return result
+	var/turf/source = runs[1]
+	var/turf/target = runs[2]
+	new /obj/item/wrench(source)
+	new /obj/structure/chair(locate(source.x + 1, source.y, deck))
+	var/datum/babylon_area_clip/clip = babylon_area_capture(source.x, source.y, source.x + 2, source.y, deck)
+	var/list/counts = list()
+	var/error = babylon_area_place(clip, target, "auto", null, FALSE, "[world.port]-planetest", counts)
+	result["pasted"] = isnull(error) && !!(locate(/obj/item/wrench) in target) && !!(locate(/obj/structure/chair) in locate(target.x + 1, target.y, deck))
+	var/consistent = TRUE
+	for(var/dx in 0 to 2)
+		var/turf/tile = locate(target.x + dx, target.y, deck)
+		if(!babylon_plane_consistent(tile))
+			consistent = FALSE
+			result["turf [tile.x],[tile.y] plane [tile.plane]"] = FALSE
+		for(var/obj/thing in tile)
+			if(!babylon_plane_consistent(thing))
+				consistent = FALSE
+				result["[thing.type] plane [thing.plane]"] = FALSE
+	result["pasted_planes_consistent"] = consistent
+	return result
