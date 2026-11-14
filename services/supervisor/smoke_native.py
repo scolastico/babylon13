@@ -193,6 +193,10 @@ def main():
         assert any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), exported
         exported = call(run, "session", "test_supervisor_export", [json.dumps(query)])
         assert not any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), "Ticket replay accepted"
+        # Lights, cameras and alarms whose state the restored map's Initialize would decide anew.
+        saved_state = call(run, "session", "test_saved_state_setup")
+        saved_state = {entry["entry"]: entry["value"] for entry in saved_state["entries"]}
+        assert saved_state and all(saved_state.values()), saved_state
         stop(world)
         saved = data / "worlds" / world / "data/babylon/saves"
         generation = json.loads((saved / "latest.json").read_text())["generation"]
@@ -201,6 +205,9 @@ def main():
         friend_id = before["players"]["smokefriend"]["builder"]
         assert before["players"]["smokefriend"]["respawn_pending"]
         run = wait_ready(world)
+        restored_state = call(run, "session", "test_saved_state_restored", [saved_state["state"]])
+        restored_state = {entry["entry"]: entry["value"] for entry in restored_state["entries"]}
+        assert restored_state and all(restored_state.values()), restored_state
         roster = debug(run, "inspect", dict(target="session", vars=["player_sessions"]))["vars"]["player_sessions"]
         assert roster["length"] == 2, roster
         restored_friend = next(e["value"]["ref"] for e in roster["entries"] if e["entry"] == "smokefriend")

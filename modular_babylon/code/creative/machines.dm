@@ -346,27 +346,28 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	return connect(port)
 
 /datum/babylon_save
-	/// Save id => list(wanted, connected) of every restored creative canister, as
-	/// reconnect_creative_canisters() left it (for the restore test).
+	/// Save id => list(wanted, connected) of every restored creative canister, as the restore left
+	/// it (record_creative_canister_ports(), for the restore test).
 	var/list/creative_canister_ports_after_restore
 
-/// After a restore (persistence.dm restore_world, once the saved pipe networks and portable
-/// connections are back), every restored creative canister takes its saved babylon_port_wanted:
-/// one that belongs on its port goes back onto it (one that cannot yet, without a pipe network,
-/// retries lazily in process_atmos); one a player had unwrenched but left on the port's tile is
-/// taken off the port again, which Initialize connected it to. Saves from before the field was
-/// kept leave it as Initialize set it (on a port: wanted).
-/datum/babylon_save/proc/reconnect_creative_canisters()
+/// After a restore (once the saved pipe networks and portable connections are back) or a paste,
+/// the canister takes its saved babylon_port_wanted: one that belongs on its port goes back onto
+/// it (one that cannot yet, without a pipe network, retries lazily in process_atmos); one a player
+/// had unwrenched, or copied off a port, is taken off the port that Initialize connected it to.
+/// Saves from before the field was kept leave it as Initialize set it (on a port: wanted).
+/obj/machinery/portable_atmospherics/canister/babylon_creative/babylon_after_restore(list/fields)
+	if(babylon_port_wanted)
+		babylon_reconnect_port()
+	else if(connected_port)
+		disconnect()
+
+/// Records every restored creative canister's port state as restore_world() leaves it.
+/datum/babylon_save/proc/record_creative_canister_ports()
 	creative_canister_ports_after_restore = list()
 	for(var/save_id in restored_atoms)
 		var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister = restored_atoms[save_id]
-		if(!istype(canister) || QDELETED(canister))
-			continue
-		if(canister.babylon_port_wanted)
-			canister.babylon_reconnect_port()
-		else if(canister.connected_port)
-			canister.disconnect()
-		creative_canister_ports_after_restore[save_id] = list(canister.babylon_port_wanted, !!canister.connected_port)
+		if(istype(canister) && !QDELETED(canister))
+			creative_canister_ports_after_restore[save_id] = list(canister.babylon_port_wanted, !!canister.connected_port)
 
 /obj/machinery/portable_atmospherics/canister/babylon_creative/connect(obj/machinery/atmospherics/components/unary/portables_connector/new_port)
 	. = ..()

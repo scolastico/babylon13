@@ -602,6 +602,132 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		CHECK_TICK
 	return list(turfs, objects)
 
+/// The deck the saved-state tests use: the last station level (a deck with a plane offset on
+/// multi-z maps), else the station level.
+/datum/babylon_save/proc/saved_state_test_z()
+	var/list/station_levels = SSmapping.levels_by_trait(ZTRAIT_STATION)
+	return length(station_levels) ? station_levels[length(station_levels)] : station_z
+
+/// Counts of state that a restored map must not decide anew, on the saved levels.
+/datum/babylon_save/proc/saved_state_counts()
+	var/list/levels = persisted_levels()
+	var/list/counts = list("lights_not_ok" = 0, "cameras_off" = 0, "alarms_unbuilt" = 0)
+	for(var/obj/machinery/light/light as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/light))
+		if(!QDELETED(light) && (light.z in levels) && light.status != LIGHT_OK)
+			counts["lights_not_ok"]++
+	for(var/obj/machinery/camera/camera as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/camera))
+		if(!QDELETED(camera) && (camera.z in levels) && !camera.camera_enabled)
+			counts["cameras_off"]++
+	for(var/obj/machinery/firealarm/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/firealarm))
+		if(!QDELETED(alarm) && (alarm.z in levels) && alarm.buildstage != FIRE_ALARM_BUILD_SECURED)
+			counts["alarms_unbuilt"]++
+	for(var/obj/machinery/airalarm/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/airalarm))
+		if(!QDELETED(alarm) && (alarm.z in levels) && alarm.buildstage != AIR_ALARM_BUILD_COMPLETE)
+			counts["alarms_unbuilt"]++
+	return counts
+
+/// Before a save and restart: changes saved state that a map's mapload Initialize would decide
+/// anew (persistence.dm, babylon_after_restore): a broken and an emptied light, a light fixture
+/// built by a player with a tube in it, two cameras switched off and two half-built alarms.
+/// Returns facts for test_saved_state_restored ("state", JSON).
+/datum/babylon_save/proc/test_saved_state_setup()
+	var/list/result = list()
+	var/z = saved_state_test_z()
+	var/list/markers = list()
+	var/list/lights = list()
+	for(var/obj/machinery/light/light as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/light))
+		if(!QDELETED(light) && light.z == z && isturf(light.loc) && light.status == LIGHT_OK && light.type != /obj/machinery/light/empty)
+			lights += light
+		if(length(lights) >= 2)
+			break
+	result["two_lights"] = length(lights) == 2
+	if(length(lights) == 2)
+		var/obj/machinery/light/broken = lights[1]
+		broken.break_light_tube(TRUE)
+		var/obj/machinery/light/emptied = lights[2]
+		emptied.status = LIGHT_EMPTY
+		emptied.update(FALSE)
+		markers += list(list("kind" = "light", "x" = broken.x, "y" = broken.y, "z" = broken.z, "dir" = broken.dir, "expect" = LIGHT_BROKEN))
+		markers += list(list("kind" = "light", "x" = emptied.x, "y" = emptied.y, "z" = emptied.z, "dir" = emptied.dir, "expect" = LIGHT_EMPTY))
+	// A fixture a player built against a wall, with a tube put in.
+	var/obj/machinery/light/fixture
+	for(var/turf/open/floor/tile in block(2, 2, z, world.maxx - 1, world.maxy - 1, z))
+		if(tile.is_blocked_turf(TRUE) || (locate(/obj/machinery/light) in tile) || babylon_area_locked(tile))
+			continue
+		for(var/direction in GLOB.cardinals)
+			if(isclosedturf(get_step(tile, direction)))
+				fixture = new /obj/machinery/light/empty(tile)
+				fixture.setDir(direction)
+				break
+		if(fixture)
+			break
+	if(fixture)
+		fixture.status = LIGHT_OK
+		fixture.update(FALSE)
+		markers += list(list("kind" = "light", "x" = fixture.x, "y" = fixture.y, "z" = fixture.z, "dir" = fixture.dir, "expect" = LIGHT_OK, "type" = "[/obj/machinery/light/empty]"))
+	result["player_fixture"] = fixture?.status == LIGHT_OK
+	var/cameras = 0
+	for(var/obj/machinery/camera/camera as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/camera))
+		if(cameras >= 2)
+			break
+		if(QDELETED(camera) || !(camera.z in persisted_levels()) || !camera.camera_enabled || !isturf(camera.loc))
+			continue
+		camera.toggle_cam(null, FALSE)
+		cameras++
+		markers += list(list("kind" = "camera", "x" = camera.x, "y" = camera.y, "z" = camera.z, "expect" = FALSE))
+	for(var/alarm_type in list(/obj/machinery/firealarm, /obj/machinery/airalarm))
+		for(var/obj/machinery/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(alarm_type))
+			if(QDELETED(alarm) || !(alarm.z in persisted_levels()) || !isturf(alarm.loc))
+				continue
+			alarm.vars["buildstage"] = 1 // FIRE_ALARM_BUILD_NO_WIRES, AIR_ALARM_BUILD_NO_WIRES
+			alarm.set_panel_open(TRUE)
+			alarm.update_appearance()
+			markers += list(list("kind" = "alarm", "x" = alarm.x, "y" = alarm.y, "z" = alarm.z, "type" = "[alarm_type]", "expect" = 1))
+			break
+	var/list/planes = babylon_plane_mismatches(z)
+	result["planes_turfs_fresh"] = planes[1] == 0
+	result["state"] = json_encode(list("markers" = markers, "counts" = saved_state_counts(), "plane_objects" = planes[2], "z" = z))
+	return result
+
+/// After the save above was restored: the saved light, camera and alarm states came back, none
+/// was decided anew by the map's Initialize (the counts match), and every turf and object on the
+/// tested deck has its deck's plane (no offset applied twice).
+/datum/babylon_save/proc/test_saved_state_restored(state_json)
+	var/list/result = list()
+	var/list/state = json_decode(state_json)
+	var/list/before = state["counts"]
+	var/list/now = saved_state_counts()
+	for(var/key in before)
+		result["[key]_kept"] = now[key] == before[key]
+		if(now[key] != before[key])
+			result["[key]: [before[key]] before, [now[key]] after"] = FALSE
+	var/markers_ok = TRUE
+	for(var/list/marker as anything in state["markers"])
+		var/turf/tile = locate(marker["x"], marker["y"], marker["z"])
+		var/found = FALSE
+		switch(marker["kind"])
+			if("light")
+				for(var/obj/machinery/light/light in tile)
+					if(light.dir == marker["dir"] && (!marker["type"] || "[light.type]" == marker["type"]))
+						found = light.status == marker["expect"]
+			if("camera")
+				for(var/obj/machinery/camera/camera in tile)
+					found = camera.camera_enabled == marker["expect"] && !camera.can_use()
+			if("alarm")
+				var/alarm_type = text2path(marker["type"])
+				var/obj/machinery/alarm = locate(alarm_type) in tile
+				found = !!alarm && alarm.vars["buildstage"] == marker["expect"] && alarm.panel_open
+		if(!found)
+			markers_ok = FALSE
+			result["marker [marker["kind"]] at [marker["x"]],[marker["y"]],[marker["z"]] not as saved"] = FALSE
+	result["markers_as_saved"] = markers_ok && length(state["markers"]) >= 3
+	var/list/planes = babylon_plane_mismatches(state["z"])
+	result["planes_turfs_consistent"] = planes[1] == 0
+	result["planes_objects_consistent"] = planes[2] <= state["plane_objects"]
+	if(planes[1] || planes[2] > state["plane_objects"])
+		result["planes on z[state["z"]]: [planes[1]] turfs, [planes[2]] objects (before [state["plane_objects"]])"] = FALSE
+	return result
+
 /// A copy pasted on a deck with a plane offset: its turfs and objects get that deck's plane, not
 /// the source's offset again (area_tools.dm babylon_area_metadata). Station multi-z smoke only;
 /// reports offset_deck = FALSE elsewhere.

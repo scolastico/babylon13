@@ -650,6 +650,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			value = values.Copy()
 		thing.vars[field] = value
 	thing.update_appearance()
+	// As after a restore: lights, cameras, canister ports ... reconcile (persistence.dm).
+	thing.babylon_after_restore(settings)
 
 /// Closets and storage items: their contents are copied too.
 /proc/babylon_area_is_container(atom/thing)
@@ -941,10 +943,15 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	if(!template.cached_map || template.width != clip.width || template.height != clip.height)
 		return "The copy could not be read back."
 	var/loaded
+	// The copy is saved state, not a fresh map: mapload defaults such as random light breakage stand
+	// back (babylon_loading_saved_map(), persistence.dm).
+	var/was_loading = GLOB.babylon_save.loading_saved_map
+	GLOB.babylon_save.loading_saved_map = TRUE
 	try
 		loaded = template.load(origin)
 	catch(var/exception/failure)
 		log_world("BABYLON AREA: loading the copy failed: [failure] ([failure.file]:[failure.line])")
+	GLOB.babylon_save.loading_saved_map = was_loading
 	if(!loaded)
 		return "The copy could not be placed there."
 	for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))

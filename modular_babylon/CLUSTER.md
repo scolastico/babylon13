@@ -568,7 +568,11 @@ What a save keeps and what it does not:
   lifts, the tram), every landmark and ghost-role spawner, and living things without a player (animals, monsters,
   bots, monkeys) by type, name, health and whether they are dead. NPC humans (ruin
   corpses) are not kept yet. Scenery (plants,
-  rocks, decals, dirt) keeps only its place, look and colour.
+  rocks, decals, dirt) keeps only its place, look and colour. A restart decides nothing
+  anew that a fresh map would: lights keep their tubes (working, empty, broken or burned
+  out, also in fixtures players built), cameras stay on or off, half-built fire and air
+  alarms stay half-built, and bots keep their personality setting. Every deck of a
+  multi-deck station keeps its own rendering layer. Vending machines still restock.
 - Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
   (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,
   idle; whatever was aboard is lost. Shuttles players built themselves are saved where

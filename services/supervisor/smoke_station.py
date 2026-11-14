@@ -297,6 +297,10 @@ def main():
         first = checks(run, "test_multiz_save_roundtrip")
         entry["test_multiz_save_roundtrip"] = first
         entry["save"] = info(run)["last_save"]
+        # Lights, cameras and alarms whose state a map's Initialize would decide anew, on the
+        # deck with a plane offset.
+        saved_state = checks(run, "test_saved_state_setup")
+        entry["test_saved_state_setup"] = saved_state
         stopped = time.time()
         stop(world)
         entry["stop_seconds"] = round(time.time() - stopped)
@@ -310,6 +314,7 @@ def main():
         entry["test_multiz_restored"] = checks(run, "test_multiz_restored",
                                                [first["markers"], first["station_time"], 1, first["planet_coords"],
                                                 first["traveller"]])
+        entry["test_saved_state_restored"] = checks(run, "test_saved_state_restored", [saved_state["state"]])
         links_after = values(run, "test_station_links")
         entry["links"] = dict(before=links_before, after=links_after)
         compare_links(links_before, links_after)

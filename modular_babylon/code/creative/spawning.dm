@@ -51,7 +51,7 @@
  *   revenants, spriggans. Simple bots (/mob/living/basic/bot) stay spawnable: a spawned bot
  *   polls nobody (only mapped station bots enable possession); a ghost can take one over only
  *   after a player switches on its personality setting (a restore keeps that setting:
- *   restore_bot_possession, persistence.dm);
+ *   babylon_after_restore, persistence.dm);
  * - items that are no real item or that make map levels: hand gestures (hand_item), mob holders,
  *   the Hilbert's hotel sphere, and abstract (ABSTRACT flag) items;
  * - Babylon's own builder drones (the drone builder session owns them);

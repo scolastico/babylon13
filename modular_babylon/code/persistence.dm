@@ -168,7 +168,7 @@
 	var/list/capture_fields = capture_fields_by_type[thing.type]
 	if(isnull(capture_fields))
 		capture_fields = list()
-		for(var/field in state_fields | extra_fields | structural_fields)
+		for(var/field in state_fields | extra_fields | structural_fields | type_fields(thing))
 			if(field in thing.vars)
 				capture_fields += field
 		capture_fields_by_type[thing.type] = capture_fields
@@ -331,13 +331,21 @@
 		metadata_fields_by_type[thing.type] = fields
 	return fields
 
+/// The typed_fields that apply to this atom's type.
+/datum/babylon_save/proc/type_fields(atom/thing)
+	var/list/fields = list()
+	for(var/path in typed_fields)
+		if(istype(thing, path))
+			fields |= typed_fields[path]
+	return fields
+
 /// The extra_fields of this atom's type (settings applied after the object exists: creative
 /// machine settings, pump and filter modes ...), cached per type. The area tools' copies use them.
 /datum/babylon_save/proc/setting_fields(atom/thing)
 	var/list/fields = setting_fields_by_type[thing.type]
 	if(isnull(fields))
 		fields = list()
-		for(var/field in extra_fields)
+		for(var/field in extra_fields | type_fields(thing))
 			if(field in thing.vars)
 				fields += field
 		setting_fields_by_type[thing.type] = fields
@@ -1095,8 +1103,12 @@
 			restore_gas(open.return_air(), record["gas"])
 		CHECK_TICK
 	restore_portable_connections(records)
-	reconnect_creative_canisters()
-	restore_bot_possession(records)
+	for(var/list/record as anything in records)
+		var/atom/thing = restored_atoms[record["id"]]
+		if(thing && !QDELETED(thing))
+			thing.babylon_after_restore(record["fields"] || list())
+		CHECK_TICK
+	record_creative_canister_ports()
 	SSmachines.makepowernets()
 	restore_airlock_configuration(state)
 	// Door animations and their sleeping procs cannot survive a process restart.
@@ -1156,6 +1168,7 @@
 		CHECK_TICK
 	restore_session_state(state)
 	play_time = isnum(state["play_time"]) ? state["play_time"] : 0
+	loading_saved_map = FALSE
 	to_chat(world, span_notice("Babylon resumed from [last_save]."))
 
 /// Saves before version 7 dropped the supermatter shard from the engine's secure crate, which
@@ -1207,24 +1220,67 @@
 		if(portable.connect(port) && !("portable_port" in record))
 			migration_notes |= "Recovered anchored portable-atmos connector attachment from legacy save."
 
-/// A saved level loads as a map, so every restored bot initializes with mapload on a station level,
-/// where upstream switches ghost possession on for mapped bots (_bots.dm). A restored bot takes the
-/// saved can_be_possessed instead: on only if a player had switched its personality on (or it was a
-/// mapped bot that still had it on). Saves from before the field was kept leave it off.
-/datum/babylon_save/proc/restore_bot_possession(list/records)
-	for(var/list/record as anything in records)
-		var/mob/living/basic/bot/bot = restored_atoms[record["id"]]
-		if(!istype(bot) || QDELETED(bot))
-			continue
-		var/list/fields = record["fields"]
-		var/wanted = ("can_be_possessed" in fields) ? !!decode_value(fields["can_be_possessed"]) : FALSE
-		var/datum/component/ghost_direct_control/control = bot.GetComponent(/datum/component/ghost_direct_control)
-		if(wanted && !control && (bot.bot_mode_flags & BOT_MODE_CAN_BE_SAPIENT))
-			bot.enable_possession(mapload = TRUE)
-		else if(!wanted)
-			bot.can_be_possessed = FALSE
-			// No longer offered in the ghosts' joinable mob list either.
-			qdel(control)
+// ---------------------------------------------------------------------------------------------
+// Saved state over fresh-map defaults. A saved level (and an area-tool copy) loads as a map, so its
+// atoms initialize with mapload, where upstream code decides things that only fit a fresh map.
+// One mechanism covers the class:
+// - babylon_loading_saved_map() is TRUE while such a map loads; the mapload defaults below stand back;
+// - the state itself is saved (typed_fields, state.dm), restored like any field, and
+//   babylon_after_restore() reconciles what a plain variable write cannot (powernets, camera nets,
+//   components, connections). restore_world() calls it for every restored object; the area tools'
+//   paste calls it with the copied settings.
+
+/datum/babylon_save/New()
+	. = ..()
+	loading_saved_map = fexists("data/babylon/resume-state.json")
+
+/proc/babylon_loading_saved_map()
+	return !!GLOB.babylon_save?.loading_saved_map
+
+/// Applies what a restore or paste wrote into this atom's variables. fields: the saved fields.
+/atom/proc/babylon_after_restore(list/fields)
+	return
+
+// Lights: upstream breaks 2% of tubes and 5% of bulbs of every mapped light; a saved light keeps
+// its saved status (working, empty, broken, burned out) instead.
+/obj/machinery/light/Initialize(mapload)
+	if(mapload && babylon_loading_saved_map())
+		allow_break_on_init = FALSE
+	return ..()
+
+/obj/machinery/light/babylon_after_restore(list/fields)
+	update(trigger = FALSE)
+
+// Cameras: upstream switches 3% of mapped station cameras off; a saved camera keeps its saved
+// on/off state.
+/obj/machinery/camera/Initialize(mapload)
+	var/was_start_active = start_active
+	if(mapload && babylon_loading_saved_map())
+		start_active = TRUE
+	. = ..()
+	start_active = was_start_active
+
+/obj/machinery/camera/babylon_after_restore(list/fields)
+	// It initialized switched on; the saved value was written over the variable only.
+	if(!camera_enabled)
+		camera_enabled = TRUE
+		toggle_cam(null, FALSE)
+
+// Fire and air alarms: a mapped alarm starts fully built; the saved buildstage (with panel_open, a
+// state field) takes over, and the generic update_appearance shows it.
+
+// Bots: upstream enables ghost possession on every mapped station bot (_bots.dm). A restored bot
+// takes the saved can_be_possessed instead: on only if a player had switched its personality on
+// (or it was a mapped bot that still had it on). Saves from before the field was kept leave it off.
+/mob/living/basic/bot/babylon_after_restore(list/fields)
+	var/wanted = ("can_be_possessed" in fields) ? !!GLOB.babylon_save.decode_value(fields["can_be_possessed"]) : FALSE
+	var/datum/component/ghost_direct_control/control = GetComponent(/datum/component/ghost_direct_control)
+	if(wanted && !control && (bot_mode_flags & BOT_MODE_CAN_BE_SAPIENT))
+		enable_possession(mapload = TRUE)
+	else if(!wanted)
+		can_be_possessed = FALSE
+		// No longer offered in the ghosts' joinable mob list either.
+		qdel(control)
 
 /datum/babylon_save/proc/restore_cycle_pump(obj/machinery/atmospherics/components/unary/airlock_pump/pump, list/record)
 	var/list/settings = record["cycle_settings"]
