@@ -15,7 +15,10 @@ ordinary stop). Further maps (used to vet the map catalog) are only booted to th
 checked for the right map and late-join points, and stopped, which saves them. Then every Creative
 Plane map (--creative-planes, default S, M and L) boots as a Creative world (S without Creative mode,
 M and L with it): its floor, landmarks, inert storyteller, refused shuttles and, a few seconds into
-its round, power and the atmos loop are checked; the owner's Start round must start its round. A
+its round, power and the atmos loop are checked; the owner's Start round must start its round, and
+its stop saves it. The --restore-plane map (M) also gets a tutorial NPC and a changed canister
+setting before that save, starts again from it and checks that the canisters are back on their
+ports with their settings and that the NPC was not saved but made again by its spawner. A
 tutorial-kind world on the first map checks that its round starts by itself and stops without a
 save. Finally the multi-z map (icebox) starts its round, places markers on the station level and on
 a level without the station trait, saves, stops, starts again from the save and checks that the
@@ -45,6 +48,8 @@ def main():
     parser.add_argument("--child-port", type=int, default=1468)
     parser.add_argument("--maps", nargs="+", default=["metastation"])
     parser.add_argument("--creative-planes", nargs="*", default=["creative_plane_s", "creative_plane_m", "creative_plane_l"])
+    parser.add_argument("--restore-plane", default="creative_plane_m",
+                        help="the Creative Plane map that is saved, restarted and checked (tutorial NPC, canisters)")
     parser.add_argument("--startup-timeout", type=int, default=900)
     parser.add_argument("--multiz-map", default="icebox")
     parser.add_argument("--no-multiz", action="store_true")
@@ -387,9 +392,31 @@ def main():
         entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
         wait_round_running(run)
         entry["test_creative_plane_round"] = eventually(run, "test_creative_plane_round")
+        setup = None
+        if map_id == args.restore_plane:
+            # A tutorial NPC, one of its outfit items dropped, an ordinary item and a changed
+            # creative canister setting go into the save; the restore must bring back the right ones.
+            setup = checks(run, "test_creative_plane_save_setup")
+            entry["test_creative_plane_save_setup"] = setup
         stop(world)
-        saves = data / "worlds" / world / "data/babylon/saves"
-        assert not (saves / "latest.json").exists(), "a station world saved"
+        # An ordinary stop of a persistent world saves it.
+        generation = latest(world)
+        assert generation, "the stopped Creative Plane world was not saved"
+        entry["stop_saved"] = save_size(world, generation)
+        if setup:
+            restarted = time.time()
+            run = wait_ready(world)
+            entry["restored_ready_seconds"] = round(time.time() - restarted)
+            # The NPC spawner makes its NPC once the world is up; canisters reconnect at once.
+            deadline = time.time() + 120
+            while True:
+                restored = values(run, "test_creative_plane_restored", [setup["spawner_id"], setup["outfit_type"]])
+                if (restored and all(restored.values())) or time.time() > deadline:
+                    break
+                time.sleep(3)
+            assert restored and all(restored.values()), ("test_creative_plane_restored", restored)
+            entry["test_creative_plane_restored"] = restored
+            stop(world)
         return entry
 
     def discard_child():

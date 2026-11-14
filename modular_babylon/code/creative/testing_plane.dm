@@ -143,6 +143,18 @@
 		void.disconnect()
 		result["reconnect_proc"] = void.babylon_reconnect_port() && void.connected_port == port && void.babylon_port_wanted
 
+	// The tutorial wand's area tools (tutorial/area_tools.dm) never change the ring: a Fill over
+	// a stretch of it changes nothing and counts every tile as locked.
+	var/list/ring_rect = list(low_x - 1, low_y + 10, low_x - 1, low_y + 14, station_z)
+	var/list/ring = babylon_area_tiles(low_x - 1, low_y + 10, low_x - 1, low_y + 14, station_z)
+	var/list/journal = list("turfs" = list(), "made" = list())
+	var/list/counts = babylon_area_put(ring, /turf/open/floor/plating, FALSE, ring_rect, journal)
+	var/ring_kept = length(ring) == 5
+	for(var/turf/tile as anything in ring)
+		if(!istype(tile, /turf/closed/indestructible/reinforced) || !babylon_area_locked(tile))
+			ring_kept = FALSE
+	result["area_tools_leave_ring"] = ring_kept && counts["locked"] == 5 && !counts["changed"] && !length(journal["turfs"])
+
 	// Landmarks: late-join points (the B2 setup uses the map's own), Assistant starts, observer.
 	var/latejoins_on_plane = length(SSjob.latejoin_trackers) >= 4
 	for(var/turf/point as anything in SSjob.latejoin_trackers)
@@ -262,4 +274,81 @@
 		vent_index++
 		var/datum/gas_mixture/air = vent.airs[1]
 		result["vent [vent_index] pipe"] = round(air.return_pressure())
+	return result
+
+/// The floor's south-west tile on a Creative Plane (gen_creative_plane.py centres the floor).
+/datum/babylon_save/proc/creative_plane_origin()
+	var/size = babylon_creative_plane_size(GLOB.babylon_world.map_id)
+	if(!size)
+		return null
+	var/start = round((255 - size) / 2) + 1
+	return locate(start, start, station_z)
+
+/// Before a Creative Plane save: a tutorial NPC spawner with its NPC, one of the NPC's outfit
+/// items dropped on another tile next to an ordinary wrench, and a changed creative canister
+/// setting. test_creative_plane_restored checks what came back.
+/datum/babylon_save/proc/test_creative_plane_save_setup()
+	var/list/result = list()
+	var/turf/origin = creative_plane_origin()
+	result["on_plane"] = !!origin
+	if(!origin)
+		return result
+	var/turf/spawn_tile = locate(origin.x + 20, origin.y + 20, origin.z)
+	var/turf/drop_tile = locate(origin.x + 24, origin.y + 20, origin.z)
+	var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_place_npc(spawn_tile, "guide")
+	var/mob/living/carbon/human/npc = spawner?.current_npc()
+	result["npc_spawned"] = !!npc && npc.babylon_tutorial_npc
+	result["spawn_at_start"] = !!spawner && !spawner.set_setting("spawn_at_start", 1) && spawner.setting("spawn_at_start")
+	var/obj/item/outfit_item = npc?.w_uniform || npc?.shoes
+	if(outfit_item)
+		npc.dropItemToGround(outfit_item, force = TRUE)
+		outfit_item.forceMove(drop_tile)
+	result["outfit_item_dropped"] = !!outfit_item && outfit_item.loc == drop_tile && outfit_item.babylon_tutorial_npc_item
+	result["skip_hook_npc"] = !!npc && npc.babylon_skip_save() && outfit_item?.babylon_skip_save() && !spawner.babylon_skip_save()
+	var/obj/item/wrench/wrench = new(drop_tile)
+	result["control_item"] = !wrench.babylon_skip_save()
+	var/obj/machinery/portable_atmospherics/canister/babylon_creative/nitrogen
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
+		if(babylon_on_plane(canister) && canister.creative_gas == /datum/gas/nitrogen)
+			nitrogen = canister
+	if(nitrogen)
+		nitrogen.creative_pressure = 3210
+	result["canister_setting_changed"] = nitrogen?.creative_pressure == 3210
+	result["spawner_id"] = spawner?.tutorial_id
+	result["outfit_type"] = "[outfit_item?.type]"
+	return result
+
+/// After the save above was restored: the creative canisters are back on their ports with their
+/// settings, the NPC spawner came back and made its NPC once (the NPC and the dropped outfit item
+/// were never saved), and the ordinary item next to it was.
+/datum/babylon_save/proc/test_creative_plane_restored(spawner_id, outfit_type)
+	var/list/result = list()
+	var/turf/origin = creative_plane_origin()
+	result["on_plane"] = !!origin
+	if(!origin)
+		return result
+	var/turf/drop_tile = locate(origin.x + 24, origin.y + 20, origin.z)
+	var/list/canisters = list()
+	var/connected = TRUE
+	var/pressure_kept = FALSE
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
+		if(!babylon_on_plane(canister))
+			continue
+		canisters += canister
+		if(!canister.connected_port || canister.connected_port.loc != canister.loc)
+			connected = FALSE
+		if(canister.creative_gas == /datum/gas/nitrogen && canister.creative_pressure == 3210)
+			pressure_kept = TRUE
+	result["three_canisters_reconnected"] = length(canisters) == 3 && connected
+	result["canister_setting_restored"] = pressure_kept
+	var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_find(spawner_id)
+	result["spawner_restored"] = istype(spawner) && spawner.setting("npc_name") == "Guide"
+	var/npcs = 0
+	for(var/mob/living/carbon/human/body in GLOB.mob_living_list)
+		if(body.babylon_tutorial_npc && !QDELETED(body))
+			npcs++
+	result["npc_respawned_once"] = npcs == 1 && istype(spawner) && !!spawner.current_npc()
+	var/outfit_path = text2path(outfit_type)
+	result["dropped_outfit_not_saved"] = !!outfit_path && !(locate(outfit_path) in drop_tile)
+	result["control_item_saved"] = !!(locate(/obj/item/wrench) in drop_tile)
 	return result
