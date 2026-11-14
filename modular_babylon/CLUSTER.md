@@ -584,6 +584,32 @@ to open its window and choose what a click does:
 - **NPC**: pick a preset (Guide, Bystander, bruised/burned/poisoned/bleeding/sick or
   unconscious patient, broken leg) and click a tile; the NPC appears at once.
 - **Delete**: click an object (or an NPC) to remove it.
+- **Select** (area tools, a small WorldEdit): click one corner, then the opposite
+  corner; the selection is outlined for you and its size shown ("12×8 (96 tiles)").
+  The window then offers:
+  - **Copy** the selection to your clipboard (tiles, objects with what is inside
+    closets and boxes, reagents, tutorial objects).
+  - **Paste…**, then click the tile that becomes the copy's **bottom-left (south-west)**
+    corner; the footprint is outlined (red where it can't go) and **Confirm paste**
+    builds it. Paste stays on, so a room can be pasted several times side by side.
+    Tutorial objects in the copy get an **id suffix** (Auto: the first free `_2`, `_3`
+    …; Custom; or Keep ids when they are free), and their links to each other (actions,
+    After, targets …) and their zones follow; links to objects outside the copy stay.
+    "Keep the target where the copy has space" (on by default) leaves those tiles alone.
+  - **Fill** or **Border** with a floor, wall or structure picked from a searchable
+    list (optionally only empty tiles).
+  - **Clear**: removes objects, mobs and tutorial objects, tiles become plating (or the
+    picked floor or wall). It asks first.
+  - **Undo** your last paste, fill, border or clear (one step).
+
+  Limits: at most 10 000 tiles at once, on one level, inside the map. Indestructible
+  turfs are never changed (a paste over them is refused). Players are never deleted:
+  they are moved to the nearest free tile outside the area. One operation per 2 seconds,
+  and every operation is logged. Rotating a paste is not supported. A paste keeps the
+  target's areas (rooms); copied turf decals (floor stripes) and machine settings beyond
+  their build state are not carried over.
+
+Right-clicking the wand in your hand switches to the next mode.
 
 Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
 other by id, like airlock ids. A marker with the id **start** is where players begin

@@ -5,6 +5,9 @@
 // - Configure: opens the settings window (tgui BabylonTutorialObject) of an object on the tile.
 // - NPC: places an NPC spawner from a preset; its NPC appears at once.
 // - Delete: removes a tutorial object from the tile.
+// - Select: two clicks select a rectangle for the area tools (area_tools.dm: copy, paste, fill,
+//   border, clear, undo).
+// Right-clicking the wand in hand switches to the next mode.
 // Its window also lists every tutorial object (Overview, with warnings) and starts or stops a
 // test run for the holder. While the wand is in a hand, its holder's client sees every tutorial
 // object as an image with its id; nobody else does, and tutorial players never do.
@@ -31,7 +34,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	icon_angle = -45
 	w_class = WEIGHT_CLASS_SMALL
 	item_flags = NOBLUDGEON
-	/// "place", "configure", "npc" or "delete".
+	/// "place", "configure", "npc", "delete" or "select".
 	var/mode = "place"
 	/// The tutorial object kind Place puts down.
 	var/selected_kind = "message"
@@ -48,6 +51,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	var/shown_version = -1
 	/// Last result line for the window: list(text, ok, id).
 	var/list/notice
+	/// The area session version the images show.
+	var/shown_area_version = -1
 
 /obj/item/babylon_tutorial_wand/Initialize(mapload)
 	. = ..()
@@ -63,7 +68,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	if(!babylon_creative_enabled())
 		. += span_warning("It only works in creative worlds.")
 		return
-	. += span_notice("Mode: <b>[babylon_tutorial_mode_name(mode)]</b>. Use it in your hand to choose a mode, then click tiles with it.")
+	. += span_notice("Mode: <b>[babylon_tutorial_mode_name(mode)]</b>. Use it in your hand to open its window, right-click it in your hand to switch modes, then click tiles with it.")
 
 /proc/babylon_tutorial_mode_name(mode)
 	switch(mode)
@@ -75,7 +80,13 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			return "NPC"
 		if("delete")
 			return "Delete"
+		if("select")
+			return "Select"
 	return mode
+
+/// The wand's modes, in the order right-clicking cycles through them.
+/proc/babylon_tutorial_wand_modes()
+	return list("place", "configure", "npc", "delete", "select")
 
 /// The wand works for this mob: creative world, its own living body, holding the wand.
 /obj/item/babylon_tutorial_wand/proc/usable_by(mob/living/user)
@@ -95,6 +106,47 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		return TRUE
 	ui_interact(user)
 	return TRUE
+
+/// Right-click in hand: the next mode.
+/obj/item/babylon_tutorial_wand/attack_self_secondary(mob/user, modifiers)
+	. = ..()
+	if(.)
+		return
+	if(!usable_by(user))
+		to_chat(user, span_warning("The tutorial wand only works in creative worlds."))
+		return TRUE
+	var/list/modes = babylon_tutorial_wand_modes()
+	set_mode(user, modes[(modes.Find(mode) % length(modes)) + 1])
+	return TRUE
+
+/obj/item/babylon_tutorial_wand/proc/set_mode(mob/living/user, new_mode)
+	if(!(new_mode in babylon_tutorial_wand_modes()))
+		return
+	mode = new_mode
+	picking = null
+	if(mode != "select")
+		var/datum/babylon_area_session/session = area_session(user)
+		if(session.paste_armed)
+			session.cancel_paste()
+	user.balloon_alert(user, "[lowertext(babylon_tutorial_mode_name(mode))] mode")
+	if(mode == "select")
+		to_chat(user, span_notice("Select mode: [area_hint(user)]"))
+	sync_view(TRUE)
+	SStgui.update_uis(src)
+
+/// The area tool session of the wand's user.
+/obj/item/babylon_tutorial_wand/proc/area_session(mob/user)
+	RETURN_TYPE(/datum/babylon_area_session)
+	return babylon_area_session(user?.ckey || REF(user))
+
+/// What the next click in Select mode does.
+/obj/item/babylon_tutorial_wand/proc/area_hint(mob/user)
+	var/datum/babylon_area_session/session = area_session(user)
+	if(session.paste_armed)
+		return "click the tile that becomes the copy's bottom-left (south-west) corner."
+	if(session.corner)
+		return "click the opposite corner."
+	return session.selection ? "your selection is [session.selection_text()]; a click starts a new one." : "click the first corner of an area."
 
 /obj/item/babylon_tutorial_wand/equipped(mob/user, slot, initial)
 	. = ..()
@@ -123,6 +175,12 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		pick_corner(user, tile)
 		return ITEM_INTERACT_SUCCESS
 	switch(mode)
+		if("select")
+			var/datum/babylon_area_session/session = area_session(user)
+			var/list/result = session.click(tile)
+			report(user, result["text"], result["ok"])
+			user.balloon_alert(user, session.paste_armed ? "paste here?" : (session.corner ? "corner 1" : "selected"))
+			sync_view(TRUE)
 		if("place")
 			var/path = babylon_tutorial_kinds()[selected_kind]
 			if(!path)
@@ -269,7 +327,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		viewer = holder
 		viewer_client = holder.client
 		RegisterSignal(viewer, COMSIG_QDELETING, PROC_REF(viewer_deleted))
-	if(force || shown_version != GLOB.babylon_tutorial_version || !length(images) && length(GLOB.babylon_tutorial_objects))
+	var/datum/babylon_area_session/session = area_session(holder)
+	if(force || shown_version != GLOB.babylon_tutorial_version || shown_area_version != session.version || !length(images) && length(GLOB.babylon_tutorial_objects))
 		build_images()
 
 /obj/item/babylon_tutorial_wand/proc/viewer_deleted(datum/source)
@@ -285,6 +344,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	viewer = null
 	viewer_client = null
 	shown_version = -1
+	shown_area_version = -1
 
 /obj/item/babylon_tutorial_wand/proc/build_images()
 	if(viewer_client)
@@ -334,7 +394,64 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			shade.alpha = 60
 			shade.mouse_opacity = MOUSE_OPACITY_TRANSPARENT
 			images += shade
+	if(viewer)
+		var/datum/babylon_area_session/session = area_session(viewer)
+		shown_area_version = session.version
+		if(mode == "select")
+			images += area_images(session)
 	viewer_client?.images += images
+
+/// One shaded tile of a selection outline.
+/proc/babylon_area_shade(turf/tile, color, alpha)
+	var/image/shade = image('icons/effects/alphacolors.dmi', tile, "white", ABOVE_ALL_MOB_LAYER)
+	SET_PLANE_EXPLICIT(shade, ABOVE_LIGHTING_PLANE, tile)
+	shade.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
+	shade.color = color
+	shade.alpha = alpha
+	shade.mouse_opacity = MOUSE_OPACITY_TRANSPARENT
+	return shade
+
+/// A label over a tile ("12×8").
+/proc/babylon_area_label(turf/tile, text, color)
+	var/image/label = image(loc = tile, layer = ABOVE_ALL_MOB_LAYER)
+	SET_PLANE_EXPLICIT(label, ABOVE_LIGHTING_PLANE, tile)
+	label.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
+	label.mouse_opacity = MOUSE_OPACITY_TRANSPARENT
+	label.maptext_width = 160
+	label.maptext_height = 16
+	label.maptext_y = 34
+	label.maptext = "<span style='font-family: \"Grand9K Pixel\"; font-size: 6pt; color: [color]; -dm-text-outline: 1px black'>[html_encode(text)]</span>"
+	return label
+
+/// Outlines of the area tools for the holder: the first corner, the selection (cyan) and the
+/// paste footprint (orange, red where it can't go).
+/obj/item/babylon_tutorial_wand/proc/area_images(datum/babylon_area_session/session)
+	var/list/made = list()
+	if(session.corner)
+		var/turf/corner_tile = locate(session.corner[1], session.corner[2], session.corner[3])
+		if(corner_tile)
+			made += babylon_area_shade(corner_tile, "#4dd0ff", 150)
+			made += babylon_area_label(corner_tile, "corner 1", "#4dd0ff")
+	var/list/rects = list()
+	if(session.selection)
+		rects += list(list(session.selection, "#4dd0ff", "[session.selection_width()]×[session.selection_height()]"))
+	var/list/paste = session.paste_rect()
+	if(paste)
+		var/fits = !session.paste_problem()
+		rects += list(list(paste, fits ? "#ffa64d" : "#ff5c5c", fits ? "paste here?" : "can't paste here"))
+	for(var/list/entry as anything in rects)
+		var/list/rect = entry[1]
+		var/x2 = min(rect[3], world.maxx)
+		var/y2 = min(rect[4], world.maxy)
+		var/tiles = (x2 - rect[1] + 1) * (y2 - rect[2] + 1)
+		// The edge, plus a light fill inside small areas.
+		for(var/turf/tile as anything in (tiles <= 400 ? babylon_area_tiles(rect[1], rect[2], x2, y2, rect[5]) : babylon_area_edge(rect[1], rect[2], x2, y2, rect[5])))
+			var/edge = tile.x == rect[1] || tile.x == x2 || tile.y == rect[2] || tile.y == y2
+			made += babylon_area_shade(tile, entry[2], edge ? 90 : 30)
+		var/turf/top_left = locate(rect[1], y2, rect[5])
+		if(top_left)
+			made += babylon_area_label(top_left, entry[3], entry[2])
+	return made
 
 // ---------------------------------------------------------------------------------------------
 // Wand window
@@ -367,7 +484,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	for(var/id in all_presets)
 		var/list/preset = all_presets[id]
 		presets += list(list("id" = id, "name" = preset["name"], "desc" = preset["desc"], "icon" = preset["icon"]))
-	return list("palette" = groups, "presets" = presets, "colors" = babylon_tutorial_category_colors())
+	return list("palette" = groups, "presets" = presets, "colors" = babylon_tutorial_category_colors(), "materials" = babylon_area_materials())
 
 /obj/item/babylon_tutorial_wand/ui_data(mob/user)
 	var/list/objects = list()
@@ -411,6 +528,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		"has_start" = !!babylon_tutorial_marker_turf("start"),
 		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective) : list("running" = FALSE),
 		"notice" = notice,
+		"area" = area_session(user).window_data(),
 	)
 
 /obj/item/babylon_tutorial_wand/ui_act(action, list/params, datum/tgui/ui, datum/ui_state/state)
@@ -422,10 +540,32 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		return FALSE
 	switch(action)
 		if("mode")
-			if(params["mode"] in list("place", "configure", "npc", "delete"))
-				mode = params["mode"]
-				picking = null
-				user.balloon_alert(user, "[lowertext(babylon_tutorial_mode_name(mode))] mode")
+			set_mode(user, params["mode"])
+			return TRUE
+		if("area_option")
+			var/error = area_session(user).set_option("[params["option"]]", params["value"])
+			if(error)
+				report(user, error, FALSE)
+			sync_view(TRUE)
+			return TRUE
+		if("area_reselect")
+			area_session(user).reselect()
+			report(user, "Click the first corner of the area with the wand.", TRUE)
+			sync_view(TRUE)
+			return TRUE
+		if("area_paste")
+			var/list/result = area_session(user).arm_paste()
+			report(user, result["text"], result["ok"])
+			sync_view(TRUE)
+			return TRUE
+		if("area_paste_cancel")
+			var/list/result = area_session(user).cancel_paste()
+			report(user, result["text"], result["ok"])
+			sync_view(TRUE)
+			return TRUE
+		if("area_copy", "area_paste_confirm", "area_fill", "area_border", "area_clear", "area_undo")
+			// Map loading can pause: the operation runs on its own.
+			INVOKE_ASYNC(src, PROC_REF(area_operation), user, action)
 			return TRUE
 		if("kind")
 			if(babylon_tutorial_kinds()[params["kind"]])
@@ -475,6 +615,35 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 				report(user, "Test run stopped. The world stays as it is.", TRUE)
 			return TRUE
 	return FALSE
+
+/// Runs an area tool operation from the window and reports its outcome.
+/obj/item/babylon_tutorial_wand/proc/area_operation(mob/living/user, action)
+	var/datum/babylon_area_session/session = area_session(user)
+	var/list/result
+	switch(action)
+		if("area_copy")
+			result = session.copy(user)
+		if("area_paste_confirm")
+			result = session.paste(user)
+		if("area_fill")
+			result = session.fill(user, session.material, FALSE)
+		if("area_border")
+			result = session.fill(user, session.material, TRUE)
+		if("area_clear")
+			result = session.clear(user)
+		if("area_undo")
+			result = session.undo(user)
+	if(QDELETED(src))
+		return
+	report(user, result["text"], result["ok"])
+	sync_view(TRUE)
+	// The cooldown ends: the buttons come back.
+	addtimer(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_area_refresh_wand), WEAKREF(src)), BABYLON_AREA_COOLDOWN + 1)
+
+/proc/babylon_area_refresh_wand(datum/weakref/wand_ref)
+	var/obj/item/babylon_tutorial_wand/wand = wand_ref?.resolve()
+	if(wand)
+		SStgui.update_uis(wand)
 
 // ---------------------------------------------------------------------------------------------
 // Settings window of one object

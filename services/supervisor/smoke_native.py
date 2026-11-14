@@ -152,7 +152,8 @@ def main():
         storyteller = call(run, "session", "test_no_storyteller")
         storyteller = {entry["entry"]: entry["value"] for entry in storyteller["entries"]}
         assert storyteller and all(storyteller.values()), storyteller
-        for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains"):
+        for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
+                     "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip"):
             values = call(run, "session", proc)
             values = {entry["entry"]: entry["value"] for entry in values["entries"]}
             assert values and all(values.values()), (proc, values)
