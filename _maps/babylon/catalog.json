@@ -19,7 +19,7 @@
       "size": "S",
       "build": "station",
       "map_json": "babylon/creative_plane_s.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/creative_plane_s.png",
       "multiz": false
     },
     {
@@ -30,7 +30,7 @@
       "size": "M",
       "build": "station",
       "map_json": "babylon/creative_plane_m.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/creative_plane_m.png",
       "multiz": false
     },
     {
@@ -41,7 +41,7 @@
       "size": "L",
       "build": "station",
       "map_json": "babylon/creative_plane_l.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/creative_plane_l.png",
       "multiz": false
     },
     {

@@ -8,8 +8,9 @@ to that path. Output is deterministic, so unchanged maps give byte-identical fil
     python3 tools/babylon/render_map_previews.py            # every station map in the catalog
     python3 tools/babylon/render_map_previews.py icebox     # selected maps
 
-Babylon has no .dmm in the catalog and the Creative Plane maps are generated elsewhere (their
-generator runs this script once they exist); entries without a map file are skipped.
+Babylon has no .dmm in the catalog; entries without a map file are skipped. The Creative Plane
+maps come from gen_creative_plane.py, which runs this script for them; their previews show the
+whole level, so the S, M and L floors differ in size.
 """
 import json
 from pathlib import Path
@@ -171,8 +172,9 @@ def bounds(positions):
     return xs[cut] - 2, xs[-1 - cut] + 2, ys[cut] - 2, ys[-1 - cut] + 2
 
 
-def render(keys, level):
-    """RGBA rows (bytes) of the level cropped to its station, fitted into WIDTH x HEIGHT."""
+def render(keys, level, whole_level=False):
+    """RGBA rows (bytes) of the level cropped to its station (or, with whole_level, the entire
+    level, so a small station stays small), fitted into WIDTH x HEIGHT."""
     colours = {}
     station = []
     for position, key in level.items():
@@ -184,7 +186,11 @@ def render(keys, level):
                 station.append(position)
     if not colours:
         raise MapError("the level has no visible tiles")
-    left, right, bottom, top = bounds(station or list(colours))
+    if whole_level:
+        left, right = min(x for x, _ in level), max(x for x, _ in level)
+        bottom, top = min(y for _, y in level), max(y for _, y in level)
+    else:
+        left, right, bottom, top = bounds(station or list(colours))
     span_x, span_y = right - left + 1, top - bottom + 1
     scale = min(WIDTH / span_x, HEIGHT / span_y)
     offset_x = (WIDTH - span_x * scale) / 2
@@ -250,7 +256,9 @@ def main(selected):
         keys, levels = parse_dmm(source.read_text(encoding="utf-8", errors="replace"))
         z = busiest_level(keys, levels)
         target = "%s/%s.png" % (PREVIEWS, entry["id"])
-        (ROOT / target).write_bytes(png(render(keys, levels[z])))
+        # Creative Plane sizes only differ by their floor's share of the 255x255 level.
+        whole_level = entry.get("group") == "creative_plane"
+        (ROOT / target).write_bytes(png(render(keys, levels[z], whole_level)))
         entry["preview"] = target
         print("%s: %s (z%d)" % (entry["id"], target, z))
     CATALOG.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")

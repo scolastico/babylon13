@@ -540,7 +540,8 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 ## Creative machines
 
 Creative worlds can spawn four creative machines from the Creative panel (purple tint,
-"creative" in the name). Maps, research and cargo never provide them. They work in Creative
+"creative" in the name). Only the Creative Plane maps come with some; research and cargo
+never provide them. They work in Creative
 worlds and in tutorials (a tutorial keeps its creative power and air, though its players have
 no Creative panel). In any other world they are ordinary machines that do nothing special and
 say "Creative mode is off in this world" when examined. In a Creative world,
@@ -568,6 +569,40 @@ say "Creative mode is off in this world" when examined. In a Creative world,
   floor, never deleted.
 
 The settings are saved with the world.
+
+## Creative Plane
+
+The **Creative Plane** maps (S, M, L) are an empty floor to try things out on, best with
+Creative mode on. They are station-build worlds: the owner starts the round, and players
+arrive as their preferences character.
+
+- **Floor.** A square iron floor (S 50x50, M 100x100, L 200x200 tiles) in the middle of a
+  255x255 space level, closed by a ring of reinforced walls so the air stays in. Every
+  floor tile starts with normal air, and the whole plane has gravity and full light
+  (it is one fullbright area, so no lights are needed). Space lies outside the walls.
+- **Power.** A creative SMES (source, 1 MW output) at the south edge feeds the main cable,
+  which runs along the whole south edge and up the middle column on catwalk floor (the
+  cable is visible and reachable there). One APC on the south wall powers the whole plane;
+  anything placed anywhere on it is powered. The SMES has a terminal on its north side
+  with no cable: wire it to give a sink SMES an input grid.
+- **Atmos room** (south-west corner, glass door). The simplest vent and scrubber cycle:
+  a creative oxygen source and a creative nitrogen source canister on connector ports feed
+  an air mixer (79% nitrogen, 21% oxygen), whose supply line runs two vents; two
+  scrubbers drain into a creative void canister. Ordinary pipes; the air alarm controls
+  the vents and scrubbers.
+- **Spawn pad** (dark 5x5 square at the south edge, on the middle cable). Late-joiners
+  arrive here, Assistants start here, and visitors and spectators appear in its middle.
+  Players whose job has no start point on the plane arrive on the pad as well.
+- **Round.** No random events or antagonists (the inert Babylon storyteller), and no
+  emergency shuttle dock: the round never ends by shuttle; calling it is refused. Cargo and
+  other station shuttles have no dock on the plane either.
+- **Without Creative mode** the creative machines are ordinary: the SMES starts fully charged
+  and runs down, and the canisters stay empty. The floor's air, gravity and light do not
+  depend on them.
+
+The maps are generated: change `tools/babylon/gen_creative_plane.py` and run it (it also
+renders the lobby previews); never edit the `.dmm` files by hand. Its test fails when the
+committed maps differ from the script's output.
 
 ## Tutorials
 

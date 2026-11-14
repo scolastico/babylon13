@@ -1,6 +1,7 @@
 // Creative machines (spec 5.1): infinite sources and voids for power, gas, plumbing fluids and
-// disposals. Shared by both game builds. They are spawned only through the Creative panel
-// (babylon_creative_machine_types()), never by maps, research or cargo.
+// disposals. Shared by both game builds. They are spawned through the Creative panel
+// (babylon_creative_machine_types()) and placed by the generated Creative Plane maps
+// (creative/plane.dm), never by research or cargo.
 //
 // Behaviour: the infinite effects run while babylon_creative_machines_active(): in Creative
 // worlds and in tutorial instances (an authored scenario keeps its creative power and air even

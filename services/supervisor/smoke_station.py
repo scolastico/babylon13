@@ -11,7 +11,10 @@ The first map gets the full checks, including round control: the round waits for
 starts on the owner's Start round and, once it ends, the world returns everyone to the lobby and
 exits without a save (the supervisor records an ordinary stop). Further maps (used to vet the map
 catalog) are only booted to the ready state, checked for the right map and late-join points, and
-stopped. Finally a tutorial-kind world on the first map checks that its round starts by itself.
+stopped. Then every Creative Plane map (--creative-planes, default S, M and L) boots as a Creative
+world: its floor, landmarks, inert storyteller, refused emergency shuttle and, after a few
+seconds, air, gravity, power and the atmos loop are checked; the owner's Start round must start
+its round. Finally a tutorial-kind world on the first map checks that its round starts by itself.
 """
 import argparse
 import json
@@ -35,6 +38,7 @@ def main():
     parser.add_argument("--api-port", type=int, default=1378)
     parser.add_argument("--child-port", type=int, default=1468)
     parser.add_argument("--maps", nargs="+", default=["metastation"])
+    parser.add_argument("--creative-planes", nargs="*", default=["creative_plane_s", "creative_plane_m", "creative_plane_l"])
     parser.add_argument("--startup-timeout", type=int, default=900)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
@@ -180,6 +184,7 @@ def main():
             assert topic(run["port"], run["secret"], "announce", {"message": "Smoke notice"}).get("ok"), "announce failed"
             entry["storyteller"] = checks(run, "test_station_storyteller")
             entry["test_station_save_level"] = checks(run, "test_station_save_level")
+            entry["test_station_emergency_dock"] = checks(run, "test_station_emergency_dock")
             # The shared modules' tests (testing_common.dm), as the Babylon smoke runs them.
             for proc in ("test_sfw_content", "test_showcase_visitor", "test_moderation", "test_play_time",
                          "test_music_loops", "test_creative_machines"):
@@ -208,6 +213,43 @@ def main():
         entry["stopped_without_save"] = True
         return entry
 
+    def eventually(run, proc, timeout=120):
+        """Checks that need the simulation to run a while (air, power): retried until all pass;
+        on a timeout the assertion carries <proc>_info's numbers."""
+        deadline = time.time() + timeout
+        while True:
+            result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
+            values = {entry["entry"]: entry["value"] for entry in result["entries"]}
+            if values and all(values.values()):
+                return values
+            if time.time() > deadline:
+                info = debug(run, "call", dict(target="session", proc=proc + "_info", args=[]))["result"]
+                raise AssertionError((proc, values, {e["entry"]: e["value"] for e in info["entries"]}))
+            time.sleep(3)
+
+    def run_creative_plane(map_id):
+        """A Creative world on a Creative Plane map: the map works and its round starts."""
+        started = time.time()
+        world = api("create", dict(name="Station smoke %s" % map_id, visibility="private", map=map_id, creative=1))["id"]
+        run = wait_ready(world)
+        status = topic(run["port"], run["secret"], "status")
+        assert status["ready"] and status.get("build") == "station" and status.get("map") == map_id, status
+        entry = dict(ready_seconds=round(time.time() - started))
+        info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        entry["info"] = {e["entry"]: e["value"] for e in info["entries"]}
+        expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
+        assert entry["info"]["map_name"] == expected, (entry["info"], expected)
+        entry["world_flags"] = checks(run, "test_station_world_flags")
+        entry["test_station_latejoin"] = checks(run, "test_station_latejoin")
+        entry["test_creative_plane"] = checks(run, "test_creative_plane")
+        entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
+        wait_round_running(run)
+        entry["test_creative_plane_round"] = eventually(run, "test_creative_plane_round")
+        stop(world)
+        saves = data / "worlds" / world / "data/babylon/saves"
+        assert not (saves / "latest.json").exists(), "a station world saved"
+        return entry
+
     def discard_child():
         """Kills a failed child so the next map can start (max_running_worlds is 1)."""
         run = current()
@@ -230,6 +272,14 @@ def main():
                 # The first map is the test; further maps only vet the catalog and are reported.
                 if index == 0:
                     raise
+                entry = dict(failed=repr(error))
+                discard_child()
+            report["maps"][map_id] = entry
+            print(json.dumps({map_id: entry}), flush=True)
+        for map_id in args.creative_planes:
+            try:
+                entry = run_creative_plane(map_id)
+            except Exception as error:
                 entry = dict(failed=repr(error))
                 discard_child()
             report["maps"][map_id] = entry
