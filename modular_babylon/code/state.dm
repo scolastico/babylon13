@@ -47,6 +47,8 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 		/obj/machinery/firealarm = list("buildstage"),
 		/obj/machinery/airalarm = list("buildstage"),
 		/mob/living/basic/bot = list("can_be_possessed"),
+		// Whose card it is and what it opens (its trim is saved as "babylon_trim", persistence.dm).
+		/obj/item/card/id = list("access", "registered_name", "assignment", "registered_age"),
 	)
 	/// TRUE while this world loads a saved map (Babylon's active.dmm, the station's saved levels:
 	/// a staged resume-state.json) until restore_world() has finished, and while the area tools
@@ -67,7 +69,7 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	var/list/map_link_fields = list("id", "c_tag", "network", "cycle_id", "department", "location", "codes_txt", "normaldoorcontrol", "specialfunctions", "frequency", "listening", "freerange", "broadcasting", "fax_name", "idSelf", "idDoor", "idExterior", "idInterior", "space_dir", "linked_elevator_id", "transport_linked_id", "specific_transport_id", "transport_id", "platform_code", "elevator_mode", "chamber_id", "control_area", "input_dir", "output_dir", "mapping_id", "preset_destination_names", "gpstag", "home_destination", "sync_doors", "doorOpen", "doorClose", "interior_airlock", "atmos_chambers", "drop_direction", "inbound", "outbound", "shuttledocked", "onstation", "heat_proof", "start_active", "uses")
 	/// Map fields whose list values are written into the saved map.
 	var/list/list_map_fields = list("req_access", "req_one_access", "network", "preset_destination_names", "atmos_chambers")
-	var/list/list_fields = list("req_access", "req_one_access", "accesses", "filter_types", "filter_type", "scrubbing", "ore_chance", "gas_percentage")
+	var/list/list_fields = list("req_access", "req_one_access", "accesses", "filter_types", "filter_type", "scrubbing", "ore_chance", "gas_percentage", "access")
 
 /// One player's record in this world (GLOB.babylon_save.player_sessions[ckey]). Babylon adds the
 /// player's drone (session.dm), play_time.dm their play time.
