@@ -597,27 +597,49 @@
 /proc/babylon_test_number(value)
 	return isnum(value) ? value : text2num(value)
 
-/// A tile for a test character: a late-join point, else the observer start.
-/datum/babylon_save/proc/test_character_tile()
-	if(length(SSjob.latejoin_trackers))
-		return get_turf(pick(SSjob.latejoin_trackers))
-	return respawn_turf
+/// An ID card's access as one sorted text, to compare across a restart.
+/proc/babylon_test_access_text(obj/item/card/id/card)
+	if(!istype(card) || !length(card.access))
+		return ""
+	var/list/access = sortTim(card.access.Copy(), GLOBAL_PROC_REF(cmp_text_asc))
+	return jointext(access, ",")
 
-/// A running round: a damaged lizard "Smoke Character" (Cargo Technician) with a jumpsuit, a
-/// backpack holding a wrench and a crowbar and a screwdriver in hand, kept for the ckey
-/// smokecharacter without a client, and a dead "Smoke Ghost" whose player watches as a ghost
-/// (smokeghost). Checks their capture: apart from the levels, never in a tutorial snapshot.
-/// Returns facts the restored world compares (the smoke reads them with values()).
+/// A test human with a mind for player_key (as a player's body has: its mind keeps their key).
+/datum/babylon_save/proc/test_character_body(turf/tile, real_name, player_key)
+	RETURN_TYPE(/mob/living/carbon/human)
+	var/mob/living/carbon/human/body = new(tile)
+	body.real_name = real_name
+	body.name = real_name
+	body.dna.real_name = real_name
+	body.mind_initialize()
+	body.mind.key = player_key
+	return body
+
+/// The number of humans called real_name in the world.
+/proc/babylon_test_humans_named(real_name)
+	. = 0
+	for(var/mob/living/carbon/human/human as anything in GLOB.human_list)
+		if(human.real_name == real_name && !QDELETED(human))
+			.++
+
+/// A running round, client-less characters kept for test ckeys:
+/// - "Smoke Character" (smokecharacter): a damaged lizard Cargo Technician with a jumpsuit, a
+///   backpack (wrench, crowbar), a screwdriver in hand and an ID card with the job's trim, one
+///   extra access and a bank account;
+/// - "Smoke Ghost" (smokeghost): dead, watched as a ghost;
+/// - "Smoke Swapped": smokeswapb's body that smokeswapa's record still points to (a mind swap);
+/// - "Smoke Corpse": left behind (with a backpack holding a toolbox) by smokeabandon, who now
+///   plays "Smoke Newbody";
+/// - "Smoke Passenger" (smokepassenger): standing on a shuttle docked on a saved level;
+/// and a captain's gold card "Smoke Floor Card" on the floor (saved with the level).
+/// Checks their capture: once each, for their owners, apart from the levels, never in a tutorial
+/// snapshot. Returns facts the restored world compares (the smoke reads them with values()).
 /datum/babylon_save/proc/test_character_roundtrip()
 	var/list/result = list()
 	result["round_running"] = SSticker.HasRoundStarted()
-	var/turf/tile = test_character_tile()
-	var/mob/living/carbon/human/body = new(tile)
+	var/turf/tile = character_arrival_turf()
+	var/mob/living/carbon/human/body = test_character_body(tile, "Smoke Character", "smokecharacter")
 	body.set_species(/datum/species/lizard)
-	body.real_name = "Smoke Character"
-	body.name = body.real_name
-	body.dna.real_name = body.real_name
-	body.mind_initialize()
 	body.mind.set_assigned_role(SSjob.get_job(JOB_CARGO_TECHNICIAN))
 	result["uniform_worn"] = body.equip_to_slot_if_possible(new /obj/item/clothing/under/color/grey(tile), ITEM_SLOT_ICLOTHING, disable_warning = TRUE)
 	var/obj/item/storage/backpack/pack = new(tile)
@@ -625,6 +647,17 @@
 	new /obj/item/wrench(pack)
 	new /obj/item/crowbar(pack)
 	result["screwdriver_held"] = body.put_in_hand(new /obj/item/screwdriver(tile), 1, forced = TRUE)
+	var/obj/item/card/id/advanced/card = new(tile)
+	SSid_access.apply_trim_to_card(card, /datum/id_trim/job/cargo_technician)
+	card.access |= ACCESS_ENGINEERING
+	card.registered_name = "Smoke Character"
+	card.update_label()
+	var/datum/bank_account/account = new("Smoke Character", SSjob.get_job(JOB_CARGO_TECHNICIAN))
+	account.account_balance = 1234
+	body.account_id = account.account_id
+	card.set_account(account)
+	result["card_worn"] = body.equip_to_slot_if_possible(card, ITEM_SLOT_ID, disable_warning = TRUE)
+	result["card_access"] = babylon_test_access_text(card)
 	body.apply_damage(20, BRUTE, BODY_ZONE_CHEST)
 	body.apply_damage(15, BURN, BODY_ZONE_L_ARM)
 	body.set_tox_loss(5)
@@ -634,38 +667,92 @@
 	result["arm_burn"] = arm.burn_dam
 	result["damaged"] = chest.brute_dam > 0 && arm.burn_dam > 0 && body.stat != DEAD
 	ensure_station_player("smokecharacter").set_character(body)
-	var/mob/living/carbon/human/ghost_body = new(tile)
-	ghost_body.real_name = "Smoke Ghost"
-	ghost_body.name = ghost_body.real_name
-	ghost_body.dna.real_name = ghost_body.real_name
-	ghost_body.mind_initialize()
+	var/mob/living/carbon/human/ghost_body = test_character_body(tile, "Smoke Ghost", "smokeghost")
 	ghost_body.death()
 	ensure_station_player("smokeghost").set_character(ghost_body, TRUE)
+	// Review M-2: a stale record pointing at someone else's body saves nothing for it.
+	var/mob/living/carbon/human/swapped = test_character_body(tile, "Smoke Swapped", "smokeswapb")
+	ensure_station_player("smokeswapb").set_character(swapped)
+	var/datum/babylon_player/stale = ensure_station_player("smokeswapa")
+	stale.set_character(swapped)
+	result["one_player_per_body"] = !ensure_station_player("smokeswapb").character()
+	ensure_station_player("smokeswapb").set_character(swapped)
+	stale.character_ref = WEAKREF(swapped) // as a mind swap leaves it: not through set_character()
+	// Review S3: a corpse whose player now plays another human.
+	var/mob/living/carbon/human/corpse = test_character_body(tile, "Smoke Corpse", "smokeabandon")
+	var/obj/item/storage/backpack/corpse_pack = new(tile)
+	new /obj/item/storage/toolbox/mechanical(corpse_pack)
+	result["corpse_backpack_worn"] = corpse.equip_to_slot_if_possible(corpse_pack, ITEM_SLOT_BACK, disable_warning = TRUE)
+	corpse.death()
+	var/mob/living/carbon/human/newbody = test_character_body(tile, "Smoke Newbody", "smokeabandon")
+	ensure_station_player("smokeabandon").set_character(newbody)
+	// Review S4: a body on a shuttle docked on a saved level, which loads again at its roundstart dock.
+	var/turf/aboard
+	var/list/levels = persisted_levels()
+	for(var/obj/docking_port/mobile/shuttle as anything in SSshuttle.mobile_docking_ports)
+		if(aboard || QDELETED(shuttle) || istype(shuttle, /obj/docking_port/mobile/custom) || !(shuttle.z in levels))
+			continue
+		for(var/turf/open/floor/candidate in shuttle.return_turfs())
+			if(!candidate.is_blocked_turf(TRUE))
+				aboard = candidate
+				break
+	result["shuttle_floor_on_a_saved_level"] = !!aboard
+	var/mob/living/carbon/human/passenger = test_character_body(aboard || tile, "Smoke Passenger", "smokepassenger")
+	ensure_station_player("smokepassenger").set_character(passenger)
+	// Engine-wide (review M-1): a captain's card on the floor keeps its trim and access.
+	var/turf/floor_tile = get_step(tile, NORTH) || tile
+	var/obj/item/card/id/advanced/gold/floor_card = new(floor_tile)
+	SSid_access.apply_trim_to_card(floor_card, /datum/id_trim/job/captain)
+	floor_card.registered_name = "Smoke Floor Card"
+	floor_card.update_label()
+	result["floor_card_access"] = babylon_test_access_text(floor_card)
+	result["floor_x"] = floor_tile.x
+	result["floor_y"] = floor_tile.y
+	// Review S2: odd DNA (no markings list) is captured, not a runtime that fails the save.
+	var/mob/living/carbon/human/odd = test_character_body(tile, "Smoke Odd", null)
+	odd.dna.body_markings = null
+	try
+		result["odd_dna_captured"] = islist(capture_character(odd, null))
+	catch
+		result["odd_dna_captured"] = FALSE
+	qdel(odd)
 	var/list/characters = capture_characters()
 	var/list/entry = characters["smokecharacter"]
 	result["captured"] = islist(entry) && islist(characters["smokeghost"])
 	var/list/types = list()
 	for(var/list/record in entry?["records"])
 		types += record["type"]
-	result["captured_items"] = ("/obj/item/wrench" in types) && ("/obj/item/crowbar" in types) && ("/obj/item/screwdriver" in types) && ("/obj/item/storage/backpack" in types) && ("/obj/item/clothing/under/color/grey" in types)
+	result["captured_items"] = ("/obj/item/wrench" in types) && ("/obj/item/crowbar" in types) && ("/obj/item/screwdriver" in types) && ("/obj/item/storage/backpack" in types) && ("/obj/item/clothing/under/color/grey" in types) && ("/obj/item/card/id/advanced" in types)
 	result["captured_job"] = entry?["job"] == JOB_CARGO_TECHNICIAN
+	result["captured_balance"] = entry?["balance"] == 1234
 	result["ghost_captured_as_ghost"] = characters["smokeghost"]?["ghost"] && characters["smokeghost"]?["stat"] == DEAD
+	result["swapped_body_once_for_its_owner"] = islist(characters["smokeswapb"]) && !characters["smokeswapa"] && !stale.character()
+	var/swapped_entries = 0
+	var/corpse_kept = FALSE
+	for(var/key in characters)
+		if(characters[key]["id"] == swapped.babylon_save_id)
+			swapped_entries++
+		if(characters[key]["real_name"] == "Smoke Corpse" && copytext(key, 1, 2) == "#" && !characters[key]["ghost"])
+			corpse_kept = TRUE
+	result["swapped_entries"] = swapped_entries == 1
+	result["corpse_kept_without_player"] = corpse_kept && characters["smokeabandon"]?["real_name"] == "Smoke Newbody"
+	result["passenger_on_shuttle"] = !!characters["smokepassenger"]?["on_shuttle"]
 	// Characters are never one of the levels' mobs.
 	var/in_level_mobs = FALSE
 	var/list/mobs_by_turf = checkpoint_mobs()
 	for(var/turf/where in mobs_by_turf)
 		var/list/creatures = mobs_by_turf[where]
-		if((body in creatures) || (ghost_body in creatures))
+		if((body in creatures) || (ghost_body in creatures) || (corpse in creatures))
 			in_level_mobs = TRUE
 	result["not_a_level_mob"] = !in_level_mobs
 	// Arch M1: a tutorial snapshot holds no characters and no per-player records.
-	result["tutorial_snapshot_policy"] = !babylon_world_saves_characters(TRUE) && babylon_world_saves_characters()
+	result["tutorial_snapshot_policy"] = !babylon_world_saves_characters(TRUE) && babylon_world_saves_characters() && GLOB.babylon_world.saves_characters()
 	var/list/tutorial_state = list()
 	capture_session_state(tutorial_state, TRUE)
 	result["tutorial_snapshot_empty"] = islist(tutorial_state["characters"]) && !length(tutorial_state["characters"]) && islist(tutorial_state["players"]) && !length(tutorial_state["players"])
 	var/list/world_state = list()
 	capture_session_state(world_state)
-	result["world_save_has_them"] = length(world_state["characters"]) >= 2 && islist(world_state["players"]["smokecharacter"])
+	result["world_save_has_them"] = length(world_state["characters"]) >= 6 && islist(world_state["players"]["smokecharacter"])
 	result["x"] = body.x
 	result["y"] = body.y
 	return result
@@ -696,8 +783,8 @@
 	return result
 
 /// After the restart from the save: the characters came back for their ckeys, once, as saved,
-/// with their jobs registered for the resumed round.
-/datum/babylon_save/proc/test_character_roundtrip_restored(x, y, chest_brute, arm_burn)
+/// with their jobs, cards and accounts registered for the resumed round.
+/datum/babylon_save/proc/test_character_roundtrip_restored(x, y, chest_brute, arm_burn, card_access, floor_card_access, floor_x, floor_y)
 	var/list/result = list()
 	result["round_resumed"] = round_mode == "resume" && SSticker.HasRoundStarted()
 	var/datum/babylon_player/player = player_sessions["smokecharacter"]
@@ -706,6 +793,7 @@
 	if(!body)
 		return result
 	result["no_client_yet"] = !body.client && !body.ckey
+	result["asleep_until_return"] = body.ssd_indicator
 	result["name"] = body.real_name == "Smoke Character"
 	result["species"] = istype(body.dna.species, /datum/species/lizard)
 	result["at_saved_place"] = body.x == babylon_test_number(x) && body.y == babylon_test_number(y)
@@ -720,19 +808,54 @@
 	result["backpack"] = istype(pack)
 	result["backpack_items"] = istype(pack) && !!((locate(/obj/item/wrench) in pack) && (locate(/obj/item/crowbar) in pack) && (locate(/obj/item/multitool) in pack))
 	result["held"] = istype(body.get_item_for_held_index(1), /obj/item/screwdriver)
-	var/copies = 0
-	for(var/mob/living/carbon/human/human as anything in GLOB.human_list)
-		if(human.real_name == "Smoke Character")
-			copies++
-	result["no_duplicate"] = copies == 1
+	var/obj/item/card/id/card = body.wear_id
+	result["card_worn"] = istype(card)
+	result["card_access"] = babylon_test_access_text(card) == card_access
+	result["card_trim"] = istype(card?.trim, /datum/id_trim/job/cargo_technician)
+	result["card_holder"] = card?.registered_name == "Smoke Character"
+	// The balance as saved (paydays went on after the setup), and paydays may follow the restore.
+	var/saved_balance = load_resume_data()?["characters"]?["smokecharacter"]?["balance"]
+	result["card_account"] = isnum(saved_balance) && saved_balance >= 1234 && card?.registered_account?.account_balance >= saved_balance && card.registered_account.account_id == body.account_id
+	if(!result["card_account"])
+		result["card_account_seen"] = "saved [saved_balance], card account [card?.registered_account?.account_id] balance [card?.registered_account?.account_balance], body account [body.account_id], card [card?.type] [card?.registered_name], idcard [body.get_idcard(FALSE)?.type]"
+	result["no_duplicate"] = babylon_test_humans_named("Smoke Character") == 1
 	result["job"] = body.mind?.assigned_role?.title == JOB_CARGO_TECHNICIAN
-	result["job_slot_counted"] = SSjob.get_job(JOB_CARGO_TECHNICIAN)?.current_positions >= 1
+	result["job_slot_counted_once"] = SSjob.get_job(JOB_CARGO_TECHNICIAN)?.current_positions == 1
 	result["on_manifest"] = !!find_record("Smoke Character")
 	result["no_client_no_reattach"] = reattach_saved_character(null) == FALSE
+	result["plan_body"] = saved_character_plan("smokecharacter")["plan"] == "body"
+	result["plan_ghost"] = saved_character_plan("smokeghost")["plan"] == "ghost"
+	result["plan_latejoin"] = saved_character_plan("nobodyhere")["plan"] == "latejoin"
 	var/datum/babylon_player/ghost_player = player_sessions["smokeghost"]
 	var/mob/living/carbon/human/ghost_body = ghost_player?.character()
 	result["ghost_body_dead"] = ghost_body?.stat == DEAD && ghost_body.real_name == "Smoke Ghost"
 	result["ghost_rejoins_as_ghost"] = !!ghost_player?.character_ghosted
+	result["swapped_once"] = babylon_test_humans_named("Smoke Swapped") == 1 && player_sessions["smokeswapb"]?.character()?.real_name == "Smoke Swapped"
+	result["stale_record_gets_latejoin"] = saved_character_plan("smokeswapa")["plan"] == "latejoin"
+	var/corpse_back = FALSE
+	for(var/mob/living/carbon/human/human as anything in GLOB.human_list)
+		if(human.real_name == "Smoke Corpse" && human.stat == DEAD && human.babylon_kept_body && istype(human.back, /obj/item/storage/backpack) && (locate(/obj/item/storage/toolbox/mechanical) in human.back))
+			corpse_back = TRUE
+	result["corpse_and_items_kept"] = corpse_back && babylon_test_humans_named("Smoke Corpse") == 1
+	if(!result["corpse_and_items_kept"])
+		for(var/mob/living/carbon/human/human as anything in GLOB.human_list)
+			if(human.real_name == "Smoke Corpse")
+				result["corpse_seen"] = "stat [human.stat], kept [human.babylon_kept_body], back [human.back?.type]"
+	result["new_body_is_theirs"] = player_sessions["smokeabandon"]?.character()?.real_name == "Smoke Newbody"
+	var/mob/living/carbon/human/passenger = player_sessions["smokepassenger"]?.character()
+	var/turf/passenger_tile = get_turf(passenger)
+	var/at_arrival_point = passenger_tile == respawn_turf
+	for(var/atom/point as anything in SSjob.latejoin_trackers)
+		if(get_turf(point) == passenger_tile)
+			at_arrival_point = TRUE
+	result["passenger_at_arrivals"] = passenger_tile && !isspaceturf(passenger_tile) && at_arrival_point
+	var/obj/item/card/id/advanced/gold/floor_card
+	for(var/obj/item/card/id/advanced/gold/candidate in locate(babylon_test_number(floor_x), babylon_test_number(floor_y), station_z))
+		if(candidate.registered_name == "Smoke Floor Card")
+			floor_card = candidate
+	result["floor_card_kept"] = !!floor_card
+	result["floor_card_trim"] = istype(floor_card?.trim, /datum/id_trim/job/captain)
+	result["floor_card_access"] = babylon_test_access_text(floor_card) == floor_card_access && length(floor_card_access) > 0
 	return result
 
 /// In a tutorial world (arch M1): a checkpoint keeps no characters and no per-player records.

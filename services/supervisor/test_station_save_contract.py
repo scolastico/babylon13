@@ -18,8 +18,8 @@ README = HERE / "fixtures/README.md"
 DEFINES = ROOT / "modular_babylon/__DEFINES/babylon.dm"
 KEYS = {"version", "generation", "next_id", "save_count", "records", "turfs", "levels", "map_config", "round",
         "players", "characters", "sun", "play_time"}
-CHARACTER_KEYS = {"id", "type", "x", "y", "z", "real_name", "gender", "physique", "age", "species", "dna", "job", "stat",
-                  "ghost", "bodyparts", "tox", "oxy", "records"}
+CHARACTER_KEYS = {"id", "type", "x", "y", "z", "on_shuttle", "real_name", "gender", "physique", "age", "species", "dna",
+                  "job", "balance", "stat", "ghost", "bodyparts", "tox", "oxy", "records"}
 CATALOG = {"maps": [
     {"id": "babylon", "name": "Babylon", "description": "d", "group": "babylon", "size": None, "build": "babylon",
      "map_json": None, "preview": None, "multiz": False},
@@ -102,7 +102,11 @@ class FixtureShape(unittest.TestCase):
         ids = set(record_ids)
         for ckey, character in state["characters"].items():
             self.assertEqual(set(character), CHARACTER_KEYS)
-            self.assertIn(ckey, state["players"])
+            # A player's character, or a body left behind ("#<save id>", no player).
+            if ckey.startswith("#"):
+                self.assertEqual(ckey, "#" + character["id"])
+            else:
+                self.assertIn(ckey, state["players"])
             # A character and its items are kept apart from the levels' records (a reused level
             # must never carry them), in the same id space.
             own = {character["id"]} | {record["id"] for record in character["records"]}

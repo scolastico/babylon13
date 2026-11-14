@@ -156,6 +156,9 @@ class WorldPolicy(unittest.TestCase):
         self.assertFalse(world_policy("babylon", 1, 1, "world", "babylon")["can_submit_tutorial"])
         self.assertTrue(world_policy("station", 0, 0, "tutorial_edit", "metastation")["can_save_back_tutorial"])
         self.assertFalse(world_policy("station", 1, 1, "tutorial", "metastation")["saves"])
+        # Tutorial instances never keep characters (arch M1); ordinary worlds do, saved or not.
+        self.assertFalse(world_policy("station", 1, 1, "tutorial_edit", "metastation")["saves_characters"])
+        self.assertTrue(world_policy("station", 0, 0, "world", "metastation")["saves_characters"])
 
     def test_no_world_type_decision_outside_the_table(self):
         # Other modules ask the table; they do not test the kind or the map group themselves.
@@ -185,6 +188,18 @@ class RestoreGuards(unittest.TestCase):
             lines = text.splitlines()
             for index, line in enumerate(lines):
                 if ".babylon_after_restore(" not in line:
+                    continue
+                calls += 1
+                self.assertEqual(lines[index - 1].strip(), "try", "%s:%d" % (path.name, index + 1))
+        self.assertGreaterEqual(calls, 2)
+
+    def test_every_character_capture_is_guarded(self):
+        # One character that cannot be captured must never fail the whole world's checkpoint.
+        calls = 0
+        for path, text in dm_sources().items():
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                if "capture_character(" not in line or line.startswith("/"):
                     continue
                 calls += 1
                 self.assertEqual(lines[index - 1].strip(), "try", "%s:%d" % (path.name, index + 1))

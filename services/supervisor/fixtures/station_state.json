@@ -1,7 +1,7 @@
 {
 	"version": 8,
 	"generation": "save-20261114-120000-3",
-	"next_id": 7,
+	"next_id": 8,
 	"save_count": 3,
 	"records": [
 		{
@@ -67,18 +67,29 @@
 	"players": {"fixtureplayer": {"play_time": 36000}},
 	"characters": {
 		"fixtureplayer": {
-			"id": "bb4", "type": "/mob/living/carbon/human", "x": 30, "y": 40, "z": 2,
+			"id": "bb4", "type": "/mob/living/carbon/human", "x": 30, "y": 40, "z": 2, "on_shuttle": 0,
 			"real_name": "Fixture Crewmember", "gender": "female", "physique": "female", "age": 30,
 			"species": "/datum/species/human",
 			"dna": {"unique_enzymes": "0123456789abcdef0123456789abcdef", "unique_identity": "", "unique_features": "",
 				"features": {"mcolor": "#FFFFFF"}, "mutant_bodyparts": {}, "body_markings": {}, "blood_type": "A+"},
-			"job": "Cargo Technician", "stat": 0, "ghost": 0,
+			"job": "Cargo Technician", "balance": 500, "stat": 0, "ghost": 0,
 			"bodyparts": [{"zone": "chest", "brute": 20, "burn": 0}, {"zone": "head", "brute": 0, "burn": 0}],
 			"tox": 0, "oxy": 0,
 			"records": [
 				{"id": "bb5", "type": "/obj/item/storage/backpack", "parent": "bb4", "x": 0, "y": 0, "fields": {}, "references": {}, "slot": 1024},
 				{"id": "bb6", "type": "/obj/item/wrench", "parent": "bb5", "x": 0, "y": 0, "fields": {}, "references": {}}
 			]
+		},
+		"#bb7": {
+			"id": "bb7", "type": "/mob/living/carbon/human", "x": 31, "y": 40, "z": 2, "on_shuttle": 0,
+			"real_name": "Fixture Corpse", "gender": "male", "physique": "male", "age": 40,
+			"species": "/datum/species/human",
+			"dna": {"unique_enzymes": "", "unique_identity": "", "unique_features": "", "features": {}, "mutant_bodyparts": {},
+				"body_markings": {}, "blood_type": "O-"},
+			"job": null, "balance": null, "stat": 4, "ghost": 0,
+			"bodyparts": [{"zone": "chest", "brute": 150, "burn": 0}],
+			"tox": 0, "oxy": 0,
+			"records": []
 		}
 	},
 	"sun": {"azimuth": 90, "azimuth_mod": 1, "base_rotation": 0},

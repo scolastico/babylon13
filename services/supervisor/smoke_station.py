@@ -340,27 +340,35 @@ def main():
         """The ids of the characters and their items; asserts none is one of the levels' records."""
         ids = set()
         for character in state["characters"].values():
-            ids |= {character["id"]} | {record["id"] for record in character["records"]}
+            own = {character["id"]} | {record["id"] for record in character["records"]}
+            assert not own & ids, "a body or item is saved for two characters"
+            ids |= own
         assert not ids & {record["id"] for record in state["records"]}, "a character is in the level records"
         assert all(int(i[2:]) < state["next_id"] for i in ids), "a character id is past next_id"
         return ids
 
     def run_characters(map_id):
-        """A client-less character with a ckey (test helper), damaged, with backpack items, and a dead
-        one whose player watches as a ghost: saved, changed on an unchanged level, saved again, stopped
-        (saved), restarted and found again for their ckeys with jobs, items and damage."""
+        """A client-less character with a ckey (test helper), damaged, with backpack items and an ID
+        card, a dead one whose player watches as a ghost, a body a stale record still points to, a
+        corpse left behind, a passenger on a docked shuttle and a captain's card on the floor: saved,
+        changed on an unchanged level, saved again, stopped (saved), restarted and found again for
+        their ckeys (once each) with jobs, items, cards, accounts and damage."""
         world = api("create", dict(name="Station smoke characters", visibility="private", map=map_id))["id"]
         run = wait_ready(world)
         assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
         wait_round_running(run)
         entry = {}
         setup = values(run, "test_character_roundtrip")
-        assert all(value for key, value in setup.items() if key not in ("x", "y")), ("test_character_roundtrip", setup)
+        facts = ("x", "y", "floor_x", "floor_y", "card_access", "floor_card_access", "chest_brute", "arm_burn")
+        assert all(value for key, value in setup.items() if key not in facts), ("test_character_roundtrip", setup)
         entry["test_character_roundtrip"] = setup
         first = topic(run["port"], run["secret"], "save", timeout=600)
         assert first.get("ok"), first
         state = saved_state(world, first["generation"])
-        assert set(state["characters"]) == {"smokecharacter", "smokeghost"}, list(state["characters"])
+        players = {key for key in state["characters"] if not key.startswith("#")}
+        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger"}, players
+        assert [state["characters"][key]["real_name"] for key in state["characters"] if key.startswith("#")] == ["Smoke Corpse"], \
+            list(state["characters"])
         assert "smokecharacter" in state["players"], list(state["players"])
         character_ids(state)
         level = str(state["characters"]["smokecharacter"]["z"])
@@ -379,7 +387,9 @@ def main():
         stop(world)
         run = wait_ready(world)
         entry["test_character_roundtrip_restored"] = checks(
-            run, "test_character_roundtrip_restored", [changed["x"], changed["y"], setup["chest_brute"], setup["arm_burn"]])
+            run, "test_character_roundtrip_restored", [changed["x"], changed["y"], setup["chest_brute"], setup["arm_burn"],
+                                                       setup["card_access"], setup["floor_card_access"], setup["floor_x"],
+                                                       setup["floor_y"]])
         stop(world)
         return entry
 

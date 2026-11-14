@@ -6,17 +6,26 @@
 // (unchanged) level never carries a player's body or items (persistence_levels.dm).
 // - Which body is a player's is kept on their /datum/babylon_player (character_ref), updated every
 //   world tick while they play; the per-player records (state["players"]) and the characters use
-//   that one registry, player_sessions.
+//   that one registry, player_sessions. A body is saved for a player only while it is theirs (its
+//   ckey or its mind's key), and only once.
+// - Bodies players left behind (a corpse whose player now plays someone else, a body given up for a
+//   cyborg) are saved too, without a player: state["characters"]["#<save id>"]. They come back as
+//   they were, belong to nobody and take no job.
 // - Bodies come back only when the save's round had started (round_mode "resume"); a world
 //   restored before its round started spawns none. restore_containers() rebuilds them before the
-//   records pass, so their items find their parent; the human's babylon_after_restore() equips
-//   the items and puts the damage back. At the resumed round's start they take their jobs again
-//   (job slot, crew manifest).
+//   records pass, so their items find their parent; the human's babylon_after_restore() puts the
+//   damage back and equips the items. A body saved on a shuttle (which loads again at its
+//   roundstart dock) or over space comes back at a late-join point. Living bodies come back asleep
+//   (SSD), so the usual cryo rules free their job. At the resumed round's start they take their
+//   jobs again (job slot, crew manifest, bank account, the job's implants).
 // - A returning player is put back into their body (reattach_saved_character); a player whose
 //   body was dead, or who watched it as a ghost, comes back as its ghost. Players without a saved
 //   body join late as usual.
 // - Tutorial snapshots never hold characters: babylon_world_saves_characters() (world_flags.dm).
 // Preferences (the character editor) are shared between worlds by the supervisor; bodies are not.
+
+/// state["characters"] keys of bodies without a player start with this.
+#define BABYLON_OWNERLESS_PREFIX "#"
 
 /datum/babylon_player
 	/// The player's human in this world: the body they play, or the one they watch as a ghost.
@@ -25,6 +34,12 @@
 	var/character_ghosted = FALSE
 	/// The job title of a restored character, until the resumed round registers it.
 	var/character_job
+	/// The bank balance of a restored character, until the resumed round opens its account.
+	var/character_balance
+
+/mob/living/carbon/human
+	/// A body a player left behind, restored without a player: saved again as one.
+	var/babylon_kept_body = FALSE
 
 /// The player's human, or null.
 /datum/babylon_player/proc/character()
@@ -32,9 +47,29 @@
 	var/mob/living/carbon/human/body = character_ref?.resolve()
 	return (ishuman(body) && !QDELETED(body)) ? body : null
 
+/// Makes body this player's character. A body is one player's at most: anyone else's link to it
+/// goes. While it is theirs, its deletion (gibbed, dusted) marks its level as changed, so whatever
+/// it dropped there is saved with the level.
 /datum/babylon_player/proc/set_character(mob/living/carbon/human/body, ghosted = FALSE)
+	var/mob/living/carbon/human/previous = character()
+	if(previous && previous != body)
+		UnregisterSignal(previous, COMSIG_QDELETING)
 	character_ref = body ? WEAKREF(body) : null
 	character_ghosted = body ? !!ghosted : FALSE
+	if(!body)
+		return
+	if(previous != body)
+		RegisterSignal(body, COMSIG_QDELETING, PROC_REF(character_deleted))
+	for(var/other_key in GLOB.babylon_save.player_sessions)
+		var/datum/babylon_player/other = GLOB.babylon_save.player_sessions[other_key]
+		if(other != src && other.character_ref?.resolve() == body)
+			other.set_character(null)
+
+/datum/babylon_player/proc/character_deleted(mob/living/carbon/human/body)
+	SIGNAL_HANDLER
+	var/turf/tile = get_turf(body)
+	if(tile)
+		GLOB.babylon_save.mark_level_changed(tile.z, body)
 
 /// Follows the player's mob: their human, the human their ghost can return to, or none once they
 /// play something else (a cyborg, an animal) or gave their body up. The menu changes nothing (a
@@ -46,15 +81,30 @@
 	if(isobserver(current))
 		var/mob/dead/observer/ghost = current
 		var/mob/living/carbon/human/body = ghost.mind?.current
-		set_character((ishuman(body) && ghost.can_reenter_corpse) ? body : null, TRUE)
+		if(!ishuman(body) || !ghost.can_reenter_corpse)
+			set_character(null)
+			return
+		// An admin's ghost (aghost) leaves a living body with a "@key": the admin comes back in it.
+		var/admin_ghost = body.stat != DEAD && copytext(body.key, 1, 2) == "@"
+		set_character(body, !admin_ghost)
 		return
 	if(isnewplayer(current) || !current)
 		return
 	set_character(null)
 
+/// The ckey whose body this is: its own key, or its mind's (a body whose player is away or
+/// watches it as a ghost keeps the mind's key).
+/proc/babylon_body_owner(mob/living/carbon/human/body)
+	if(body.ckey)
+		return body.ckey
+	return body.mind?.key ? ckey(body.mind.key) : null
+
 /datum/babylon_save
 	/// Players whose characters this restore rebuilt; the resumed round's start registers their jobs.
 	var/list/restored_characters = list()
+	/// ckey -> saved character entry this restore could not rebuild: saved again unchanged while
+	/// the player has no character, so one failure does not lose the character for good.
+	var/list/unrestored_characters = list()
 
 /datum/babylon_save/New()
 	. = ..()
@@ -69,28 +119,63 @@
 		var/datum/babylon_player/player = ensure_station_player(student.ckey)
 		player?.track_character(student.mob)
 
+/// Where a returning body goes when its own place cannot hold it: a late-join point, else the
+/// observer start.
+/datum/babylon_save/proc/character_arrival_turf()
+	if(length(SSjob.latejoin_trackers))
+		return get_turf(pick(SSjob.latejoin_trackers))
+	return respawn_turf
+
 // --- Saving ---------------------------------------------------------------------------------
 
-/// state["characters"]: every player's human on a saved level, by ckey. None in a tutorial snapshot
-/// (babylon_world_saves_characters()) or before the round started.
+/// state["characters"]: every player's human on a saved level, by ckey, and the player bodies left
+/// behind ("#<save id>"). None in a tutorial snapshot (babylon_world_saves_characters()) or before
+/// the round started. One character that cannot be captured is skipped and logged; the save goes on.
 /datum/babylon_save/proc/capture_characters(for_tutorial = FALSE)
 	var/list/characters = list()
 	if(!babylon_world_saves_characters(for_tutorial) || !SSticker.HasRoundStarted())
 		return characters
 	var/list/levels = persisted_levels()
+	var/list/captured_bodies = list()
 	for(var/player_key in player_sessions)
 		var/datum/babylon_player/player = player_sessions[player_key]
 		var/mob/living/carbon/human/body = player.character()
-		if(!body || body.babylon_skip_save())
+		if(!body)
+			if(unrestored_characters[player_key])
+				characters[player_key] = unrestored_characters[player_key]
 			continue
-		var/turf/tile = get_turf(body)
-		if(!tile || !(tile.z in levels))
+		// A body someone else now plays (a mind swap, an admin taking it over) is no longer theirs.
+		if(babylon_body_owner(body) != player_key)
+			player.set_character(null)
 			continue
-		characters[player_key] = capture_character(body, player)
+		if(captured_bodies[body] || !saves_character_body(body, levels))
+			continue
+		captured_bodies[body] = TRUE
+		try
+			characters[player_key] = capture_character(body, player)
+		catch(var/exception/error)
+			log_world("Babylon save: the character of [player_key] could not be saved: [error] ([error?.file]:[error?.line])")
+	for(var/mob/living/carbon/human/body as anything in GLOB.human_list)
+		if(captured_bodies[body] || QDELETED(body) || !saves_character_body(body, levels))
+			continue
+		if(!body.babylon_kept_body && !babylon_body_owner(body) && !body.last_mind?.key)
+			continue // an NPC human (ruin corpses): not kept (checkpoint_mobs()).
+		captured_bodies[body] = TRUE
+		try
+			var/list/entry = capture_character(body, null)
+			characters["[BABYLON_OWNERLESS_PREFIX][entry["id"]]"] = entry
+		catch(var/exception/error)
+			log_world("Babylon save: the body of [body.real_name] could not be saved: [error] ([error?.file]:[error?.line])")
 	return characters
 
+/// A body that goes into a save: on a saved level, not a hologram or a tutorial prop.
+/datum/babylon_save/proc/saves_character_body(mob/living/carbon/human/body, list/levels)
+	var/turf/tile = get_turf(body)
+	return tile && (tile.z in levels) && !body.babylon_skip_save() && !(body.flags_1 & HOLOGRAM_1)
+
 /// One character: the human's identity, job, damage and place, and its items as save records
-/// (the worn and held ones with the character as parent, their contents below them).
+/// (the worn and held ones with the character as parent, their contents below them). player is
+/// null for a body left behind.
 /datum/babylon_save/proc/capture_character(mob/living/carbon/human/body, datum/babylon_player/player)
 	var/body_id = assign_id(body)
 	var/turf/tile = get_turf(body)
@@ -112,17 +197,22 @@
 		"unique_enzymes" = dna.unique_enzymes,
 		"unique_identity" = dna.unique_identity,
 		"unique_features" = dna.unique_features,
-		"features" = dna.features.Copy(),
-		"mutant_bodyparts" = LAZYCOPY(dna.mutant_bodyparts),
-		"body_markings" = dna.body_markings.Copy(),
+		"features" = islist(dna.features) ? dna.features.Copy() : list(),
+		"mutant_bodyparts" = islist(dna.mutant_bodyparts) ? dna.mutant_bodyparts.Copy() : list(),
+		"body_markings" = islist(dna.body_markings) ? dna.body_markings.Copy() : list(),
 		"blood_type" = dna.blood_type?.id,
 	)
+	var/datum/bank_account/account = SSeconomy.bank_accounts_by_id["[body.account_id]"]
+	// A body on a shuttle that loads again at its roundstart dock (players' own shuttles are saved
+	// where they are) would come back over whatever lies beneath it.
+	var/obj/docking_port/mobile/shuttle = SSshuttle.get_containing_shuttle(body)
 	return list(
 		"id" = body_id,
 		"type" = "[body.type]",
 		"x" = tile.x,
 		"y" = tile.y,
 		"z" = tile.z,
+		"on_shuttle" = !!(shuttle && !istype(shuttle, /obj/docking_port/mobile/custom)),
 		"real_name" = babylon_save_text(body.real_name),
 		"gender" = body.gender,
 		"physique" = body.physique,
@@ -130,8 +220,9 @@
 		"species" = "[dna.species.type]",
 		"dna" = dna_data,
 		"job" = body.mind?.assigned_role?.title,
+		"balance" = account?.account_balance,
 		"stat" = body.stat,
-		"ghost" = player.character_ghosted || body.stat == DEAD,
+		"ghost" = player ? (player.character_ghosted || body.stat == DEAD) : FALSE,
 		"bodyparts" = bodyparts,
 		"tox" = body.get_tox_loss(),
 		"oxy" = body.get_oxy_loss(),
@@ -151,31 +242,42 @@
 	if(!babylon_state_round_started(state) || !babylon_world_saves_characters())
 		log_world("Babylon restore: [length(characters)] saved character(s) not rebuilt (the round had not started, or this world keeps none).")
 		return
-	for(var/player_key in characters)
-		var/list/entry = characters[player_key]
-		if(ckey(player_key) != player_key || !islist(entry) || !istext(entry["id"]))
+	for(var/key in characters)
+		var/list/entry = characters[key]
+		var/ownerless = copytext(key, 1, 2) == BABYLON_OWNERLESS_PREFIX
+		if((!ownerless && ckey(key) != key) || !islist(entry) || !istext(entry["id"]))
 			continue
+		var/mob/living/carbon/human/body
 		try
-			var/mob/living/carbon/human/body = restore_character(player_key, entry)
-			. += list(list("id" = entry["id"], "type" = "[body.type]", "parent" = null, "x" = entry["x"], "y" = entry["y"], "z" = entry["z"], "fields" = list("babylon_character" = entry), "references" = list()))
+			body = restore_character(ownerless ? null : key, entry)
+			. += list(list("id" = entry["id"], "type" = "[body.type]", "parent" = null, "x" = body.x, "y" = body.y, "z" = null, "fields" = list("babylon_character" = entry), "references" = list()))
 			for(var/list/record in entry["records"])
 				. += list(record)
 		catch(var/exception/error)
-			log_world("Babylon restore: the character of [player_key] could not be rebuilt: [error] ([error?.file]:[error?.line])")
+			log_world("Babylon restore: the character [key] could not be rebuilt: [error] ([error?.file]:[error?.line])")
+			if(body)
+				restored_atoms -= entry["id"]
+				qdel(body)
+			if(!ownerless)
+				unrestored_characters[key] = entry
 
-/// The human of one saved character, with its identity and a mind for its player.
+/// The human of one saved character, with its identity and, for a player's character, a mind
+/// for its player. player_key is null for a body left behind.
 /datum/babylon_save/proc/restore_character(player_key, list/entry)
 	RETURN_TYPE(/mob/living/carbon/human)
 	var/turf/tile = locate(entry["x"], entry["y"], restored_level_z(entry["z"]))
-	if(!tile)
-		tile = respawn_turf
+	if(entry["on_shuttle"] || !tile || isspaceturf(tile) || isclosedturf(tile))
+		tile = character_arrival_turf()
 	var/path = text2path(entry["type"])
 	if(!ispath(path, /mob/living/carbon/human))
 		path = /mob/living/carbon/human
 	var/mob/living/carbon/human/body = new path(tile)
-	apply_character_identity(body, entry)
 	body.babylon_save_id = entry["id"]
 	restored_atoms[entry["id"]] = body
+	apply_character_identity(body, entry)
+	if(!player_key)
+		body.babylon_kept_body = TRUE
+		return body
 	var/datum/mind/mind = new /datum/mind(player_key)
 	mind.name = body.real_name
 	mind.active = FALSE
@@ -183,7 +285,12 @@
 	var/datum/babylon_player/player = ensure_station_player(player_key)
 	player.set_character(body, !!entry["ghost"])
 	player.character_job = istext(entry["job"]) ? entry["job"] : null
+	player.character_balance = isnum(entry["balance"]) ? entry["balance"] : null
 	restored_characters |= player
+	// Asleep until their player returns, as after a Logout(): the usual cryo rules apply.
+	if(entry["stat"] != DEAD && !entry["ghost"])
+		body.lastclienttime = world.time
+		body.set_ssd_indicator(TRUE)
 	return body
 
 /// Species, DNA, name, blood type and look of a saved character.
@@ -223,9 +330,48 @@
 	if(islist(entry))
 		GLOB.babylon_save.finish_character(src, entry)
 
-/// After every saved object exists: the character wears and holds its items again, its lost limbs
-/// stay lost and its damage and death come back (without dying a second time on screen).
+/// After every saved object exists: the character's damage, lost limbs and death come back
+/// (without dying a second time), then it wears and holds its items again. The damage comes first:
+/// an item that cannot be put back must never bring a dead body back alive.
 /datum/babylon_save/proc/finish_character(mob/living/carbon/human/body, list/entry)
+	var/list/parts = list()
+	for(var/list/part in entry["bodyparts"])
+		parts[part["zone"]] = part
+	if(length(parts))
+		for(var/obj/item/bodypart/part as anything in body.bodyparts.Copy())
+			var/list/saved = parts[part.body_zone]
+			if(!saved)
+				// Only limbs can have been lost and lived without.
+				if(part.body_zone in list(BODY_ZONE_L_ARM, BODY_ZONE_R_ARM, BODY_ZONE_L_LEG, BODY_ZONE_R_LEG))
+					part.drop_limb(special = TRUE)
+					qdel(part)
+				continue
+			// Set as saved: receive_damage() would apply the species' modifiers a second time.
+			part.brute_dam = clamp(isnum(saved["brute"]) ? saved["brute"] : 0, 0, part.max_damage)
+			part.burn_dam = clamp(isnum(saved["burn"]) ? saved["burn"] : 0, 0, part.max_damage)
+			if(part.can_be_disabled)
+				part.update_disabled()
+	if(isnum(entry["tox"]))
+		body.set_tox_loss(entry["tox"], updating_health = FALSE, forced = TRUE)
+	if(isnum(entry["oxy"]))
+		body.set_oxy_loss(entry["oxy"], updating_health = FALSE, forced = TRUE)
+	if(entry["stat"] == DEAD)
+		// Dead already, as the save's other mobs (persistence_levels.dm): no death() again.
+		var/obj/item/organ/heart/heart = body.get_organ_slot(ORGAN_SLOT_HEART)
+		heart?.Stop()
+		body.timeofdeath = world.time
+		body.set_stat(DEAD)
+	else
+		body.updatehealth()
+	body.update_damage_overlays()
+	try
+		equip_character(body, entry)
+	catch(var/exception/error)
+		log_world("Babylon restore: [body.real_name]'s items could not all be put back on: [error] ([error?.file]:[error?.line])")
+	body.regenerate_icons()
+
+/// Puts a restored character's worn and held items back on.
+/datum/babylon_save/proc/equip_character(mob/living/carbon/human/body, list/entry)
 	var/list/pending = list()
 	for(var/list/record in entry["records"])
 		if(record["parent"] != entry["id"])
@@ -253,74 +399,102 @@
 			break
 	for(var/obj/item/item as anything in pending)
 		log_world("Babylon restore: [body.real_name]'s [item.type] could not be put back on; it lies at their feet.")
-	var/list/parts = list()
-	for(var/list/part in entry["bodyparts"])
-		parts[part["zone"]] = part
-	if(length(parts))
-		for(var/obj/item/bodypart/part as anything in body.bodyparts.Copy())
-			var/list/saved = parts[part.body_zone]
-			if(!saved)
-				// Only limbs can have been lost and lived without.
-				if(part.body_zone in list(BODY_ZONE_L_ARM, BODY_ZONE_R_ARM, BODY_ZONE_L_LEG, BODY_ZONE_R_LEG))
-					part.drop_limb(special = TRUE)
-					qdel(part)
-				continue
-			// Set as saved: receive_damage() would apply the species' modifiers a second time.
-			part.brute_dam = clamp(isnum(saved["brute"]) ? saved["brute"] : 0, 0, part.max_damage)
-			part.burn_dam = clamp(isnum(saved["burn"]) ? saved["burn"] : 0, 0, part.max_damage)
-			if(part.can_be_disabled)
-				part.update_disabled()
-	if(isnum(entry["tox"]))
-		body.set_tox_loss(entry["tox"], updating_health = FALSE, forced = TRUE)
-	if(isnum(entry["oxy"]))
-		body.set_oxy_loss(entry["oxy"], updating_health = FALSE, forced = TRUE)
-	body.updatehealth()
-	if(entry["stat"] == DEAD && body.stat != DEAD)
-		body.death()
-	body.update_damage_overlays()
-	body.regenerate_icons()
 
 /// The resumed round started (persistence_levels.dm): restored characters take their jobs again,
-/// counted in their job's slots, and appear on the crew manifest.
+/// counted in their job's slots (living ones: a dead body holds no slot), appear on the crew
+/// manifest, get their bank account back on their ID card and their job's implants (mindshields).
 /datum/babylon_save/proc/register_restored_characters()
 	for(var/datum/babylon_player/player as anything in restored_characters)
 		var/mob/living/carbon/human/body = player.character()
 		if(!body?.mind)
 			continue
-		var/datum/job/job = player.character_job ? SSjob.get_job(player.character_job) : null
-		if(job)
-			body.mind.set_assigned_role(job)
-			job.current_positions++
-		SSticker.minds |= body.mind
-		GLOB.manifest.inject(body)
+		try
+			register_restored_character(player, body)
+		catch(var/exception/error)
+			log_world("Babylon: the restored character [body.real_name] could not take their job again: [error] ([error?.file]:[error?.line])")
 	restored_characters = list()
+
+/datum/babylon_save/proc/register_restored_character(datum/babylon_player/player, mob/living/carbon/human/body)
+	var/datum/job/job = player.character_job ? SSjob.get_job(player.character_job) : null
+	if(job)
+		body.mind.set_assigned_role(job)
+		if(body.stat != DEAD)
+			job.current_positions++
+	SSticker.minds |= body.mind
+	GLOB.manifest.inject(body)
+	if(job?.paycheck_department)
+		var/datum/bank_account/account = new(body.real_name, job, body.dna.species.payday_modifier)
+		account.account_balance = isnum(player.character_balance) ? player.character_balance : 0
+		account.replaceable = FALSE
+		body.account_id = account.account_id
+		// Their own card (one that names them) holds their account.
+		var/obj/item/card/id/card = body.get_idcard(hand_first = FALSE)
+		if(card && card.registered_name == body.real_name)
+			card.set_account(account)
+		else if(card)
+			log_world("Babylon: [body.real_name]'s ID card names [card.registered_name]; their bank account is not put on it.")
+	if(job?.outfit && body.stat != DEAD)
+		var/datum/outfit/outfit = new job.outfit
+		for(var/implant_type in outfit.implants)
+			if(locate(implant_type) in body.implants)
+				continue
+			var/obj/item/implant/implant = new implant_type
+			implant.implant(body, null, TRUE)
+		qdel(outfit)
 
 // --- Rejoining ------------------------------------------------------------------------------
 
+/// What a returning player of a resumed round gets: list("plan" = "body" (back into it), "ghost"
+/// (back as its ghost: it is dead, or they watched it as one) or "latejoin" (no saved body, or it
+/// is someone else's now), "body" = the body).
+/datum/babylon_save/proc/saved_character_plan(player_key)
+	var/datum/babylon_player/record = player_sessions[player_key]
+	var/mob/living/carbon/human/body = record?.character()
+	if(!body || body.client || (body.ckey && body.ckey != player_key) || babylon_body_owner(body) != player_key)
+		return list("plan" = "latejoin")
+	return list("plan" = (record.character_ghosted || body.stat == DEAD) ? "ghost" : "body", "body" = body)
+
 /// Puts a returning player (on the menu of a resumed round) into the body this world saved for
-/// them, or back as its ghost when it is dead or they watched it as one. TRUE when they have it;
-/// FALSE leaves the normal late-join menu. Never makes a second body.
+/// them, or back as its ghost (saved_character_plan()). TRUE when they have it; FALSE leaves the
+/// normal late-join menu, also after an error on the way. Never makes a second body.
 /datum/babylon_save/proc/reattach_saved_character(client/player)
 	if(!player)
 		return FALSE
-	var/datum/babylon_player/record = player_sessions[player.ckey]
-	var/mob/living/carbon/human/body = record?.character()
 	var/mob/dead/new_player/menu = player.mob
-	if(!body || !istype(menu) || body.client || (body.ckey && body.ckey != player.ckey))
+	if(!istype(menu))
 		return FALSE
-	menu.spawning = TRUE
-	menu.hide_title_screen()
-	if(body.mind)
-		body.mind.key = player.key
-	body.PossessByPlayer(player.ckey)
-	body.stop_sound_channel(CHANNEL_LOBBYMUSIC)
-	player.init_verbs()
-	if(!QDELETED(menu))
-		qdel(menu)
-	log_game("[key_name(player)] returned to their saved character [body.real_name].")
-	if(record.character_ghosted || body.stat == DEAD)
-		body.ghostize(TRUE)
-		to_chat(player, span_notice("You are back as the ghost of [html_encode(body.real_name)], where this world was saved."))
-	else
-		to_chat(player, span_notice("You are back in your character, [html_encode(body.real_name)], where this world was saved."))
+	var/list/plan = saved_character_plan(player.ckey)
+	if(plan["plan"] == "latejoin")
+		return FALSE
+	var/mob/living/carbon/human/body = plan["body"]
+	try
+		menu.spawning = TRUE
+		menu.hide_title_screen()
+		if(body.mind)
+			body.mind.key = player.key
+		body.PossessByPlayer(player.ckey)
+	catch(var/exception/error)
+		log_world("Babylon: [player.ckey] could not be put back into [body.real_name]: [error] ([error?.file]:[error?.line])")
+		if(!QDELETED(menu) && player.mob == menu)
+			menu.spawning = FALSE
+			menu.show_title_screen()
+			to_chat(player, span_warning("Your saved character could not be given back. Press <b>JOIN GAME</b> to join the round."))
+			return FALSE
+	// The client is in the body now: the rest must not send it anywhere else.
+	try
+		body.stop_sound_channel(CHANNEL_LOBBYMUSIC)
+		player.init_verbs()
+		GLOB.joined_player_list |= player.ckey
+		if(!QDELETED(menu))
+			qdel(menu)
+		log_game("[key_name(player)] returned to their saved character [body.real_name].")
+		if(plan["plan"] == "ghost")
+			body.ghostize(TRUE)
+			to_chat(player, span_notice("You are back as the ghost of [html_encode(body.real_name)], where this world was saved."))
+		else
+			to_chat(player, span_notice("You are back in your character, [html_encode(body.real_name)], where this world was saved."))
+	catch(var/exception/finish_error)
+		log_world("Babylon: finishing [player.ckey]'s return to [body.real_name] failed: [finish_error] ([finish_error?.file]:[finish_error?.line])")
 	return TRUE
+
+#undef BABYLON_OWNERLESS_PREFIX

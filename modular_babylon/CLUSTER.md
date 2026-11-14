@@ -581,14 +581,23 @@ What a save keeps and what it does not:
   beyond names and jobs, and bank balances are not saved either.
 - Players' characters: each player's body is kept in its world, by account, with its
   name, species and look, job, injuries and lost limbs, where it stood, and everything it
-  wore, held or carried (backpack contents included). Bodies are saved on every save, also
-  when nothing else on their deck changed. They come back only when the save's round had
-  started; the restored characters keep their job (counted in its slots) and are on the crew
-  manifest again. A dead body comes back dead, and its player rejoins as its ghost. Bodies
-  stay in their world: the character editor's preferences are shared between worlds, bodies
-  are not. Implants, ID access changes and items' attachments (such as a jumpsuit's
-  accessories) are not kept. Tutorials never contain characters: a submitted or saved-back
-  tutorial and every copy made from one start without anyone's body.
+  wore, held or carried (backpack contents included). ID cards keep their job design,
+  access, holder and assignment (also cards lying anywhere on the station), and a
+  character's bank account comes back with its balance. Bodies are saved on every save,
+  also when nothing else on their deck changed. They come back only when the save's round
+  had started; the restored characters keep their job (counted in its slots), are on the
+  crew manifest again and get their job's implants (mindshields) back. A body comes back
+  asleep until its player returns, so the usual cryo rules can free its job. A dead body
+  comes back dead, and its player rejoins as its ghost. A body saved aboard a shuttle (which
+  returns to its dock on a restart) comes back at the arrivals point. Bodies players left
+  behind (a corpse whose player now plays someone else) are kept too, with their items, and
+  belong to nobody. Bodies stay in their world: the character editor's preferences are
+  shared between worlds, bodies are not. Not kept: quirks, scars, implants other than the
+  job's, alternative job titles, memories, handcuffs and legcuffs, organ and brain damage,
+  blood volume and chemicals in the body, prosthetic limbs (they come back as normal limbs)
+  and how items are attached to each other (a jumpsuit's accessories come back loose
+  inside it). Tutorials never contain characters: a submitted or saved-back tutorial and
+  every copy made from one start without anyone's body.
 
 A save pauses the world's simulation while it is captured; the time is logged as
 `Babylon saved <generation>: ... capture <ms> ms, total <ms> ms` in the world's log.
