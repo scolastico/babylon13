@@ -25,6 +25,7 @@ from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
+from constants import DEFAULTS, TUTORIAL_KINDS
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
@@ -93,8 +94,6 @@ def world_flag(value, name):
 
 
 # Shipped with the repository; used when the configuration names no catalog.
-# Station-build worlds boot a full tg round (several z-levels); measured 77-167 s.
-STATION_STARTUP_TIMEOUT_SECONDS = 600
 DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "_maps/babylon/catalog.json"
 
 
@@ -117,9 +116,20 @@ def catalog_path(config):
     return DEFAULT_CATALOG
 
 
+def build_of(catalog, map_id):
+    """The build (babylon or station) a map runs on; the Babylon builder map has none in the catalog."""
+    if map_id == "babylon":
+        return "babylon"
+    entry = catalog.get(map_id)
+    if not entry:
+        raise Denied("Unknown map " + str(map_id))
+    return entry["build"]
+
+
 class Driver:
-    def __init__(self, config):
+    def __init__(self, config, catalog=None):
         self.config = config
+        self.catalog = catalog
         self.processes = {}
 
     def music_param(self):
@@ -138,17 +148,20 @@ class Driver:
             return default
         return default if value is None else value
 
-    def catalog_entry(self, map_id):
-        if getattr(self, "catalog", None) is None:
+    def loaded_catalog(self):
+        # The supervisor passes its catalog in; a bare Driver (tests, tools) loads its own.
+        if self.catalog is None:
             self.catalog = load_catalog(catalog_path(self.config))
-        entry = self.catalog.get(map_id)
+        return self.catalog
+
+    def catalog_entry(self, map_id):
+        entry = self.loaded_catalog().get(map_id)
         if not entry:
             raise Denied("Unknown map " + str(map_id))
         return entry
 
     def build_of(self, world):
-        map_id = self.field(world, "map", "babylon")
-        return "babylon" if map_id == "babylon" else self.catalog_entry(map_id)["build"]
+        return build_of(self.loaded_catalog(), self.field(world, "map", "babylon"))
 
     def data_root(self):
         return Path(self.config["data_directory"]).resolve()
@@ -158,7 +171,7 @@ class Driver:
         kind = self.field(world, "kind", "world")
         tutorial = self.field(world, "tutorial", "")
         data = self.data_root()
-        if kind in ("tutorial", "tutorial_edit"):
+        if kind in TUTORIAL_KINDS:
             try:
                 snapshot = tutorial_snapshot_dir(data, tutorial)
             except ValueError:
@@ -285,7 +298,7 @@ class Driver:
                             "babylon-run": run["id"], "babylon-secret": run["secret"],
                             "babylon-api": f"http://127.0.0.1:{self.config['listen_port']}",
                             "babylon-lobby": self.config["lobby_address"],
-                            "babylon-afk-timeout": self.config.get("afk_timeout_seconds", 900),
+                            "babylon-afk-timeout": self.config.get("afk_timeout_seconds", DEFAULTS["afk_timeout_seconds"]),
                             "babylon-build": build,
                             "babylon-persistent": 1 if self.field(world, "persistent", 1) else 0,
                             "babylon-creative": 1 if self.field(world, "creative", 0) else 0,
@@ -359,15 +372,15 @@ class Driver:
 class Supervisor:
     def __init__(self, config, driver=None, clock=time.time):
         self.config = config
-        config.setdefault("max_total_worlds_per_player", 20)
-        config.setdefault("station_startup_timeout_seconds", STATION_STARTUP_TIMEOUT_SECONDS)
+        for key in ("max_total_worlds_per_player", "station_startup_timeout_seconds"):
+            config.setdefault(key, DEFAULTS[key])
         self.clock = clock
         self.lock = threading.RLock()
         self.deletion_lock = threading.Lock()
-        self.driver = driver or Driver(config)
-        self.admins = {ckey(k) for k in config.get("admins", [])}
         # A malformed catalog is a clear error at supervisor start.
         self.catalog = load_catalog(catalog_path(config))
+        self.driver = driver or Driver(config, self.catalog)
+        self.admins = {ckey(k) for k in config.get("admins", [])}
         Path(config["data_directory"]).mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(Path(config["data_directory"]) / "supervisor.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -434,7 +447,7 @@ class Supervisor:
             if self.clock() < self.next_cleanup:
                 return
             self.next_cleanup = self.clock() + 3600
-            days = self.config.get("delete_unused_worlds_after_days", 60)
+            days = self.config.get("delete_unused_worlds_after_days", DEFAULTS["delete_unused_worlds_after_days"])
             if days:
                 expired = self.db.execute("SELECT id FROM worlds WHERE last_used<=? AND id NOT IN (SELECT world FROM runs)",
                                           (self.clock() - days * 86400,)).fetchall()
@@ -815,7 +828,7 @@ class Supervisor:
                     self.restart_screen_shown.add(actor)
                 return {"ok": True, "worlds": worlds, "maps": public_catalog(self.catalog), "admin": actor in self.admins, "server_notice": self.server_notice,
                         "restarting": self.shutting_down, "discord": self.discord_state(actor),
-                        "delete_unused_worlds_after_days": self.config.get("delete_unused_worlds_after_days", 60),
+                        "delete_unused_worlds_after_days": self.config.get("delete_unused_worlds_after_days", DEFAULTS["delete_unused_worlds_after_days"]),
                         "limits": {k: v for k, v in self.config.items() if k.startswith("max_")}}
             if action in ("create", "join") and self.shutting_down:
                 raise Denied("The server is restarting. Try again in a minute.")
@@ -942,7 +955,7 @@ class Supervisor:
                                (owner, ignore)).fetchall()
         if persistent and sum(r[0] == 1 for r in rows) >= self.config["max_worlds_per_player"]:
             raise Denied("Your world limit has been reached")
-        if len(rows) >= self.config.get("max_total_worlds_per_player", 20):
+        if len(rows) >= self.config.get("max_total_worlds_per_player", DEFAULTS["max_total_worlds_per_player"]):
             raise Denied("Your total world limit has been reached")
 
     def last_save(self, world_id):
@@ -1066,8 +1079,10 @@ class Supervisor:
         """Seconds a starting child may take: station maps (tg rounds, several levels) load far longer."""
         with self.lock:
             world = self.row("SELECT * FROM worlds WHERE id=?", (run["world"],))
-        entry = self.catalog.get(world["map"]) if world is not None else None
-        station = bool(entry) and entry.get("build") == "station"
+        try:
+            station = world is not None and build_of(self.catalog, world["map"]) == "station"
+        except Denied:
+            station = False
         if station:
             return max(self.config["startup_timeout_seconds"], self.config["station_startup_timeout_seconds"])
         return self.config["startup_timeout_seconds"]
@@ -1140,11 +1155,9 @@ class Supervisor:
 
 def load_config(path):
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    config.setdefault("kept_save_points_per_world", 4)
-    config.setdefault("delete_unused_worlds_after_days", 60)
-    config.setdefault("afk_timeout_seconds", 900)
-    config.setdefault("max_total_worlds_per_player", 20)
-    config.setdefault("station_startup_timeout_seconds", STATION_STARTUP_TIMEOUT_SECONDS)
+    for key in ("kept_save_points_per_world", "delete_unused_worlds_after_days", "afk_timeout_seconds",
+                "max_total_worlds_per_player", "station_startup_timeout_seconds"):
+        config.setdefault(key, DEFAULTS[key])
     if type(config["max_total_worlds_per_player"]) is not int or config["max_total_worlds_per_player"] < 1:
         raise ValueError("max_total_worlds_per_player must be a positive integer")
     if type(config["afk_timeout_seconds"]) is not int or config["afk_timeout_seconds"] < 0:

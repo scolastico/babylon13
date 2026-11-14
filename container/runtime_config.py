@@ -9,20 +9,18 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'services/supervisor'))
+from constants import DEFAULTS as SUPERVISOR_DEFAULTS
 from supervisor import ckey, load_config
 
 
 DEFAULTS = {
     'lobby_port': 1361, 'api_port': 1360, 'world_port_first': 1400, 'world_port_last': 1420,
     'max_running_worlds': 4, 'max_players_per_world': 4, 'max_worlds_per_player': 3,
-    'max_running_worlds_per_player': 1, 'kept_save_points_per_world': 4,
-    'max_total_worlds_per_player': 20,
-    'delete_unused_worlds_after_days': 60, 'empty_grace_seconds': 120,
-    'startup_timeout_seconds': 300, 'station_startup_timeout_seconds': 600, 'ticket_lifetime_seconds': 60,
+    'max_running_worlds_per_player': 1,
+    **SUPERVISOR_DEFAULTS,
     'shutdown_timeout_seconds': 180,
     # Countdown in every world before a restart; 0 skips it.
     'restart_warning_seconds': 30,
-    'afk_timeout_seconds': 900,
 }
 
 # Upstream's shared Space Station 13 hub entry; its password is public in code/world.dm.
