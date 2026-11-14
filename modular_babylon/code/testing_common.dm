@@ -381,12 +381,13 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	count_play_time()
 	player_sessions = sessions
 	result["empty_world_does_not_count"] = play_time == before
-	// Every module stepping with the world tick still receives it (one listener each).
+	// Every module stepping with the world tick still receives it (one listener each). Both builds:
+	// play time and the Creative panel; the station adds dirty levels, round control and characters.
 	var/listening = 0
 	for(var/datum/babylon_tick_listener/listener as anything in tick_listeners)
 		if(listener.step && (COMSIG_BABYLON_WORLD_TICK in listener._signal_procs?[src]))
 			listening++
-	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 4 : 2)
+	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 5 : 2)
 	// A failing listener does not keep the listeners after it from their step.
 	var/datum/tick_source = new
 	var/datum/babylon_tick_listener/failing = new(tick_source, CALLBACK(src, PROC_REF(test_tick_listener_fails)))
