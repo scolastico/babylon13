@@ -167,6 +167,17 @@ prototype. When upstream changes a hook's surrounding procedure, review its
 execution order, not just whether Git merges the text cleanly. In particular,
 moving restoration after simulation startup reintroduces reactor/network bugs.
 
+Two SPLURT pull requests are merged here ahead of upstream: #1395 (rough player
+positions through the tgui panel's websocket relay: `tgstation.dme`,
+`config/splurt/game_options.txt`, `modular_zzplurt/.../atlas_position.dm`,
+`tgui/packages/tgui-panel/websocket/helpers.ts`) and #1396 (the stat panel's map
+entry links to the SPLURT atlas: `code/modules/client/client_procs.dm`
+`openWebMap`, `config/maps.txt` `webmap_url`s). They are not Babylon hooks: when
+upstream merges them, take upstream's version. Babylon worlds use
+`container/default-config`, which has no `maps.txt`, so their stat panel shows no
+map link; position updates use the config defaults (every 5 s while a player's
+own relay is connected, offset by up to 1 tile).
+
 ## Updating upstream
 
 ```sh
