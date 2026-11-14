@@ -10,6 +10,7 @@
 #define BABYLON_STATION
 #define ABSOLUTE_MINIMUM
 #include "tgstation.dme"
+#include "modular_babylon/__DEFINES/babylon.dm"
 #include "modular_babylon/code/world_flags.dm"
 #include "modular_babylon/code/state.dm"
 #include "modular_babylon/code/persistence.dm"

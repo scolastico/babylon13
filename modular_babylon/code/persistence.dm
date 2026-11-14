@@ -384,7 +384,7 @@
 	var/base = "data/babylon/saves/[generation]"
 	var/map_text = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]"
 	// 7: non-item contents of closets and crates are saved (restore_lost_supermatter()).
-	var/list/state = list("version" = 7, "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = records, "turfs" = turfs)
+	var/list/state = list("version" = BABYLON_STATE_VERSION, "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = records, "turfs" = turfs)
 	capture_session_state(state)
 	state["sun"] = list("azimuth" = SSsun.azimuth, "azimuth_mod" = SSsun.azimuth_mod, "base_rotation" = SSsun.base_rotation)
 	state["play_time"] = play_time

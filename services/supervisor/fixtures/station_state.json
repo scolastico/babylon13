@@ -1,0 +1,70 @@
+{
+	"version": 8,
+	"generation": "save-20261114-120000-3",
+	"next_id": 4,
+	"save_count": 3,
+	"records": [
+		{
+			"id": "bb1",
+			"type": "/obj/structure/closet/crate",
+			"parent": null,
+			"x": 120,
+			"y": 140,
+			"z": 2,
+			"fields": {"name": "crate", "opened": 0, "welded": 0},
+			"references": {}
+		},
+		{
+			"id": "bb2",
+			"type": "/obj/item/screwdriver",
+			"parent": "bb1",
+			"x": 120,
+			"y": 140,
+			"z": 2,
+			"fields": {"name": "screwdriver"},
+			"references": {}
+		},
+		{
+			"id": "bb3",
+			"type": "/obj/machinery/power/apc/auto_name/directional/north",
+			"parent": null,
+			"x": 80,
+			"y": 60,
+			"z": 3,
+			"fields": {"name": "Mining APC", "charge": 500},
+			"references": {"cell": null},
+			"has_terminal": 1
+		}
+	],
+	"turfs": [
+		{
+			"x": 120,
+			"y": 140,
+			"z": 2,
+			"temperature": 293.15,
+			"gas": {"temperature": 293.15, "volume": 2500, "moles": {"/datum/gas/oxygen": 21.8, "/datum/gas/nitrogen": 82.1}}
+		},
+		{
+			"x": 80,
+			"y": 60,
+			"z": 3,
+			"temperature": 180
+		}
+	],
+	"levels": [
+		{"file": "z2.dmm", "traits": {"Station": 1, "Up": 1, "Baseturf": "/turf/open/space"}},
+		{"file": "z3.dmm", "traits": {"Station": 1, "Down": 1, "Mining": 1}}
+	],
+	"map_config": {
+		"version": 1,
+		"map_name": "Fixture Station",
+		"map_path": "map_files/FixtureStation",
+		"map_file": ["FixtureStation_1.dmm", "FixtureStation_2.dmm"],
+		"traits": [{"Up": 1, "Baseturf": "/turf/open/space"}, {"Down": 1, "Mining": 1}],
+		"shuttles": {"cargo": "cargo_box", "ferry": "ferry_fancy", "whiteship": "whiteship_meta", "emergency": "emergency_meta"}
+	},
+	"round": {"started": 1, "station_time": 36000},
+	"characters": {},
+	"sun": {"azimuth": 90, "azimuth_mod": 1, "base_rotation": 0},
+	"play_time": 72000
+}
