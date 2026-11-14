@@ -28,7 +28,7 @@
 /obj/item/clothing/suit/armor/Initialize(mapload)
 	. = ..()
 	if(!allowed)
-		allowed = GLOB.security_vest_allowed
+		allowed = GLOB.security_vest_allowed.Copy()
 
 /obj/item/clothing/suit/armor/apply_fantasy_bonuses(bonus)
 	. = ..()

@@ -46,7 +46,7 @@
 	. = ..()
 	AddComponent(/datum/component/anti_magic, ALL, inventory_flags = ITEM_SLOT_OCLOTHING)
 	AddComponent(/datum/component/armor_plate, maxamount = 1, upgrade_item = /obj/item/drake_remains, armor_mod = /datum/armor/drake_empowerment, upgrade_prefix = "empowered")
-	allowed = GLOB.mining_suit_allowed
+	allowed = GLOB.mining_suit_allowed.Copy()
 
 /obj/item/clothing/head/hooded/berserker
 	name = "berserker helmet"

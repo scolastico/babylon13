@@ -178,6 +178,20 @@ upstream merges them, take upstream's version. Babylon worlds use
 map link; position updates use the config defaults (every 5 s while a player's
 own relay is connected, offset by up to 1 tile).
 
+Upstream bug fixes (not Babylon hooks, no `BABYLON13` marker; report them upstream and take
+upstream's version once it has its own fix): a shared list (a proc's `var/static/list` or a
+`GLOB` list) was assigned to a variable and then changed in place, so the change reached every
+user of the shared list. Each assignment now takes a `.Copy()`:
+`code/modules/antagonists/cult/cult_structure_altar.dm`, `cult_structure_archives.dm` and
+`cult_structure_forge.dm` (`options += extra_item` added the unlocked orb, medallion or cursed blade
+again on every use), `code/modules/fishing/fishing_portal_machine.dm` (the "all destinations"
+menu wrote the linked fishing spots into `GLOB.preset_fish_sources`),
+`code/modules/clothing/suits/armor.dm` (subtypes such as the durathread vest and the elder
+atmosian armor added their items to `GLOB.security_vest_allowed`, so to every armor vest) and
+`code/modules/mining/lavaland/mining_loot/berserker.dm` (the gatsu armor added the dragonslayer
+to `GLOB.mining_suit_allowed`). `tools/babylon/test_shared_list_aliases.py` fails when the
+pattern comes back; the cases it allows are listed there with their reason.
+
 ## Updating upstream
 
 ```sh

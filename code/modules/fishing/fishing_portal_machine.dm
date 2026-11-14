@@ -260,7 +260,7 @@
 		var/datum/fish_source/portal/syndicate = GLOB.preset_fish_sources[/datum/fish_source/portal/syndicate]
 		available_fish_sources[syndicate.radial_name] = syndicate
 	if(all_destinations)
-		available_fish_sources = GLOB.preset_fish_sources
+		available_fish_sources = GLOB.preset_fish_sources.Copy()
 	else for (var/datum/techweb/techweb as anything in SSresearch.techwebs)
 		var/get_fish_sources = FALSE
 		for(var/obj/machinery/rnd/server/server as anything in techweb.techweb_servers)
