@@ -16,7 +16,7 @@
  * - events that wreck the server or the round: space vines and fleshmind (unbounded spreading),
  *   mold, the emergency shuttle events (insurance, loan, catastrophe), dynamic tweaks, the dark
  *   matt-eor (a singularity), sandstorms, the ICARUS sunbeam and the armageddon CME (they sweep
- *   the whole level);
+ *   the whole level), the immovable rod (two rods make a singularity);
  * - admin-only events: weight 0 or max_occurrences 0 (tg's convention for "never random").
  */
 /proc/babylon_creative_event_blocked(datum/round_event_control/control)
@@ -63,6 +63,7 @@
 		/datum/round_event_control/sandstorm_classic,
 		/datum/round_event_control/icarus_sunbeam,
 		/datum/round_event_control/cme/armageddon,
+		/datum/round_event_control/immovable_rod,
 	)
 	return is_type_in_list(control, blocked)
 
@@ -102,13 +103,22 @@
 /// Round events started from Creative panels (weakrefs), ended when Creative is switched off.
 GLOBAL_LIST_EMPTY(babylon_creative_events)
 
-/// Ends every event started from a Creative panel that is still running.
+/// Ends every event started from a Creative panel that is still running. Events that already
+/// started get their end() first, which undoes their effects (wormholes, surge values, traits).
 /proc/babylon_creative_end_events()
 	for(var/datum/weakref/reference as anything in GLOB.babylon_creative_events)
 		var/datum/round_event/event = reference.resolve()
-		if(event && (event in SSevents.running))
-			event.processing = FALSE
-			event.kill()
+		if(!event || !(event in SSevents.running))
+			continue
+		event.processing = FALSE
+		// process() calls start() when activeFor == start_when and end() when it reaches end_when,
+		// raising activeFor after each step.
+		if(event.activeFor > event.start_when && event.activeFor <= event.end_when)
+			try
+				event.end()
+			catch(var/exception/error)
+				babylon_loop_failed("creative event end", error)
+		event.kill()
 	GLOB.babylon_creative_events.Cut()
 
 /// Events need SSevents to step them; the Babylon build switches it off (rules.dm).

@@ -38,8 +38,17 @@
  * - spreading cores that grow without end: mold, fleshmind, space vines, xeno weed nodes;
  * - shuttle consoles and shuttle dockers (they move shuttles and dock them anywhere), and
  *   CentCom, ERT and deathsquad ID cards;
- * - mobs that make more mobs or ghost-controlled bodies: legions, regal rats, broodmother
- *   spiders, spider egg clusters, xeno eggs, positronic brains;
+ * - mobs that make more mobs: legions, regal rats, broodmother spiders, spider egg clusters,
+ *   xeno eggs;
+ * - everything that polls ghosts (SSpolling) for a body or a role, found by a sweep of every
+ *   SSpolling/poll_ghost/ghost_direct_control/spirit_holding user in code/ and modular_*:
+ *   positronic brains, guardian creators, sentience potions, the monkey sentience helmet, the
+ *   soulscythe, soulstones, the loaded syndicate AI card, the experimental cloner, the
+ *   haunted cult blade, the talking claymore null rod, the disco necktie, xeno embryos,
+ *   empowered borer eggs, zombie tumours, the TerraGov reporter and the communications console
+ *   (its 911 call summons a ghost response team), the bitrunning quantum server, lavaland
+ *   elite tumours, ectoplasm ghost portals, the heretic lock tear, blob minions, bots (ghost
+ *   possession), star gazers, revenants, spriggans;
  * - Babylon's own builder drones (the drone builder session owns them);
  * - humans other than the plain NPC human and its species variants (no test dummies);
  * - the circuit board of anything blocked here (it builds the same machine).
@@ -74,6 +83,31 @@
 		/obj/structure/spider/eggcluster,
 		/obj/structure/alien/egg,
 		/obj/item/mmi/posibrain,
+		/obj/item/guardian_creator,
+		/obj/item/slimepotion/sentience,
+		/obj/item/clothing/head/helmet/monkey_sentience,
+		/obj/item/soulscythe,
+		/obj/item/soulstone,
+		/obj/item/aicard/syndie/loaded,
+		/obj/machinery/experimental_cloner,
+		/obj/item/melee/cultblade/haunted,
+		/obj/item/nullrod/claymore/talking,
+		/obj/item/clothing/neck/tie/disco,
+		/obj/item/organ/body_egg/alien_embryo,
+		/obj/item/organ/empowered_borer_egg,
+		/obj/item/organ/zombie_infection,
+		/obj/item/terragov_reporter,
+		/obj/machinery/computer/communications,
+		/obj/machinery/quantum_server,
+		/obj/structure/elite_tumor,
+		/obj/structure/ghost_portal,
+		/obj/structure/lock_tear,
+		/mob/living/basic/blob_minion,
+		/mob/living/basic/bot,
+		/mob/living/basic/heretic_summon/star_gazer,
+		/mob/living/basic/revenant,
+		/mob/living/basic/spriggan,
+		/obj/effect/immovablerod,
 	)
 	for(var/blocked in blocked_roots)
 		if(ispath(path, blocked))
@@ -430,8 +464,6 @@ GLOBAL_LIST_EMPTY(babylon_creative_mobs)
 		/mob/living/basic/axolotl,
 		/mob/living/basic/crab,
 		/mob/living/basic/butterfly,
-		/mob/living/basic/bot/cleanbot,
-		/mob/living/basic/bot/medbot,
 		/mob/living/basic/carp,
 		/mob/living/basic/bear,
 		/mob/living/basic/spider/giant,

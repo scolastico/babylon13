@@ -36,3 +36,14 @@
 	effect_demoralize(sm)
 	effect_explosion(sm)
 	qdel(sm)
+
+// Two immovable rods meeting collapse into a singularity. Here they just shatter. (The panel does
+// not offer the rod event either; wizards and admins can still throw rods.)
+/obj/effect/immovablerod/Bump(atom/clong)
+	if(babylon_delam_contained() && istype(clong, /obj/effect/immovablerod))
+		visible_message(span_danger("[src] collides with [clong] and both shatter!"))
+		do_smoke(2, src, get_turf(src))
+		qdel(clong)
+		qdel(src)
+		return
+	return ..()

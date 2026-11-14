@@ -127,8 +127,29 @@
 	var/datum/sm_delam/delam = GLOB.sm_delam_list[/datum/sm_delam/singularity]
 	var/datum/sm_delam/cascade = GLOB.sm_delam_list[/datum/sm_delam/cascade]
 	var/singularities = length(GLOB.singularities)
-	result["supermatter_contained"] = babylon_delam_contained() && !delam.effect_singulo(null) && !delam.effect_tesla(null) \
-		&& !cascade.can_select(null) && length(GLOB.singularities) == singularities
+	var/turf/far = babylon_creative_free_turf(locate(clamp(start.x + 8, 1, world.maxx), start.y, start.z)) || start
+	var/obj/machinery/power/supermatter_crystal/shard/shard = new(far)
+	cleanup += shard
+	var/made_singulo = delam.effect_singulo(shard)
+	var/datum/sm_delam/tesla = GLOB.sm_delam_list[/datum/sm_delam/tesla]
+	var/made_tesla = tesla.effect_tesla(shard)
+	result["supermatter_contained"] = babylon_delam_contained() && !made_singulo && !made_tesla && !QDELETED(shard) \
+		&& !cascade.can_select(shard) && length(GLOB.singularities) == singularities
+	// Outside creative and tutorial worlds the delaminations are untouched.
+	flags.creative = FALSE
+	var/kind = flags.kind
+	flags.kind = "world"
+	result["supermatter_normal_elsewhere"] = !babylon_delam_contained()
+	flags.kind = "tutorial"
+	result["supermatter_contained_in_tutorials"] = babylon_delam_contained()
+	flags.kind = kind
+	flags.creative = TRUE
+	result["rod_event_refused"] = istext(babylon_creative_run_event(body, "/datum/round_event_control/immovable_rod"))
+	result["blocked_ghost_pollers"] = babylon_creative_spawn_blocked(/obj/item/guardian_creator) && babylon_creative_spawn_blocked(/obj/item/slimepotion/sentience) \
+		&& babylon_creative_spawn_blocked(/obj/item/clothing/head/helmet/monkey_sentience) && babylon_creative_spawn_blocked(/obj/item/soulscythe) \
+		&& babylon_creative_spawn_blocked(/obj/item/aicard/syndie/loaded) && babylon_creative_spawn_blocked(/obj/machinery/experimental_cloner) \
+		&& babylon_creative_spawn_blocked(/obj/item/clothing/neck/tie/disco) && babylon_creative_spawn_blocked(/mob/living/basic/bot/cleanbot) \
+		&& babylon_creative_spawn_blocked(/obj/item/organ/zombie_infection) && babylon_creative_spawn_blocked(/obj/machinery/computer/communications)
 
 	// Mob cap: a world full of creative mobs refuses more.
 	var/list/mobs_before = GLOB.babylon_creative_mobs.Copy()
@@ -224,14 +245,23 @@
 	panel.handle_action(body, "godmode")
 	panel.handle_action(body, "noclip")
 	panel.event_times.Cut()
-	panel.handle_action(body, "run_event", list("path" = "/datum/round_event_control/communications_blackout"))
-	var/datum/round_event/lingering = length(SSevents.running) ? SSevents.running[length(SSevents.running)] : null
+	panel.handle_action(body, "run_event", list("path" = "/datum/round_event_control/wormholes"))
+	var/datum/round_event/wormholes/lingering = length(SSevents.running) ? SSevents.running[length(SSevents.running)] : null
+	var/list/holes = list()
+	if(istype(lingering))
+		lingering.start_when = lingering.activeFor
+		lingering.process() // starts it: the wormholes open
+		holes = lingering.wormholes?.Copy()
 	flags.creative = FALSE
 	creative_was_on = TRUE
 	tick_creative()
 	result["runtime_off_revokes"] = !HAS_TRAIT(body, TRAIT_GODMODE) && !body.babylon_creative_noclip && !body.incorporeal_move \
 		&& !babylon_creative_test_button(body)
-	result["runtime_off_ends_events"] = istype(lingering, /datum/round_event/communications_blackout) && !(lingering in SSevents.running)
+	var/holes_closed = length(holes) > 0
+	for(var/obj/effect/portal/wormhole/hole as anything in holes)
+		if(!QDELETED(hole))
+			holes_closed = FALSE
+	result["runtime_off_ends_events"] = istype(lingering) && !(lingering in SSevents.running) && holes_closed
 
 	flags.creative = was_creative
 	creative_was_on = was_on

@@ -176,6 +176,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	var/notice_id = 0
 	/// world.time of the last search (searches are at most one per BABYLON_CREATIVE_SEARCH_COOLDOWN).
 	var/last_search = -INFINITY
+	/// list(query, category) of a search that came in during the cooldown; run when it ends.
+	var/list/pending_search
 	/// world.time the owner was last seen gone from the world, for pruning.
 	var/left_at
 	/// Where the owner was before their last teleport, for "Back".
@@ -341,15 +343,16 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			babylon_creative_log(body, "healed themselves[was_dead ? " (revived)" : ""].")
 			return report(was_dead ? "Revived and fully healed." : "Fully healed.")
 		if("search")
-			if(world.time < last_search + BABYLON_CREATIVE_SEARCH_COOLDOWN)
-				return FALSE
-			last_search = world.time
-			search_query = copytext_char(trim("[params["query"]]"), 1, 65)
+			var/query = copytext_char(trim("[params["query"]]"), 1, 65)
 			var/category = "[params["category"]]"
-			search_category = (category in babylon_creative_category_ids()) ? category : "all"
-			var/list/answer = babylon_creative_search(search_query, search_category)
-			search_results = answer["results"]
-			search_capped = answer["capped"]
+			category = (category in babylon_creative_category_ids()) ? category : "all"
+			if(world.time < last_search + BABYLON_CREATIVE_SEARCH_COOLDOWN)
+				// Too soon: answer the latest request once the cooldown is over, so the panel never
+				// waits on a search that was dropped.
+				pending_search = list(query, category)
+				addtimer(CALLBACK(src, PROC_REF(run_pending_search)), last_search + BABYLON_CREATIVE_SEARCH_COOLDOWN - world.time, TIMER_UNIQUE | TIMER_OVERRIDE)
+				return FALSE
+			run_search(query, category)
 			return TRUE
 		if("spawn")
 			return act_spawn(body, params)
@@ -408,6 +411,21 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			babylon_creative_log(body, "took a tutorial wand at [babylon_creative_where(body)].")
 			return report("[capitalize(wand?.name || "tutorial wand")] is in your hand.")
 	return extension_action(body, action, params)
+
+/datum/babylon_creative_panel/proc/run_search(query, category)
+	last_search = world.time
+	pending_search = null
+	search_query = query
+	search_category = category
+	var/list/answer = babylon_creative_search(search_query, search_category)
+	search_results = answer["results"]
+	search_capped = answer["capped"]
+
+/datum/babylon_creative_panel/proc/run_pending_search()
+	if(!pending_search || QDELETED(src))
+		return
+	run_search(pending_search[1], pending_search[2])
+	SStgui.update_uis(src)
 
 /datum/babylon_creative_panel/proc/act_spawn(mob/living/body, list/params)
 	var/path = text2path("[params["path"]]")
