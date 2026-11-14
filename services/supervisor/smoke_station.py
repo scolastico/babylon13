@@ -44,6 +44,8 @@ def main():
     parser.add_argument("--startup-timeout", type=int, default=900)
     parser.add_argument("--multiz-map", default="icebox")
     parser.add_argument("--no-multiz", action="store_true")
+    parser.add_argument("--restore-maps", nargs="*", default=["tramstation"],
+                        help="maps saved, restarted and checked for their transports and links")
     parser.add_argument("--only-multiz", action="store_true", help="skip the --maps checks and the tutorial world")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
@@ -121,6 +123,18 @@ def main():
         result = topic(run["port"], run["secret"], action, payload, timeout=180)
         assert not result.get("error"), result
         return result
+
+    def values(run, proc, args=None):
+        """A DM test's entries without asserting them (facts to compare across a restart)."""
+        result = debug(run, "call", dict(target="session", proc=proc, args=args or []))["result"]
+        return {entry["entry"]: entry["value"] for entry in result["entries"]}
+
+    def compare_links(before, after):
+        """After a restart from a save: links are at least as complete as before it."""
+        for key in ("one_apc_per_area", "lift_buttons_linked", "trams_have_ids"):
+            assert after[key] or not before[key], (key, before, after)
+        assert after["transports"] == before["transports"], (before["transports"], after["transports"])
+        assert after["lift_buttons"] == before["lift_buttons"], (before, after)
 
     def checks(run, proc, values=None):
         result = debug(run, "call", dict(target="session", proc=proc, args=values or []))["result"]
@@ -210,10 +224,19 @@ def main():
                          "test_music_loops"):
                 entry[proc] = checks(run, proc)
             entry["test_non_persistent_never_saves"] = checks(run, "test_non_persistent_never_saves")
+            entry["test_save_controls"] = checks(run, "test_save_controls")
+            entry["test_manual_save_cooldown"] = checks(run, "test_manual_save_cooldown")
+            links_before = values(run, "test_station_links")
+            entry["links_fresh"] = links_before
             # A real station save (all persisted levels) through the control API, as the lobby asks.
             saved = topic(run["port"], run["secret"], "save", timeout=600)
             assert saved.get("ok"), saved
+            assert saved.get("reused_levels") == 0, saved
             entry["save"] = dict(saved, size=save_size(world, saved["generation"]))
+            # Nothing changed since: the next save reuses every level (this one is restored below).
+            saved = topic(run["port"], run["secret"], "save", timeout=600)
+            assert saved.get("ok") and saved.get("reused_levels") == saved.get("levels"), saved
+            entry["save_unchanged"] = dict(saved, size=save_size(world, saved["generation"]))
             entry["afk"] = bool(checks(run, "test_afk_policy"))
             entry["join_loading"] = bool(checks(run, "test_join_loading"))
             # Real DM world.Export -> HTTP ticket redemption, as client.New runs it.
@@ -234,6 +257,15 @@ def main():
             # The round's end saved nothing new: the next start resumes the save from before it.
             assert latest(world) == saved["generation"], "the round's end saved the world"
             entry["round_end_without_save"] = True
+            # The next start picks up from that save (before the round): the map comes back whole.
+            restarted = time.time()
+            run = wait_ready(world)
+            entry["restored_ready_seconds"] = round(time.time() - restarted)
+            links_after = values(run, "test_station_links")
+            entry["links_restored"] = links_after
+            compare_links(links_before, links_after)
+            assert links_after["one_apc_per_area"], links_after
+            stop(world)
         else:
             stop(world)
             # An ordinary stop of a persistent world saves it (all its levels).
@@ -250,6 +282,7 @@ def main():
         entry = dict(ready_seconds=round(time.time() - started))
         assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
         wait_round_running(run)
+        links_before = values(run, "test_station_links")
         first = checks(run, "test_multiz_save_roundtrip")
         entry["test_multiz_save_roundtrip"] = first
         entry["save"] = info(run)["last_save"]
@@ -264,9 +297,27 @@ def main():
         entry["restored_ready_seconds"] = round(time.time() - restarted)
         entry["restored_info"] = info(run)
         entry["test_multiz_restored"] = checks(run, "test_multiz_restored",
-                                               [first["markers"], first["station_time"], 1])
+                                               [first["markers"], first["station_time"], 1, first["planet_coords"]])
+        links_after = values(run, "test_station_links")
+        entry["links"] = dict(before=links_before, after=links_after)
+        compare_links(links_before, links_after)
+        assert links_after["lift_buttons_linked"], links_after
         stop(world)
         return entry
+
+    def run_restore(map_id):
+        """Saves a world on a map with transports (tram, lifts), restarts it and compares the links."""
+        world = api("create", dict(name="Station smoke restore %s" % map_id, visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        before = values(run, "test_station_links")
+        stop(world)
+        assert latest(world), "the stopped world was not saved"
+        run = wait_ready(world)
+        after = values(run, "test_station_links")
+        compare_links(before, after)
+        assert after["trams_have_ids"] and after["lift_buttons_linked"], after
+        stop(world)
+        return dict(before=before, after=after)
 
     def discard_child():
         """Kills a failed child so the next map can start (max_running_worlds is 1)."""
@@ -308,6 +359,9 @@ def main():
             tutorial["stopped_without_save"] = True
             report["tutorial"] = tutorial
             print(json.dumps({"tutorial": tutorial}), flush=True)
+        for map_id in args.restore_maps:
+            report.setdefault("restore", {})[map_id] = run_restore(map_id)
+            print(json.dumps({"restore": {map_id: report["restore"][map_id]}}), flush=True)
         if not args.no_multiz:
             report["multiz"] = {args.multiz_map: run_multiz(args.multiz_map)}
             print(json.dumps({"multiz": report["multiz"]}), flush=True)

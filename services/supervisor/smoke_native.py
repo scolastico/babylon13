@@ -125,6 +125,9 @@ def main():
         closets = call(run, "session", "test_closet_contents")
         closets = {entry["entry"]: entry["value"] for entry in closets["entries"]}
         assert closets and all(closets.values()), closets
+        controls = call(run, "session", "test_save_controls")
+        controls = {entry["entry"]: entry["value"] for entry in controls["entries"]}
+        assert controls and all(controls.values()), controls
         unsaved = call(run, "session", "test_non_persistent_never_saves")
         unsaved = {entry["entry"]: entry["value"] for entry in unsaved["entries"]}
         assert unsaved and all(unsaved.values()), unsaved
