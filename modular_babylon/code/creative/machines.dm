@@ -49,16 +49,15 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	if(!babylon_creative_machines_active())
 		examine_list += span_warning(BABYLON_CREATIVE_OFF_TEXT)
 		return
+	examine_list += span_notice(summary)
 	if(babylon_creative_enabled())
-		examine_list += span_notice("[summary] [EXAMINE_HINT(BABYLON_CREATIVE_GESTURE)] to change it.")
-	else
-		examine_list += span_notice(summary)
+		examine_list += span_notice("[EXAMINE_HINT(BABYLON_CREATIVE_GESTURE)] it to change its creative settings.")
 
 /// Screentip for the settings gesture, shown where settings may change.
 /proc/babylon_creative_context(list/context)
 	if(!babylon_creative_enabled())
 		return NONE
-	context[SCREENTIP_CONTEXT_CTRL_SHIFT_LMB] = "Creative settings"
+	context[SCREENTIP_CONTEXT_CTRL_SHIFT_LMB] = "Creative settings (Ctrl + Shift + click)"
 	return CONTEXTUAL_SCREENTIP_SET
 
 /// Settings may only change in a Creative world, by someone who can still reach the machine.
@@ -131,7 +130,11 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	for(var/reagent_type in GLOB.chemical_reagents_list)
 		if(babylon_creative_reagent_allowed(reagent_type))
 			var/datum/reagent/reagent = GLOB.chemical_reagents_list[reagent_type]
-			choices["[reagent.name]"] = reagent_type
+			// Several reagents share a name; a taken name gets the type appended.
+			var/key = "[reagent.name]"
+			if(key in choices)
+				key = "[reagent.name] ([reagent_type])"
+			choices[key] = reagent_type
 	return sortTim(choices, GLOBAL_PROC_REF(cmp_text_asc))
 
 /// Item types a creative disposal source never produces, nor lets out inside what it produces:
@@ -367,9 +370,10 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	if(babylon_creative_machines_active() && !(machine_stat & BROKEN))
 		creative_tick()
 	. = ..()
-	// Stay in the atmos machinery loop (a quiet canister normally drops out of it), so the
-	// source keeps refilling and the void keeps draining whatever the port pushes in.
-	if(!(machine_stat & BROKEN))
+	// While active, stay in the atmos machinery loop (a quiet canister normally drops out of
+	// it), so the source keeps refilling and the void keeps draining what the port pushes in.
+	// Inert, it leaves the loop like an ordinary canister.
+	if(babylon_creative_machines_active() && !(machine_stat & BROKEN))
 		return null
 
 /// One atmos tick of the infinite behaviour.

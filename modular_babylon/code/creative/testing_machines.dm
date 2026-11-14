@@ -37,6 +37,12 @@
 		lewd_listed = lewd_listed || babylon_creative_item_blocked(collars[entry])
 	result["item_search_by_name"] = by_name[crowbar_entry] == /obj/item/crowbar && found_iron && !lewd_listed
 	result["gas_rules"] = babylon_creative_gas_allowed(/datum/gas/nitrogen) && !babylon_creative_gas_allowed(/datum/gas) && babylon_creative_gas_choices()["Nitrogen"] == /datum/gas/nitrogen
+	var/list/reagent_choices = babylon_creative_reagent_choices()
+	var/allowed_reagents = 0
+	for(var/reagent_type in GLOB.chemical_reagents_list)
+		if(babylon_creative_reagent_allowed(reagent_type))
+			allowed_reagents++
+	result["reagent_choices_unique"] = length(reagent_choices) == allowed_reagents
 	result["reagent_rules"] = babylon_creative_reagent_allowed(/datum/reagent/water) && !babylon_creative_reagent_allowed(/datum/reagent) && !babylon_creative_reagent_allowed(/datum/reagent/drug/aphrodisiac)
 
 	for(var/world_state in list("creative", "tutorial", "off"))
@@ -112,6 +118,10 @@
 		void_canister.air_contents.adjust_gas(/datum/gas/nitrogen, 50)
 		void_canister.process_atmos()
 		result["canister_void_[world_state]"] = active ? void_canister.air_contents.total_moles() == 0 : void_canister.air_contents.total_moles() >= 50
+		// Inert canisters may leave the atmos loop; active ones stay in it.
+		var/obj/machinery/portable_atmospherics/canister/babylon_creative/quiet = new(place)
+		made += quiet
+		result["canister_atmos_loop_[world_state]"] = active ? isnull(quiet.process_atmos()) : quiet.process_atmos() == PROCESS_KILL
 
 		// Plumbing tanks.
 		var/obj/machinery/plumbing/babylon_creative_tank/tank = new(place)
@@ -261,7 +271,9 @@
 	GLOB.babylon_world.creative = TRUE
 	shown.Cut()
 	babylon_creative_examine(shown, "summary")
-	result["examine_on"] = length(shown) == 1 && findtext(shown[1], "summary") && findtext(shown[1], "Ctrl + Shift + click")
+	result["examine_on"] = length(shown) == 2 && findtext(shown[1], "summary") && findtext(shown[2], "Ctrl + Shift + click")
+	var/list/context = list()
+	result["screentip_on"] = babylon_creative_context(context) == CONTEXTUAL_SCREENTIP_SET && findtext(context[SCREENTIP_CONTEXT_CTRL_SHIFT_LMB], "Ctrl + Shift + click")
 	GLOB.babylon_world.creative = was_creative
 	GLOB.babylon_world.kind = was_kind
 	return result
