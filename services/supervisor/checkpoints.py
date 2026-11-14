@@ -8,6 +8,7 @@ import tempfile
 
 
 GENERATION = re.compile(r"save-(\d{8}-\d{6})-(\d+)")
+LEVEL_FILE = re.compile(r"z\d+\.dmm")
 
 
 class CheckpointError(ValueError):
@@ -20,6 +21,20 @@ def order(generation):
         raise CheckpointError("Invalid checkpoint generation")
     # Counters remain monotonic even across clock changes and within one second.
     return int(match[2]), match[1]
+
+
+def map_files(state):
+    """The map files a checkpoint's state.json says it has: map.dmm (Babylon), or one z<N>.dmm per
+    saved level (station worlds, state "levels"). Raises ValueError for a malformed level list."""
+    levels = state.get("levels")
+    if levels is None:
+        return ["map.dmm"]
+    if not isinstance(levels, list) or not levels:
+        raise ValueError("no levels")
+    names = [level.get("file") if isinstance(level, dict) else None for level in levels]
+    if not all(isinstance(name, str) and LEVEL_FILE.fullmatch(name) for name in names):
+        raise ValueError("invalid level file")
+    return names
 
 
 def atomic_json(path, value):
@@ -63,8 +78,11 @@ class Checkpoints:
         path = self.path(root, generation)
         try:
             state = json.loads((path / "state.json").read_text(encoding="utf-8"))
-            if state.get("generation") != generation or not (path / "map.dmm").is_file():
+            if state.get("generation") != generation:
                 raise ValueError()
+            for name in map_files(state):
+                if (path / name).is_symlink() or not (path / name).is_file():
+                    raise ValueError()
         except (OSError, ValueError, AttributeError):
             raise CheckpointError("Checkpoint is incomplete or damaged") from None
         return {"generation": generation, "objects": len(state.get("records", []))}

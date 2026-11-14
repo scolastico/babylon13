@@ -39,6 +39,30 @@ class Storage(unittest.TestCase):
         self.assertEqual(self.generations(), set(points[-4:]))
         self.assertEqual([p["generation"] for p in self.store.list(self.world)["checkpoints"]], points[-4:][::-1])
 
+    def station_point(self, count, files=("z2.dmm", "z3.dmm"), levels=("z2.dmm", "z3.dmm")):
+        generation = f"save-20261109-120000-{count}"
+        root = self.store.root(self.world)
+        path = self.store.path(root, generation)
+        path.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            (path / name).write_text("level")
+        atomic_json(path / "state.json", dict(generation=generation, records=[{"id": 1}, {"id": 2}],
+                                              levels=[{"file": name, "traits": {}} for name in levels]))
+        return generation
+
+    def test_station_checkpoints_have_a_file_per_level(self):
+        # Station saves have z<N>.dmm per level instead of map.dmm (fixtures/station_state.json).
+        complete = self.station_point(1)
+        missing = self.station_point(2, files=("z2.dmm",))
+        unsafe = self.station_point(3, levels=("../z2.dmm",))
+        root = self.store.root(self.world)
+        self.assertEqual(self.store.snapshot(root, complete), {"generation": complete, "objects": 2})
+        for broken in (missing, unsafe):
+            with self.assertRaises(CheckpointError):
+                self.store.snapshot(root, broken)
+        atomic_json(root / "latest.json", {"generation": complete})
+        self.assertEqual([p["generation"] for p in self.store.list(self.world)["checkpoints"]], [complete])
+
     def test_custom_retention_is_scoped_to_one_world(self):
         points = [seed(self.store, self.world, n) for n in range(1, 7)]
         other = "b" * 32
