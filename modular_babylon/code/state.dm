@@ -72,6 +72,24 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 /datum/babylon_save/proc/tick_players()
 	return
 
+/datum/babylon_save
+	/// One /datum/babylon_tick_listener per module that steps with the world tick.
+	var/list/tick_listeners = list()
+
+/// Runs a module's step on every COMSIG_BABYLON_WORLD_TICK. Each module listens through its own
+/// listener: a datum can hold only one handler per signal and source, so two modules registering
+/// the session itself would silently replace each other's handler.
+/datum/babylon_tick_listener
+	var/datum/callback/step
+
+/datum/babylon_tick_listener/New(datum/babylon_save/session, datum/callback/step)
+	src.step = step
+	RegisterSignal(session, COMSIG_BABYLON_WORLD_TICK, PROC_REF(on_world_tick))
+
+/datum/babylon_tick_listener/proc/on_world_tick(datum/babylon_save/source)
+	SIGNAL_HANDLER
+	step.Invoke()
+
 /// Reads babylon-afk-timeout into afk_timeout. FALSE (with boot_error set) when it is invalid.
 /datum/babylon_save/proc/read_afk_timeout()
 	var/raw_afk_timeout = world.params["babylon-afk-timeout"]

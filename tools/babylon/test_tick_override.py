@@ -2,8 +2,9 @@
 
 /datum/babylon_save/tick_world() is defined once, in the shared state.dm: it runs the build's player
 loop (tick_players(), one per build: session.dm or station_session.dm) and then sends
-COMSIG_BABYLON_WORLD_TICK. Modules register a handler for that signal. An override chain of
-tick_world (or tick_players) would again depend on the include order and on every link calling ..().
+COMSIG_BABYLON_WORLD_TICK. Modules step with it through their own /datum/babylon_tick_listener.
+An override chain of tick_world (or tick_players) would again depend on the include order and on
+every link calling ..().
 """
 from pathlib import Path
 import re
@@ -51,7 +52,17 @@ class TickOverrideTest(unittest.TestCase):
 
     def test_modules_register_for_the_tick(self):
         for name in ("play_time.dm", "station_round.dm"):
-            self.assertIn("COMSIG_BABYLON_WORLD_TICK", (MODULAR / "code" / name).read_text(), name)
+            self.assertIn("new /datum/babylon_tick_listener(", (MODULAR / "code" / name).read_text(), name)
+
+    def test_only_the_listener_registers_for_the_tick(self):
+        # A datum holds one handler per signal and source: two modules registering the session
+        # itself for the tick would silently replace each other (it happened once).
+        found = []
+        for path in MODULAR.rglob("*.dm"):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if "RegisterSignal(" in line and "COMSIG_BABYLON_WORLD_TICK" in line:
+                    found.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(found, ["modular_babylon/code/state.dm"])
 
     def test_the_scan_finds_both_syntaxes(self):
         # Guards the guard: a block-form override in a type block must be detected too.

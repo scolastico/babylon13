@@ -428,11 +428,10 @@
 
 /datum/babylon_save/New()
 	. = ..()
-	RegisterSignal(src, COMSIG_BABYLON_WORLD_TICK, PROC_REF(on_world_tick_round_control))
+	tick_listeners += new /datum/babylon_tick_listener(src, CALLBACK(src, PROC_REF(tick_round_control)))
 
 /// Every world tick: the Start round verb and the tutorial spawns.
-/datum/babylon_save/proc/on_world_tick_round_control(datum/babylon_save/source)
-	SIGNAL_HANDLER
+/datum/babylon_save/proc/tick_round_control()
 	if(draining)
 		return
 	for(var/client/player in GLOB.clients)

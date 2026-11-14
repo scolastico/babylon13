@@ -8,6 +8,6 @@
 #define BABYLON_STATION_STATE_VERSION 8
 
 /// Sent by /datum/babylon_save/tick_world() once a second, after the build's player loop:
-/// (datum/babylon_save/session). Modules register a handler on GLOB.babylon_save instead of
-/// overriding tick_world (guarded by tools/babylon/test_tick_override.py).
+/// (datum/babylon_save/session). Modules step with it through a /datum/babylon_tick_listener (state.dm)
+/// instead of overriding tick_world (guarded by tools/babylon/test_tick_override.py).
 #define COMSIG_BABYLON_WORLD_TICK "babylon_world_tick"

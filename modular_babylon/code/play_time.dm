@@ -19,11 +19,7 @@
 
 /datum/babylon_save/New()
 	. = ..()
-	RegisterSignal(src, COMSIG_BABYLON_WORLD_TICK, PROC_REF(on_world_tick_play_time))
-
-/datum/babylon_save/proc/on_world_tick_play_time(datum/babylon_save/source)
-	SIGNAL_HANDLER
-	count_play_time()
+	tick_listeners += new /datum/babylon_tick_listener(src, CALLBACK(src, PROC_REF(count_play_time)))
 
 /datum/babylon_save/proc/count_play_time()
 	var/now = REALTIMEOFDAY
