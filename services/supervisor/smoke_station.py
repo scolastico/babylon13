@@ -5,13 +5,18 @@ copied over babylon-station.dmb, creates a world on a catalog station map, joins
 station build's tests and stops it again. No player world is touched.
 
     python3 services/supervisor/smoke_station.py --dreamdaemon /opt/byond/bin/DreamDaemon \
-        --config-directory config --data-directory /tmp/smoke-station [--maps metastation boxstation]
+        --config-directory config --data-directory /tmp/smoke-station [--maps metastation boxstation] \
+        [--multiz-map icebox | --no-multiz]
 
-The first map gets the full checks, including round control: the round waits for its owner,
-starts on the owner's Start round and, once it ends, the world returns everyone to the lobby and
-exits without a save (the supervisor records an ordinary stop). Further maps (used to vet the map
-catalog) are only booted to the ready state, checked for the right map and late-join points, and
-stopped. Finally a tutorial-kind world on the first map checks that its round starts by itself.
+The first map gets the full checks, including a real save (timings and sizes are reported) and
+round control: the round waits for its owner, starts on the owner's Start round and, once it ends,
+the world returns everyone to the lobby and exits without a new save (the supervisor records an
+ordinary stop). Further maps (used to vet the map catalog) are only booted to the ready state,
+checked for the right map and late-join points, and stopped, which saves them. A tutorial-kind
+world on the first map checks that its round starts by itself and stops without a save. Finally
+the multi-z map (icebox) starts its round, places markers on the station level and on a level
+without the station trait, saves, stops, starts again from the save and checks that the markers,
+an emptied locker, an animal, the levels' traits and the running round came back.
 """
 import argparse
 import json
@@ -21,6 +26,7 @@ import shutil
 import socket
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from protocol import topic
@@ -36,6 +42,9 @@ def main():
     parser.add_argument("--child-port", type=int, default=1468)
     parser.add_argument("--maps", nargs="+", default=["metastation"])
     parser.add_argument("--startup-timeout", type=int, default=900)
+    parser.add_argument("--multiz-map", default="icebox")
+    parser.add_argument("--no-multiz", action="store_true")
+    parser.add_argument("--only-multiz", action="store_true", help="skip the --maps checks and the tutorial world")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     for ext in ("dmb", "rsc"):
@@ -84,8 +93,11 @@ def main():
         body = json.dumps(dict(secret=config["lobby_secret"], actor=actor, action=action, payload=payload or {})).encode()
         request = urllib.request.Request(f"http://127.0.0.1:{args.api_port}/api", data=body,
                                          headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.load(response)
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            raise RuntimeError("%s %s: %s" % (action, payload, error.read().decode(errors="replace"))) from None
         assert result.get("ok"), result
         return result
 
@@ -110,8 +122,8 @@ def main():
         assert not result.get("error"), result
         return result
 
-    def checks(run, proc):
-        result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
+    def checks(run, proc, values=None):
+        result = debug(run, "call", dict(target="session", proc=proc, args=values or []))["result"]
         values = {entry["entry"]: entry["value"] for entry in result["entries"]}
         assert values and all(values.values()), (proc, values)
         return values
@@ -119,7 +131,7 @@ def main():
     def stop(world):
         process = driver.processes.get(current()["id"])
         api("stop", {"world": world})
-        deadline = time.time() + 120
+        deadline = time.time() + 600
         while time.time() < deadline and current():
             time.sleep(1)
         assert not current(), "Child did not exit after a managed stop"
@@ -160,6 +172,19 @@ def main():
         assert ended, "The supervisor was not told about the round's end"
         return sorted(states)
 
+    def latest(world):
+        path = data / "worlds" / world / "data/babylon/saves/latest.json"
+        return json.loads(path.read_text())["generation"] if path.exists() else None
+
+    def save_size(world, generation):
+        directory = data / "worlds" / world / "data/babylon/saves" / generation
+        files = {path.name: path.stat().st_size for path in sorted(directory.iterdir())}
+        return dict(files=files, total_bytes=sum(files.values()))
+
+    def info(run):
+        result = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        return {e["entry"]: e["value"] for e in result["entries"]}
+
     catalog = {entry["id"]: entry for entry in json.loads((root / "_maps/babylon/catalog.json").read_text())["maps"]}
 
     def run_map(index, map_id):
@@ -184,6 +209,11 @@ def main():
             for proc in ("test_sfw_content", "test_showcase_visitor", "test_moderation", "test_play_time",
                          "test_music_loops"):
                 entry[proc] = checks(run, proc)
+            entry["test_non_persistent_never_saves"] = checks(run, "test_non_persistent_never_saves")
+            # A real station save (all persisted levels) through the control API, as the lobby asks.
+            saved = topic(run["port"], run["secret"], "save", timeout=600)
+            assert saved.get("ok"), saved
+            entry["save"] = dict(saved, size=save_size(world, saved["generation"]))
             entry["afk"] = bool(checks(run, "test_afk_policy"))
             entry["join_loading"] = bool(checks(run, "test_join_loading"))
             # Real DM world.Export -> HTTP ticket redemption, as client.New runs it.
@@ -201,11 +231,41 @@ def main():
             assert status["ready"] and not status["draining"], status
             entry["test_round_end_no_save"] = checks(run, "test_round_end_no_save")
             entry["round_end_states"] = wait_round_end_stop(world)
+            # The round's end saved nothing new: the next start resumes the save from before it.
+            assert latest(world) == saved["generation"], "the round's end saved the world"
+            entry["round_end_without_save"] = True
         else:
             stop(world)
-        saves = data / "worlds" / world / "data/babylon/saves"
-        assert not (saves / "latest.json").exists(), "a station world saved"
-        entry["stopped_without_save"] = True
+            # An ordinary stop of a persistent world saves it (all its levels).
+            generation = latest(world)
+            assert generation, "the stopped station world was not saved"
+            entry["stop_saved"] = save_size(world, generation)
+        return entry
+
+    def run_multiz(map_id):
+        """Saves a running round on a multi-z map, restarts the world from that save and checks it."""
+        started = time.time()
+        world = api("create", dict(name="Station smoke multi-z", visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        entry = dict(ready_seconds=round(time.time() - started))
+        assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+        wait_round_running(run)
+        first = checks(run, "test_multiz_save_roundtrip")
+        entry["test_multiz_save_roundtrip"] = first
+        entry["save"] = info(run)["last_save"]
+        stopped = time.time()
+        stop(world)
+        entry["stop_seconds"] = round(time.time() - stopped)
+        generation = latest(world)
+        assert generation and generation != first.get("generation"), generation
+        entry["stop_save"] = save_size(world, generation)
+        restarted = time.time()
+        run = wait_ready(world)
+        entry["restored_ready_seconds"] = round(time.time() - restarted)
+        entry["restored_info"] = info(run)
+        entry["test_multiz_restored"] = checks(run, "test_multiz_restored",
+                                               [first["markers"], first["station_time"], 1])
+        stop(world)
         return entry
 
     def discard_child():
@@ -223,7 +283,7 @@ def main():
     report = dict(passed=False, maps={})
     try:
         time.sleep(.5)
-        for index, map_id in enumerate(args.maps):
+        for index, map_id in enumerate([] if args.only_multiz else args.maps):
             try:
                 entry = run_map(index, map_id)
             except Exception as error:
@@ -234,16 +294,23 @@ def main():
                 discard_child()
             report["maps"][map_id] = entry
             print(json.dumps({map_id: entry}), flush=True)
-        # A tutorial-kind world starts its round by itself (no owner hold).
-        world = api("create", dict(name="Station smoke tutorial", visibility="private", map=args.maps[0]))["id"]
-        with service.lock, service.db:
-            service.db.execute("UPDATE worlds SET kind='tutorial', tutorial='smoke_tutorial' WHERE id=?", (world,))
-        run = wait_ready(world)
-        tutorial = dict(test_tutorial_round=checks(run, "test_tutorial_round"),
-                        world_flags=checks(run, "test_station_world_flags"))
-        stop(world)
-        report["tutorial"] = tutorial
-        print(json.dumps({"tutorial": tutorial}), flush=True)
+        if not args.only_multiz:
+            # A tutorial-kind world starts its round by itself (no owner hold).
+            world = api("create", dict(name="Station smoke tutorial", visibility="private", map=args.maps[0]))["id"]
+            with service.lock, service.db:
+                service.db.execute("UPDATE worlds SET kind='tutorial', tutorial='smoke_tutorial' WHERE id=?", (world,))
+            run = wait_ready(world)
+            tutorial = dict(test_tutorial_round=checks(run, "test_tutorial_round"),
+                            world_flags=checks(run, "test_station_world_flags"))
+            stop(world)
+            # A tutorial instance is not saved and is deleted once it stops.
+            assert not (data / "worlds" / world / "data/babylon/saves/latest.json").exists(), "a tutorial world saved"
+            tutorial["stopped_without_save"] = True
+            report["tutorial"] = tutorial
+            print(json.dumps({"tutorial": tutorial}), flush=True)
+        if not args.no_multiz:
+            report["multiz"] = {args.multiz_map: run_multiz(args.multiz_map)}
+            print(json.dumps({"multiz": report["multiz"]}), flush=True)
         report["passed"] = not any("failed" in entry for entry in report["maps"].values())
         (data / "result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
