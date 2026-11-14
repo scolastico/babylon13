@@ -532,6 +532,10 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	result["default_name_not_saved"] = defaults_left_out && !findtext(metadata(default_marked), "name =") && !findtext(metadata(default_plain), "name =") && initial(default_marked.name) != babylon_save_text(initial(default_marked.name))
 	qdel(default_marked)
 	qdel(default_plain)
+	// state.json's size check: exact for small files, and past 16 MB within DM's float rounding
+	// (a 41 234 754-byte text measured 41 234 756 summed and 41 234 768 on disk, 12 pieces),
+	// while a missing kilobyte still fails it.
+	result["state_size_check"] = babylon_written_size_matches(1000, 1000, 3) && !babylon_written_size_matches(999, 1000, 3) && !babylon_written_size_matches(1001, 1000, 3) && babylon_written_size_matches(41234768, 41234756, 12) && !babylon_written_size_matches(41234756 - 1024, 41234756, 12) && !babylon_written_size_matches(41234756 + 1024, 41234756, 12)
 	qdel(marked)
 	qdel(crate)
 	return result

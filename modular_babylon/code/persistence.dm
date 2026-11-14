@@ -764,13 +764,17 @@
 		CHECK_TICK
 	bytes += state_bytes
 	var/state_file_size = fexists("[base]/state.json") ? length(file("[base]/state.json")) : 0
-	if(state_file_size != state_bytes)
-		log_world("Babylon save [generation]: state.json is [num2text(state_file_size, 12)] bytes on disk for [num2text(state_bytes, 12)] bytes of text.")
 	// latest.json is committed only after every generation file is present and state.json was
-	// written whole: every append succeeded and the file holds (nearly) all of its text. Bytes
-	// that are not UTF-8 are dropped by the writer; saved text has its markers removed
-	// (babylon_save_text()), the 1% only covers anything left of that kind.
-	var/complete = !append_error && state_file_size >= state_bytes * 0.99
+	// written whole: every append succeeded and the file is as long as its text. The text is
+	// pure ASCII (json_encode escapes everything else), so the two are equal, but DM numbers
+	// are 32-bit floats: past 16 MB (2^24) every length, sum and file size is rounded to a few
+	// bytes. That rounding was the "+8 to 12 bytes" of a 40 to 50 MB state.json. The tolerance
+	// is twice its worst case: half a float step per piece added and for the file size.
+	var/size_matches = babylon_written_size_matches(state_file_size, state_bytes, length(pieces))
+	if(!size_matches)
+		log_world("Babylon save [generation]: state.json is [num2text(state_file_size, 12)] bytes on disk for [num2text(state_bytes, 12)] bytes of text in [length(pieces)] pieces.")
+		log_non_ascii_text(pieces, generation)
+	var/complete = !append_error && size_matches
 	if(append_error)
 		log_world("Babylon save [generation]: writing state.json failed: [append_error]")
 	for(var/z in levels)
@@ -790,6 +794,31 @@
 	// The simulation is paused for capture_ms: keep an eye on it for large (multi-level) maps.
 	log_world("Babylon saved [generation]: [length(levels)] level(s) ([length(reused_levels)] unchanged, reused), [objects] objects, [bytes] bytes; capture [checkpoint_capture_ms] ms, total [total_ms] ms.")
 	return list("ok" = TRUE, "generation" = generation, "objects" = objects, "capture_ms" = checkpoint_capture_ms, "total_ms" = total_ms, "levels" = length(levels), "reused_levels" = length(reused_levels), "bytes" = bytes, "level_costs" = level_costs)
+
+/// TRUE if a file of file_size holds text_bytes of ASCII text appended in piece_count pieces,
+/// within what DM's 32-bit float lengths and sums can tell apart (see save_world_impl()).
+/proc/babylon_written_size_matches(file_size, text_bytes, piece_count)
+	// Below 2^24 every length and sum is an exact integer.
+	var/tolerance = max(file_size, text_bytes) < 2 ** 24 ? 0 : (piece_count + 1) * max(file_size, text_bytes) / (2 ** 23)
+	return abs(file_size - text_bytes) <= tolerance
+
+/// Diagnostics for a state.json whose size is off: where its text holds characters outside
+/// ASCII (json_encode should leave none), with some context, for the first few hits.
+/datum/babylon_save/proc/log_non_ascii_text(list/pieces, generation)
+	var/regex/non_ascii = regex(@"[^\x00-\x7F]", "g")
+	var/hits = 0
+	for(var/index in 1 to length(pieces))
+		var/piece = pieces[index]
+		non_ascii.next = 1
+		while(hits < 5 && non_ascii.Find(piece))
+			hits++
+			var/at = non_ascii.index
+			var/context = copytext(piece, max(1, at - 40), min(length(piece) + 1, at + 40))
+			log_world("Babylon save [generation]: state.json piece [index] has character [text2ascii(piece, at)] at [num2text(at, 12)]: [json_encode(context)]")
+		if(hits >= 5)
+			break
+	if(!hits)
+		log_world("Babylon save [generation]: state.json text is all ASCII.")
 
 /// The generation whose files and records a level can reuse because nothing changed it since,
 /// or null to capture it. Babylon always captures its one level.
