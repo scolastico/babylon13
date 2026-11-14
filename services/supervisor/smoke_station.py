@@ -179,6 +179,7 @@ def main():
         if index == 0:
             assert topic(run["port"], run["secret"], "announce", {"message": "Smoke notice"}).get("ok"), "announce failed"
             entry["storyteller"] = checks(run, "test_station_storyteller")
+            entry["test_station_save_level"] = checks(run, "test_station_save_level")
             # The shared modules' tests (testing_common.dm), as the Babylon smoke runs them.
             for proc in ("test_sfw_content", "test_showcase_visitor", "test_moderation", "test_play_time",
                          "test_music_loops"):

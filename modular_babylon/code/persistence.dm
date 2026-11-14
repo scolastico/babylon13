@@ -318,7 +318,23 @@
 /datum/babylon_save/proc/restore_session_state(list/state)
 	return
 
-/datum/babylon_save/proc/save_world_impl()
+/// state.json "version" this build's checkpoints are written in. Babylon: BABYLON_STATE_VERSION
+/// (one map.dmm, records without z). The station build overrides it (BABYLON_STATION_STATE_VERSION).
+/datum/babylon_save/proc/save_format_version()
+	return BABYLON_STATE_VERSION
+
+/// The z-levels a checkpoint saves, in load order. Babylon: its one station level.
+/datum/babylon_save/proc/persisted_levels()
+	return list(station_z)
+
+/// The map file a saved level is written to inside its generation directory.
+/datum/babylon_save/proc/level_file(z)
+	return save_format_version() < BABYLON_STATION_STATE_VERSION ? "map.dmm" : "z[z].dmm"
+
+/// Saves one z-level: list("map_text" = its .dmm (a single-level TGM map), "records" = saved
+/// objects (state.json "records"), "turfs" = room air and temperature (state.json "turfs")).
+/// Records and turfs carry their z from BABYLON_STATION_STATE_VERSION on; Babylon's do not.
+/datum/babylon_save/proc/save_level(z, list/mobs_by_turf = checkpoint_mobs())
 	var/list/records = list()
 	var/list/turfs = list()
 	var/list/headers = list()
@@ -326,12 +342,11 @@
 	var/list/grid = list()
 	var/key_index = 1
 	var/list/empty_space_keys = list()
-	var/list/mobs_by_turf = checkpoint_mobs()
 	// All map changes and room air are exported; nested items and live settings go in state.json.
 	for(var/x in 1 to world.maxx)
 		grid += "\n([x],1,1) = {\"\n"
 		for(var/y in world.maxy to 1 step -1)
-			var/turf/tile = locate(x, y, station_z)
+			var/turf/tile = locate(x, y, z)
 			// Most of the 255x255 map is empty space. Reuse identical headers
 			// instead of inspecting and encoding its vars 60,000 times.
 			var/area/room = get_area(tile)
@@ -380,21 +395,43 @@
 			grid += "[key]\n"
 		grid += "\"}\n"
 		CHECK_TICK
+	if(save_format_version() >= BABYLON_STATION_STATE_VERSION)
+		for(var/list/record as anything in records)
+			record["z"] = z
+		for(var/list/turf_data as anything in turfs)
+			turf_data["z"] = z
+	return list("map_text" = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]", "records" = records, "turfs" = turfs)
+
+/datum/babylon_save/proc/save_world_impl()
+	var/list/records = list()
+	var/list/turfs = list()
+	// z (as text) -> the level's map text
+	var/list/level_maps = list()
+	var/list/mobs_by_turf = checkpoint_mobs()
+	for(var/z in persisted_levels())
+		var/list/level = save_level(z, mobs_by_turf)
+		records += level["records"]
+		turfs += level["turfs"]
+		level_maps["[z]"] = level["map_text"]
 	var/generation = "save-[time2text(world.realtime, "YYYYMMDD-hhmmss")]-[++save_count]"
 	var/base = "data/babylon/saves/[generation]"
-	var/map_text = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]"
 	// 7: non-item contents of closets and crates are saved (restore_lost_supermatter()).
-	var/list/state = list("version" = BABYLON_STATE_VERSION, "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = records, "turfs" = turfs)
+	var/list/state = list("version" = save_format_version(), "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = records, "turfs" = turfs)
 	capture_session_state(state)
 	state["sun"] = list("azimuth" = SSsun.azimuth, "azimuth_mod" = SSsun.azimuth_mod, "base_rotation" = SSsun.base_rotation)
 	state["play_time"] = play_time
 	checkpoint_capture_ms = (REALTIMEOFDAY - checkpoint_started) * 100
 	release_checkpoint()
 	CHECK_TICK
-	rustg_file_write(map_text, "[base]/map.dmm")
+	for(var/z_text in level_maps)
+		rustg_file_write(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")
 	rustg_file_write(json_encode(state), "[base]/state.json")
-	// latest.json is committed only after both generation files are present.
-	if(!fexists("[base]/map.dmm") || !fexists("[base]/state.json"))
+	// latest.json is committed only after every generation file is present.
+	var/complete = fexists("[base]/state.json")
+	for(var/z_text in level_maps)
+		if(!fexists("[base]/[level_file(text2num(z_text))]"))
+			complete = FALSE
+	if(!complete)
 		busy = FALSE
 		return list("error" = "Save files could not be written")
 	last_save = generation
@@ -586,7 +623,8 @@
 				restore_gas(mix, airs[index])
 		CHECK_TICK
 	for(var/list/record as anything in state["turfs"])
-		var/turf/tile = locate(record["x"], record["y"], station_z)
+		// Babylon's turfs carry no z: they are on the station level.
+		var/turf/tile = locate(record["x"], record["y"], isnull(record["z"]) ? station_z : record["z"])
 		tile.temperature = record["temperature"]
 		if(record["gas"] && isopenturf(tile))
 			var/turf/open/open = tile

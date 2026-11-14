@@ -27,10 +27,29 @@ SUBSYSTEM_DEF(babylon_station)
 	session.setup_round_control()
 	// No vote: the round starts with the world's fixed storyteller (storyteller.dm).
 	SSgamemode.voted_storyteller = babylon_world_storyteller()
-	// Nothing to restore yet; the master controller may start the simulation.
+	try
+		session.restore_station()
+	catch(var/exception/error)
+		session.boot_error = "Restore failed: [error]"
+		return SS_INIT_FAILURE
+	// Restored (or fresh): the master controller may start the simulation.
 	session.prepared = TRUE
 	INVOKE_ASYNC(session, TYPE_PROC_REF(/datum/babylon_save, station_boot))
 	return SS_INIT_SUCCESS
+
+/// Restores the world's station checkpoint (data/babylon/resume-state.json, staged by the
+/// supervisor) before the simulation starts. A no-op until station saves exist (Task D1).
+/datum/babylon_save/proc/restore_station()
+	return
+
+/// Station checkpoints: a z<N>.dmm per level, records and turfs with their z.
+/datum/babylon_save/save_format_version()
+	return BABYLON_STATION_STATE_VERSION
+
+/// The station's levels. Task D1 adds mining, space and ruin levels and leaves out CentCom,
+/// transit and reserved levels; station saves stay refused until then (save_world()).
+/datum/babylon_save/persisted_levels()
+	return SSmapping.levels_by_trait(ZTRAIT_STATION).Copy()
 
 /datum/babylon_save/proc/station_boot()
 	while(!babylon_world_ready())

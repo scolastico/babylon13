@@ -45,6 +45,27 @@
 	result["flags_restored"] = !babylon_storyteller_inert()
 	return result
 
+/// The save engine's per-level step in the station format (persistence.dm save_level()):
+/// every record and turf carries its level's z. Station saves stay refused (Task D1).
+/datum/babylon_save/proc/test_station_save_level()
+	var/list/result = list()
+	var/list/levels = persisted_levels()
+	result["station_levels_persisted"] = length(levels) && (station_z in levels)
+	result["station_format"] = save_format_version() == BABYLON_STATION_STATE_VERSION && level_file(station_z) == "z[station_z].dmm"
+	var/list/level = save_level(station_z)
+	result["map_text"] = findtext(level["map_text"], "//[DMM2TGM_MESSAGE]") == 1
+	var/list/records = level["records"]
+	var/list/turfs = level["turfs"]
+	result["records"] = length(records) > 0
+	result["turfs"] = length(turfs) > 0
+	var/all_z = TRUE
+	for(var/list/record as anything in records + turfs)
+		if(record["z"] != station_z)
+			all_z = FALSE
+			break
+	result["records_and_turfs_carry_z"] = all_z
+	return result
+
 /// Facts about the running station world for the smoke report (not asserted).
 /datum/babylon_save/proc/test_station_info()
 	var/list/result = list()
