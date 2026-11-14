@@ -61,20 +61,34 @@
  * unit (babylon_creative_item_allowed, machines.dm) and the tutorial's typepath fields and Give
  * item action (babylon_tutorial_type_allowed, tutorial/objects.dm) call it and only add their
  * own extra restrictions on top.
+ *
+ * It is two halves: babylon_creative_type_harmful() (what may not exist in a world at all) and
+ * babylon_creative_not_an_entry() (what is no spawnable entry: outside the roots, abstract, no
+ * name or icon, ABSTRACT items). Contents that another item makes for itself only need to pass
+ * the harmful half.
  */
 /proc/babylon_creative_spawn_blocked(path)
 	if(!ispath(path))
 		return TRUE
 	// Searches (the panel's index, the disposal unit's picker, the tutorial wand's type fields)
-	// ask about thousands of types; each answer is worked out once.
+	// ask about thousands of types; each answer is worked out once. The verdict depends only on
+	// the path and static data, so the cache never goes stale.
 	var/static/list/verdicts = list()
 	. = verdicts[path]
 	if(isnull(.))
-		. = babylon_creative_spawn_verdict(path)
+		. = babylon_creative_type_harmful(path) || babylon_creative_not_an_entry(path)
 		verdicts[path] = .
 
-/// babylon_creative_spawn_blocked() without the cache.
-/proc/babylon_creative_spawn_verdict(path)
+/**
+ * The "harmful" half of babylon_creative_spawn_blocked(): what may not exist in a world because of
+ * what it does (the blocked roots, ERP, debug/admin tools, builder drones, test humans, the circuit
+ * board of anything harmful). Checks of things that come inside another item (the creative disposal
+ * unit's contents check) use only this half: a revolver's internal cylinder or an implanter's
+ * implant is no spawnable entry of its own, but harmless where its item puts it.
+ */
+/proc/babylon_creative_type_harmful(path)
+	if(!ispath(path))
+		return TRUE
 	var/static/list/blocked_roots = list(
 		/obj/singularity,
 		/obj/energy_ball,
@@ -133,6 +147,28 @@
 	for(var/blocked in blocked_roots)
 		if(ispath(path, blocked))
 			return TRUE
+	if(babylon_type_is_erp(path))
+		return TRUE
+	var/text = lowertext("[path]")
+	if(findtext(text, "debug") || findtext(text, "admin"))
+		return TRUE
+	if(findtext(text, "/mob/living/basic/drone/babylon") == 1)
+		return TRUE
+	if(ispath(path, /mob/living/carbon/human) && path != /mob/living/carbon/human && !ispath(path, /mob/living/carbon/human/species))
+		return TRUE
+	if(ispath(path, /obj/item/circuitboard))
+		var/obj/item/circuitboard/board = path
+		var/builds = initial(board.build_path)
+		if(ispath(builds) && builds != path && babylon_creative_type_harmful(builds))
+			return TRUE
+	return FALSE
+
+/**
+ * The "not a spawnable entry" half of babylon_creative_spawn_blocked(): outside
+ * babylon_creative_spawn_roots(), abstract types, types without a name or icon, ABSTRACT items, and
+ * the circuit board of a machine that is no entry itself.
+ */
+/proc/babylon_creative_not_an_entry(path)
 	var/inside_roots = FALSE
 	for(var/root in babylon_creative_spawn_roots())
 		if(ispath(path, root))
@@ -147,15 +183,6 @@
 		var/obj/item/item_path = path
 		if(initial(item_path.item_flags) & ABSTRACT)
 			return TRUE
-	if(babylon_type_is_erp(path))
-		return TRUE
-	var/text = lowertext("[path]")
-	if(findtext(text, "debug") || findtext(text, "admin"))
-		return TRUE
-	if(findtext(text, "/mob/living/basic/drone/babylon") == 1)
-		return TRUE
-	if(ispath(path, /mob/living/carbon/human) && path != /mob/living/carbon/human && !ispath(path, /mob/living/carbon/human/species))
-		return TRUE
 	if(ispath(path, /obj/item/circuitboard))
 		var/obj/item/circuitboard/board = path
 		var/builds = initial(board.build_path)

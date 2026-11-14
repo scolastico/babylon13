@@ -140,18 +140,29 @@ GLOBAL_VAR(babylon_creative_test_answers)
 			choices[key] = reagent_type
 	return sortTim(choices, GLOBAL_PROC_REF(cmp_text_asc))
 
-/// Item types a creative disposal source never produces, nor lets out inside what it produces:
-/// everything the Creative panel may not spawn (babylon_creative_spawn_blocked, spawning.dm: the
-/// one spawn blocklist, ERP items included), plus what would harm the round when made every few
-/// seconds: grenades, bomb cores, tank transfer valves and brain holders.
-/proc/babylon_creative_item_blocked(item_type)
+/// What would harm the round when a creative disposal source made it every few seconds, on top of
+/// the panel's blocklist: grenades, bomb cores, tank transfer valves and brain holders.
+/proc/babylon_creative_automated_extra(item_type)
 	var/static/list/automated_extra = typecacheof(list(
 		/obj/item/bombcore,
 		/obj/item/grenade,
 		/obj/item/mmi,
 		/obj/item/transfer_valve,
 	))
-	return babylon_creative_spawn_blocked(item_type) || is_type_in_typecache(item_type, automated_extra)
+	return is_type_in_typecache(item_type, automated_extra)
+
+/// Item types a creative disposal source never produces: everything the Creative panel may not
+/// spawn (babylon_creative_spawn_blocked, spawning.dm: the one spawn blocklist, ERP items
+/// included), plus babylon_creative_automated_extra().
+/proc/babylon_creative_item_blocked(item_type)
+	return babylon_creative_spawn_blocked(item_type) || babylon_creative_automated_extra(item_type)
+
+/// Things a produced item may not carry inside it: only the harmful half of the blocklist
+/// (babylon_creative_type_harmful) plus babylon_creative_automated_extra(). The entry rules
+/// (abstract, ABSTRACT, no icon) do not apply to contents: a revolver's internal cylinder and an
+/// implanter's implant are ABSTRACT, and the item breaks without them.
+/proc/babylon_creative_inner_item_blocked(item_type)
+	return babylon_creative_type_harmful(item_type) || babylon_creative_automated_extra(item_type)
 
 /// Items a creative disposal source may produce: /obj/item types only (the panel's blocklist
 /// already refuses abstract types and ABSTRACT items), nothing babylon_creative_item_blocked().
@@ -623,7 +634,7 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	for(var/atom/movable/inner as anything in made.get_all_contents())
 		if(inner == made || QDELETED(inner))
 			continue
-		if(ismob(inner) || (isitem(inner) && babylon_creative_item_blocked(inner.type)))
+		if(ismob(inner) || (isitem(inner) && babylon_creative_inner_item_blocked(inner.type)))
 			qdel(inner)
 	creative_outputs += WEAKREF(made)
 	return made

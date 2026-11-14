@@ -166,6 +166,17 @@
 			var/obj/item/box = bin.creative_spawn()
 			made += box
 			result["disposal_inner_blocked_[world_state]"] = !!box && !length(box.get_all_contents_type(/obj/item/grenade))
+			// Parts an item makes for itself stay, even when they are no spawnable entry
+			// (ABSTRACT): a revolver's internal cylinder, an implanter's implant.
+			bin.creative_item = /obj/item/gun/ballistic/revolver
+			var/obj/item/gun/ballistic/revolver/revolver = bin.creative_spawn()
+			made += revolver
+			bin.creative_item = /obj/item/implanter/mindshield
+			var/obj/item/implanter/implanter = bin.creative_spawn()
+			made += implanter
+			result["disposal_inner_parts_kept_[world_state]"] = istype(revolver) && !QDELETED(revolver.magazine) && revolver.magazine.loc == revolver \
+				&& length(revolver.magazine.stored_ammo) > 0 && istype(implanter) && !QDELETED(implanter.imp) && implanter.imp.loc == implanter \
+				&& babylon_creative_spawn_blocked(/obj/item/ammo_box/magazine/internal/cylinder) && !babylon_creative_type_harmful(/obj/item/ammo_box/magazine/internal/cylinder)
 		else
 			result["disposal_source_[world_state]"] = !sent
 
