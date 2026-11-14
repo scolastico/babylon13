@@ -71,3 +71,16 @@ class Shutdown(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             stop_worlds(self.config, timeout=0, request=lambda *_: None)
         self.assertEqual(len(running_worlds(self.database)), 1)
+
+    def test_starting_wait_covers_the_station_startup_timeout(self):
+        self.world('a', 'alice')
+        with self.db:
+            self.db.execute("UPDATE runs SET state='starting'")
+        now = [0]
+        def sleep(seconds):
+            now[0] += 100  # a station world needs 450 s to come up
+            if now[0] >= 450:
+                with self.db:
+                    self.db.execute("DELETE FROM runs")
+        stop_worlds(dict(self.config, station_startup_timeout_seconds=600), timeout=180,
+                    request=lambda *_: None, sleep=sleep, clock=lambda: now[0])

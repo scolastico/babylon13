@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
+from constants import DEFAULTS
 from logstream import log
 
 
@@ -42,7 +43,9 @@ def stop_worlds(config, timeout=180, request=None, sleep=time.sleep, clock=time.
     log('Saving and stopping %d world(s)...' % len(worlds))
     # A child cannot checkpoint until restoration/initialization has finished.
     # The supervisor refuses new worlds and joins while shutting down (restart_countdown).
-    deadline = clock() + max(timeout, config.get('startup_timeout_seconds', 300))
+    # Station-build worlds start slower than Babylon ones; wait as long as the supervisor allows them.
+    deadline = clock() + max(timeout, config.get('startup_timeout_seconds', DEFAULTS['startup_timeout_seconds']),
+                             config.get('station_startup_timeout_seconds', DEFAULTS['station_startup_timeout_seconds']))
     while any(world['state'] == 'starting' for world in worlds):
         if clock() >= deadline:
             raise TimeoutError('A world is still starting; supervisor and children left running')
