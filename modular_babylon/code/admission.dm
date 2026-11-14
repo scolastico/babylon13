@@ -60,7 +60,7 @@
 	var/lobby = world.params["babylon-lobby"]
 	if(!lobby || !babylon_admit_notice)
 		return lobby
-	return "[lobby]?[list2params(list("babylon_notice" = babylon_admit_notice))]"
+	return "[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(list("babylon_notice" = babylon_admit_notice))]"
 
 /client/proc/babylon_admit(topic_data)
 	if(!world.params["babylon-world"])
@@ -74,7 +74,7 @@
 	// The supervisor refuses a redeem it only reaches after this wait, without spending the ticket
 	// (wait_seconds). Either way the player goes back to the lobby, which says why.
 	var/list/result = babylon_supervisor_request_within(list("action" = "redeem", "ticket" = ticket, "actor" = ckey, "wait_seconds" = BABYLON_SUPERVISOR_TIMEOUT / (1 SECONDS)))
-	if(result["timeout"] || findtext("[result["error"]]", "Admission timed out") == 1)
+	if(result["timeout"] || result["code"] == "admission_timeout")
 		babylon_admit_notice = "admission_timeout"
 		log_world("Babylon: admitting [ckey] timed out; sent back to the lobby.")
 	if(!result?["ok"] || result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))

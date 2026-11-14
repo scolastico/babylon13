@@ -28,13 +28,19 @@ from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
 from constants import DEFAULTS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_KINDS, TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_TITLE_MAX, WORLD_KIND, world_policy
-from tutorials import SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, seed_first_save, walk
+from tutorials import (SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, reconcile_store,
+                       seed_first_save, walk)
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
 
 class Denied(ValueError):
-    pass
+    """A refusal with a message for the player. code: a stable machine-readable reason the caller
+    can act on (sent as "code" next to "error")."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 # Link codes avoid look-alike characters (0/O, 1/I) because players type them.
@@ -200,6 +206,10 @@ class Driver:
         tutorial = self.field(world, "tutorial", "")
         data = self.data_root()
         if kind in TUTORIAL_KINDS:
+            # A save back swaps the pending snapshot outside the supervisor's lock: never stage it
+            # meanwhile (the supervisor's start refuses too, and save back waits for readers).
+            if tutorial in getattr(self, "busy_tutorials", ()):
+                raise Denied("An admin is saving this tutorial back right now. Try again in a moment.")
             try:
                 snapshot = tutorial_snapshot_dir(data, tutorial)
             except ValueError:
@@ -546,9 +556,27 @@ class Supervisor:
         # reserve them: authors with a submission being stored, tutorials being saved back.
         self.submitting = set()
         self.saving_back = set()
+        # The same for every other file copy or deletion: none of them runs under self.lock.
+        # tutorial id -> starts and copies reading its snapshot now (save back, delete and reject wait).
+        self.tutorial_readers = {}
+        # Worlds whose saves a rollback or reset is changing (their start waits).
+        self.world_busy = set()
+        # Owners with a "Copy to my worlds" being copied.
+        self.copying = set()
+        # Serializes checkpoint maintenance (retain, rollback) now that it runs without self.lock.
+        self.checkpoint_lock = threading.RLock()
+        # world id -> expected latest generation (or None): maintenance to run once self.lock is free.
+        self.pending_maintenance = {}
+        # Per request thread: world starts to launch once the request released self.lock.
+        self.local = threading.local()
+        # The driver refuses to stage a snapshot that is being saved back (Driver.restore_source).
+        self.driver.busy_tutorials = self.saving_back
         # Set by the Discord bot: called with a submitted tutorial (a dict) to tell the reviewers.
         self.tutorial_notify = None
-        self.tutorials.clean_trash()
+        with self.db:
+            known = {row[0] for row in self.db.execute("SELECT id FROM tutorials")}
+        for action, path in reconcile_store(self.tutorials, known):
+            log("Tutorial store at startup: %s (%s)" % (action, path))
         # Tutorial instances end with their run. One without a run is left from a supervisor that
         # stopped while it ran; tick's cleanup deletes it.
         with self.db:
@@ -611,12 +639,70 @@ class Supervisor:
             self.queue_world_deletion(world["id"], actor, "delete_world")
         return {"ok": True, "cleanup_pending": not self.finish_world_deletion(world["id"])}
 
-    def maintain_checkpoints(self, world, expected=None):
+    def world_files(self, actor, action, data):
+        """Checkpoint list, rollback and reset of a stopped world: checked and reserved under
+        self.lock (its start waits meanwhile), the files changed without it, recorded under it."""
+        with self.lock, self.db:
+            world = self.world(data.get("world"))
+            if self.role(actor, world) not in ("owner", "admin"):
+                raise Denied("Only the owner or a server administrator can do that")
+            if self.row("SELECT * FROM runs WHERE world=?", (world["id"],)):
+                raise Denied("Stop the world before browsing or restoring checkpoints" if action != "reset"
+                             else "Stop the world before resetting it")
+            if action == "rollback" and data.get("confirm_delete_newer") not in (True, 1):
+                raise Denied("Confirm that all newer checkpoints will be permanently deleted")
+            if action == "reset" and data.get("confirm") not in (True, 1, "1"):
+                raise Denied("Confirm that all saves of this world will be permanently deleted")
+            if world["id"] in self.world_busy:
+                raise Denied("This world's saves are being changed right now; try again in a moment")
+            self.world_busy.add(world["id"])
         try:
-            self.checkpoints.retain(world, expected)
-        except (CheckpointError, OSError, ValueError, KeyError):
-            # A damaged history must not prevent unrelated worlds from running.
-            log(f"Checkpoint maintenance failed for world {world}; history retained for inspection")
+            if action == "reset":
+                try:
+                    reset_world_data(Path(self.config["data_directory"]) / "worlds" / world["id"])
+                except (OSError, ValueError) as error:
+                    log("Resetting %s failed: %s" % (self.describe(world["id"]), error))
+                    raise Denied("The world's data could not be reset") from None
+                result = {"ok": True}
+            else:
+                try:
+                    with self.checkpoint_lock:
+                        self.checkpoints.retain(world["id"])
+                        if action == "checkpoints":
+                            return {"ok": True, **self.checkpoints.list(world["id"])}
+                        result = self.checkpoints.rollback(world["id"], data.get("generation"), data.get("expected_latest"))
+                except CheckpointError as error:
+                    raise Denied(str(error)) from None
+            with self.lock, self.db:
+                self.db.execute("DELETE FROM tickets WHERE world=?", (world["id"],))
+                if action == "rollback":
+                    self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
+                    self.audit(actor, "rollback:" + result["generation"], world["id"])
+                else:
+                    self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
+                    self.audit(actor, action, world["id"])
+            return result
+        finally:
+            with self.lock:
+                self.world_busy.discard(world["id"])
+
+    def maintain_checkpoints(self, world, expected=None):
+        """Queues checkpoint pruning for a world; run_maintenance() does it once self.lock is free
+        (it deletes generations, which can take a while)."""
+        with self.lock:
+            self.pending_maintenance[world] = expected
+
+    def run_maintenance(self):
+        """The queued checkpoint pruning (maintain_checkpoints), without self.lock."""
+        with self.lock:
+            pending, self.pending_maintenance = self.pending_maintenance, {}
+        for world, expected in pending.items():
+            try:
+                with self.checkpoint_lock:
+                    self.checkpoints.retain(world, expected)
+            except (CheckpointError, OSError, ValueError, KeyError):
+                # A damaged history must not prevent unrelated worlds from running.
+                log(f"Checkpoint maintenance failed for world {world}; history retained for inspection")
 
     def row(self, sql, args=()):
         result = self.db.execute(sql, args).fetchone()
@@ -903,6 +989,27 @@ class Supervisor:
                 "players": sum(len(json.loads(run["players"] or "[]")) for run in active)}
 
     def dispatch(self, actor, action, data):
+        """A lobby action. World starts it decided on are launched after it released self.lock
+        (launch()): copying a world's files must not hold up other worlds' logins."""
+        if getattr(self.local, "launches", None) is not None:
+            return self.dispatch_action(actor, action, data)
+        self.local.launches = []
+        failure = None
+        try:
+            result = self.dispatch_action(actor, action, data)
+        finally:
+            launches, self.local.launches = self.local.launches, None
+            for world, run in launches:
+                try:
+                    self.launch(world, run)
+                except Denied as error:
+                    failure = failure or error
+            self.tutorials.clean_trash()
+        if failure:
+            raise failure
+        return result
+
+    def dispatch_action(self, actor, action, data):
         if action == "summary":
             return self.summary()
         actor = ckey(actor)
@@ -916,6 +1023,8 @@ class Supervisor:
             return {"ok": True, "unlinked": bool(self.unlink_discord(actor))}
         if action in self.TUTORIAL_LOBBY_ACTIONS:
             return self.tutorial_lobby(actor, action, data)
+        if action in ("checkpoints", "rollback", "reset"):
+            return self.world_files(actor, action, data)
         with self.lock, self.db:
             if action == "list":
                 worlds = []
@@ -978,34 +1087,7 @@ class Supervisor:
                 if role not in ("owner", "admin"):
                     raise Denied("Only the owner or a server administrator can do that")
                 run = self.row("SELECT * FROM runs WHERE world=?", (world["id"],))
-                if action in ("checkpoints", "rollback"):
-                    if run:
-                        raise Denied("Stop the world before browsing or restoring checkpoints")
-                    try:
-                        self.checkpoints.retain(world["id"])
-                        if action == "checkpoints":
-                            return {"ok": True, **self.checkpoints.list(world["id"])}
-                        if data.get("confirm_delete_newer") not in (True, 1):
-                            raise Denied("Confirm that all newer checkpoints will be permanently deleted")
-                        result = self.checkpoints.rollback(world["id"], data.get("generation"), data.get("expected_latest"))
-                    except CheckpointError as error:
-                        raise Denied(str(error)) from None
-                    self.db.execute("DELETE FROM tickets WHERE world=?", (world["id"],))
-                    self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
-                    self.audit(actor, "rollback:" + result["generation"], world["id"])
-                    return result
-                elif action == "reset":
-                    if data.get("confirm") not in (True, 1, "1"):
-                        raise Denied("Confirm that all saves of this world will be permanently deleted")
-                    if run:
-                        raise Denied("Stop the world before resetting it")
-                    try:
-                        reset_world_data(Path(self.config["data_directory"]) / "worlds" / world["id"])
-                    except (OSError, ValueError) as error:
-                        log("Resetting %s failed: %s" % (self.describe(world["id"]), error))
-                        raise Denied("The world's data could not be reset") from None
-                    self.db.execute("DELETE FROM tickets WHERE world=?", (world["id"],))
-                elif action == "edit":
+                if action == "edit":
                     # Every setting, the creative/persistent flags included, needs a stopped world.
                     if run:
                         raise Denied("Stop the world before editing its settings")
@@ -1183,6 +1265,10 @@ class Supervisor:
                                 map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
                                 reviewed_by=None, source_world=world["id"], based_on=world.get("copied_from"))
                 meta = dict(tutorial, generation=data["generation"], based_on=self.based_on(tutorial))
+            # Reserved outside the transaction block, so a failing commit can't leak the reservation.
+            with self.lock:
+                if actor in self.submitting:
+                    raise Denied("A submission of yours is being stored right now; wait for it to finish")
                 self.submitting.add(actor)
             try:
                 started = time.monotonic()
@@ -1202,7 +1288,7 @@ class Supervisor:
                         self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, self.clock()))
                         self.audit(actor, "tutorial_submit:" + tid, world["id"])
                     except Exception:
-                        self.tutorials.remove("pending", tid)
+                        self.tutorials.remove("pending", tid, purge=False)
                         raise
             finally:
                 with self.lock:
@@ -1211,6 +1297,7 @@ class Supervisor:
             # The world's snapshot is no checkpoint: gone once copied or refused (the world deletes it too).
             if source is not None:
                 self.discard_tutorial_snapshot(source)
+            self.tutorials.clean_trash()
         self.notify_tutorial(tutorial)
         return {"ok": True, "tutorial": tid}
 
@@ -1253,7 +1340,13 @@ class Supervisor:
                     raise Denied("This tutorial is no longer pending, so it can't be changed from here")
                 if tutorial["id"] in self.saving_back:
                     raise Denied("This tutorial is being saved back right now; wait for it to finish")
+                if self.tutorial_readers.get(tutorial["id"]):
+                    # A play or edit world is staging the pending snapshot outside the lock.
+                    raise Denied("This tutorial is being started right now; save back again in a moment")
                 source = self.generation_source(world["id"], data.get("generation"))
+            with self.lock:
+                if tutorial["id"] in self.saving_back or self.tutorial_readers.get(tutorial["id"]):
+                    raise Denied("This tutorial is being started or saved back right now; try again in a moment")
                 self.saving_back.add(tutorial["id"])
             try:
                 started = time.monotonic()
@@ -1301,6 +1394,8 @@ class Supervisor:
     def tutorial_lobby(self, actor, action, data):
         """The lobby's tutorial actions: list, play, copy, and the admins' review."""
         admin = actor in self.admins
+        if action == "tutorial_copy":
+            return self.copy_tutorial(actor, data)
         cleanup = []
         try:
             with self.lock, self.db:
@@ -1315,10 +1410,6 @@ class Supervisor:
                     raise Denied("This tutorial does not exist or is no longer available")
                 if action == "tutorial_play":
                     return self.play_tutorial(actor, tutorial, cleanup)
-                if action == "tutorial_copy":
-                    if pending:
-                        raise Denied("Only published tutorials can be copied")
-                    return self.copy_tutorial(actor, tutorial)
                 if not admin:
                     raise Denied("Only server administrators can review tutorials")
                 if action == "tutorial_edit":
@@ -1328,6 +1419,9 @@ class Supervisor:
                 if action in ("tutorial_accept", "tutorial_reject", "tutorial_delete") and tutorial["id"] in self.saving_back:
                     # Its files are being replaced outside the lock (tutorial_save_back).
                     raise Denied("An admin is saving this tutorial back right now. Try again in a moment.")
+                if action in ("tutorial_reject", "tutorial_delete") and self.tutorial_readers.get(tutorial["id"]):
+                    # A world start or a copy is reading its snapshot outside the lock.
+                    raise Denied("This tutorial is being started or copied right now. Try again in a moment.")
                 if action in ("tutorial_reject", "tutorial_delete") and data.get("confirm") not in (True, 1, "1"):
                     raise Denied("Confirm that the tutorial will be permanently deleted")
                 if action == "tutorial_accept":
@@ -1351,7 +1445,8 @@ class Supervisor:
                     # Running play or edit instances keep going: their world was prepared from a copy.
                     self.db.execute("DELETE FROM tutorials WHERE id=?", (tutorial["id"],))
                     try:
-                        self.tutorials.remove(tutorial["status"], tutorial["id"])
+                        # Only renamed into the trash here; dispatch() empties it without the lock.
+                        self.tutorials.remove(tutorial["status"], tutorial["id"], purge=False)
                     except (OSError, TutorialError) as error:
                         log("Removing the files of tutorial %s failed: %s" % (tutorial["id"], error))
                 self.audit(actor, "%s:%s" % (action, tutorial["id"]), None)
@@ -1431,39 +1526,61 @@ class Supervisor:
                                        self.config["max_players_per_world"])
         return self.start_instance(world, actor, cleanup)
 
-    def copy_tutorial(self, actor, tutorial):
-        """A new creative, saved world of the player's own whose first checkpoint is the tutorial."""
-        self.require_discord(actor, "create")
-        if tutorial["map"] not in self.catalog:
-            raise Denied("This tutorial's map is no longer available")
-        if actor not in self.admins:
-            self.check_world_limits(actor, 1)
-        try:
-            snapshot = self.tutorials.directory("published", tutorial["id"]) / "save"
-            if not snapshot.is_dir() or snapshot.is_symlink():
-                raise TutorialError("The tutorial's snapshot is missing")
-        except TutorialError as error:
-            raise Denied(str(error)) from None
+    def copy_tutorial(self, actor, data):
+        """A new creative, saved world of the player's own whose first checkpoint is the tutorial.
+        Checked and reserved under self.lock, copied without it, the world row added under it."""
+        with self.lock, self.db:
+            if self.shutting_down:
+                raise Denied("The server is restarting. Try again in a minute.")
+            tutorial = self.tutorial_row(data.get("tutorial"))
+            if tutorial["status"] == "pending":
+                if actor not in self.admins:
+                    raise Denied("This tutorial does not exist or is no longer available")
+                raise Denied("Only published tutorials can be copied")
+            self.require_discord(actor, "create")
+            if tutorial["map"] not in self.catalog:
+                raise Denied("This tutorial's map is no longer available")
+            if actor in self.copying:
+                raise Denied("A copy of yours is being made right now; wait for it to finish")
+            if actor not in self.admins:
+                self.check_world_limits(actor, 1)
+            try:
+                snapshot = self.tutorials.directory("published", tutorial["id"]) / "save"
+                if not snapshot.is_dir() or snapshot.is_symlink():
+                    raise TutorialError("The tutorial's snapshot is missing")
+            except TutorialError as error:
+                raise Denied(str(error)) from None
+            self.copying.add(actor)
+            self.tutorial_readers[tutorial["id"]] = self.tutorial_readers.get(tutorial["id"], 0) + 1
         world_id = secrets.token_hex(16)
         root = Path(self.config["data_directory"]) / "worlds" / world_id
         try:
-            seed_first_save(snapshot, root / "data/babylon/saves")
-        except (OSError, TutorialError) as error:
-            log("Copying tutorial %s failed: %s" % (tutorial["id"], error))
-            shutil.rmtree(root, ignore_errors=True)
-            raise Denied("The tutorial could not be copied") from None
-        name = clean_text(tutorial["title"])[:60] or "Tutorial copy"
-        copied_from = json.dumps({k: tutorial[k] for k in ("id", "title", "author")})
-        try:
-            self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,"
-                            "creative,persistent,copied_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
-                             self.clock(), self.clock(), tutorial["map"], 1, 1, copied_from))
-            self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
-        except Exception:
-            # The row is rolled back; its seeded files must not stay behind without it.
-            shutil.rmtree(root, ignore_errors=True)
-            raise
+            try:
+                started = time.monotonic()
+                seed_first_save(snapshot, root / "data/babylon/saves")
+                log("Tutorial copy %s (to my worlds): %.1f s" % (tutorial["id"], time.monotonic() - started))
+            except (OSError, TutorialError) as error:
+                log("Copying tutorial %s failed: %s" % (tutorial["id"], error))
+                shutil.rmtree(root, ignore_errors=True)
+                raise Denied("The tutorial could not be copied") from None
+            finally:
+                self.release_reader(tutorial["id"])
+            name = clean_text(tutorial["title"])[:60] or "Tutorial copy"
+            copied_from = json.dumps({k: tutorial[k] for k in ("id", "title", "author")})
+            try:
+                with self.lock, self.db:
+                    self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,"
+                                    "creative,persistent,copied_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
+                                     self.clock(), self.clock(), tutorial["map"], 1, 1, copied_from))
+                    self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
+            except Exception:
+                # The row is rolled back; its seeded files must not stay behind without it.
+                shutil.rmtree(root, ignore_errors=True)
+                raise
+        finally:
+            with self.lock:
+                self.copying.discard(actor)
         return {"ok": True, "id": world_id, "name": name}
 
     def check_world_limits(self, owner, persistent, ignore=None):
@@ -1483,13 +1600,16 @@ class Supervisor:
             return None
 
     def start(self, world, actor=None):
-        # Finish any interrupted rollback before a child can read its startup files.
-        try:
-            self.checkpoints.retain(world["id"])
-        except CheckpointError as error:
-            raise Denied(str(error)) from None
+        """Decides on a world start under self.lock: the limits, a port and the committed launch
+        intent (a "starting" run). The files are prepared and the process started by launch(),
+        after the request released the lock (dispatch()), or at once when no request is around."""
         if world["map"] not in self.catalog:
             raise Denied("This world's map is no longer available")
+        if world["id"] in self.world_busy:
+            raise Denied("This world's saves are being changed right now; try again in a moment")
+        tutorial = world.get("tutorial") if world.get("kind") in TUTORIAL_KINDS else None
+        if tutorial and tutorial in self.saving_back:
+            raise Denied("An admin is saving this tutorial back right now. Try again in a moment.")
         runs = [dict(r) for r in self.db.execute("SELECT r.*, w.owner FROM runs r LEFT JOIN worlds w ON w.id=r.world")]
         # Admin worlds run outside the limit; they only need a free port.
         if world["owner"] not in self.admins and sum(r["owner"] not in self.admins for r in runs) >= self.config["max_running_worlds"]:
@@ -1509,15 +1629,53 @@ class Supervisor:
         self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
         # Commit the launch intent before starting a child so supervisor restarts can reconcile it.
         self.db.commit()
+        if tutorial:
+            # Save back, reject and delete wait until its snapshot was staged.
+            self.tutorial_readers[tutorial] = self.tutorial_readers.get(tutorial, 0) + 1
+        launches = getattr(self.local, "launches", None)
+        if launches is None:
+            self.launch(dict(world), run)
+        else:
+            launches.append((dict(world), run))
+
+    def release_reader(self, tutorial):
+        with self.lock:
+            left = self.tutorial_readers.get(tutorial, 0) - 1
+            if left > 0:
+                self.tutorial_readers[tutorial] = left
+            else:
+                self.tutorial_readers.pop(tutorial, None)
+
+    def launch(self, world, run):
+        """Prepares a world's files and starts its process for a run start() committed, without
+        self.lock (the copies take a while). On failure the run is removed again, and a tutorial
+        instance deleted (its row and files)."""
+        tutorial = world.get("tutorial") if world.get("kind") in TUTORIAL_KINDS else None
+        started = time.monotonic()
         try:
-            pid = self.driver.start(world, run)
-            self.db.execute("UPDATE runs SET pid=? WHERE id=?", (pid, run["id"]))
-            log("Starting %s on port %s (pid %s)" % (self.describe(world["id"]), port, pid))
+            try:
+                # Finish any interrupted rollback before a child can read its startup files.
+                with self.checkpoint_lock:
+                    self.checkpoints.retain(world["id"])
+                pid = self.driver.start(world, run)
+            finally:
+                if tutorial:
+                    self.release_reader(tutorial)
         except Exception as error:
+            reason = str(error) if isinstance(error, (CheckpointError, Denied)) else "Child startup failed; check the supervisor and daemon logs"
             log("Starting %s failed: %s" % (self.describe(world["id"]), error))
-            self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
-            self.db.commit()
-            raise Denied("Child startup failed; check the supervisor and daemon logs")
+            instance = world.get("kind") in TUTORIAL_KINDS
+            with self.lock, self.db:
+                self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+                if instance and self.row("SELECT 1 FROM worlds WHERE id=?", (world["id"],)):
+                    self.queue_world_deletion(world["id"], "supervisor", "tutorial_instance_failed")
+            if instance:
+                self.finish_world_deletion(world["id"])
+            raise Denied(reason) from None
+        with self.lock, self.db:
+            self.db.execute("UPDATE runs SET pid=? WHERE id=?", (pid, run["id"]))
+        log("Starting %s on port %s (pid %s; prepared in %.1f s)" % (self.describe(world["id"]), run["port"], pid,
+                                                                     time.monotonic() - started))
 
     def child(self, run_id, secret):
         run = self.row("SELECT * FROM runs WHERE id=?", (run_id,))
@@ -1527,7 +1685,7 @@ class Supervisor:
 
     # Seconds before the world's own deadline at which a redeem gives up (so the world never hears
     # a late success it has already stopped waiting for).
-    REDEEM_MARGIN = 2
+    REDEEM_MARGIN = 5
 
     def redeem(self, run_id, secret, token, actor, received=None, patience=None):
         """Admits a ticket. received: when the request arrived (time.monotonic()); patience: the
@@ -1541,7 +1699,7 @@ class Supervisor:
                 patience = None
             if received is not None and patience and time.monotonic() > received + patience - self.REDEEM_MARGIN:
                 log("A redeem for %s waited too long for the supervisor; the ticket stays valid" % self.describe(run["world"]))
-                raise Denied("Admission timed out; join again from the lobby")
+                raise Denied("Admission timed out; join again from the lobby", code="admission_timeout")
             ticket = self.row("SELECT * FROM tickets WHERE hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
             if not ticket or ticket["run"] != run_id or ticket["world"] != run["world"] or ticket["ckey"] != ckey(actor) or ticket["expires"] <= self.clock() or run["state"] != "running":
                 raise Denied("Admission expired or invalid; reconnect through the lobby")
@@ -1646,6 +1804,12 @@ class Supervisor:
             self.finish_world_deletion(run["world"])
 
     def tick(self):
+        try:
+            self.tick_runs()
+        finally:
+            self.run_maintenance()
+
+    def tick_runs(self):
         self.cleanup_unused_worlds()
         # Never hold the DB lock during network requests: a child may be redeeming a ticket.
         with self.lock:
@@ -1850,6 +2014,8 @@ def serve(config, service=None):
                 import sys
                 error = sys.exc_info()[1]
                 result = {"ok": False, "error": str(error) if isinstance(error, Denied) else "Invalid request"}
+                if isinstance(error, Denied) and error.code:
+                    result["code"] = error.code
                 code = 403
             except Exception:
                 result, code = {"ok": False, "error": "Supervisor error; consult server logs"}, 500

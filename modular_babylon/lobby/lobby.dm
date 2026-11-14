@@ -192,8 +192,12 @@ var/global/list/lobby_config
 #define LOBBY_API_TIMEOUT 600
 
 /// One supervisor request in the background: world.Export has no timeout of its own.
+/// After this long (deciseconds) a request that never answered no longer blocks new ones.
+#define LOBBY_STALLED_CAP 3000
+
 /datum/lobby_request
 	var/url
+	var/started
 	var/done = FALSE
 	var/list/response
 
@@ -205,6 +209,7 @@ var/global/list/lobby_config
 /proc/lobby_export_start(url)
 	var/datum/lobby_request/request = new
 	request.url = url
+	request.started = world.time
 	spawn(0)
 		request.perform()
 	return request
@@ -225,6 +230,9 @@ var/global/list/lobby_config
 /mob/lobby/proc/api(action, list/payload)
 	var/list/query = list("secret" = lobby_config["secret"], "actor" = ckey, "action" = action, "payload" = json_encode(payload || list()))
 	var/list/response
+	// A request that never comes back is given up after LOBBY_STALLED_CAP: the lobby asks anew.
+	if(stalled_request && world.time - stalled_request.started > LOBBY_STALLED_CAP)
+		stalled_request = null
 	if(!stalled_request || stalled_request.done)
 		var/datum/lobby_request/request = lobby_export_start("[lobby_config["api"]]/api?[list2params(query)]")
 		response = lobby_await(request)

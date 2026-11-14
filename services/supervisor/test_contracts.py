@@ -197,6 +197,12 @@ class WorldPolicy(unittest.TestCase):
         flags = (DM / "world_flags.dm").read_text(encoding="utf-8")
         self.assertRegex(flags, r"(?m)^/proc/babylon_world_saves_characters\(for_tutorial = FALSE\)\n\treturn !for_tutorial && !!GLOB\.babylon_world\?\.saves_characters\(\)$")
 
+    def test_admission_timeout_code_matches(self):
+        # The world tells a bounced player why by the supervisor's refusal code, not its wording.
+        supervisor = (Path(__file__).parent / "supervisor.py").read_text(encoding="utf-8")
+        self.assertIn('code="admission_timeout"', supervisor)
+        self.assertIn('result["code"] == "admission_timeout"', (DM / "admission.dm").read_text(encoding="utf-8"))
+
     def test_tutorial_snapshot_marker_matches(self):
         text = (DM / "persistence.dm").read_text(encoding="utf-8")
         self.assertIn('rustg_file_write("1", "[base]/%s")' % TUTORIAL_SNAPSHOT_MARKER, text)
