@@ -308,8 +308,9 @@
 	var/datum/gas_mixture/gas = tile.return_air()
 	return gas.to_string()
 
-/datum/babylon_save/proc/metadata(atom/thing, is_turf = FALSE, with_id = TRUE)
-	var/list/entries = list()
+/// The fields of this atom's type that go into a saved map (structural_fields, map_link_fields and
+/// type_metadata_fields), cached per type. The area tools' copies use the same list.
+/datum/babylon_save/proc/map_fields(atom/thing)
 	var/list/fields = metadata_fields_by_type[thing.type]
 	if(isnull(fields))
 		fields = list()
@@ -317,6 +318,23 @@
 			if(field in thing.vars)
 				fields += field
 		metadata_fields_by_type[thing.type] = fields
+	return fields
+
+/// The extra_fields of this atom's type (settings applied after the object exists: creative
+/// machine settings, pump and filter modes ...), cached per type. The area tools' copies use them.
+/datum/babylon_save/proc/setting_fields(atom/thing)
+	var/list/fields = setting_fields_by_type[thing.type]
+	if(isnull(fields))
+		fields = list()
+		for(var/field in extra_fields)
+			if(field in thing.vars)
+				fields += field
+		setting_fields_by_type[thing.type] = fields
+	return fields
+
+/datum/babylon_save/proc/metadata(atom/thing, is_turf = FALSE, with_id = TRUE)
+	var/list/entries = list()
+	var/list/fields = map_fields(thing)
 	if(!is_turf && with_id)
 		entries += "babylon_save_id = \"[assign_id(thing)]\""
 	// Most turfs keep their type's values: their entry depends only on the type and the air,

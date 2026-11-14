@@ -545,3 +545,59 @@
 	babylon_area_test_unlink_decks(linked_decks)
 	babylon_area_test_cleanup(setup, made)
 	return result
+
+/// Copy and paste keep what a save keeps: a creative canister's settings (extra_fields), a door
+/// button's link to its blast door (map link fields), and they leave out what a save leaves out
+/// (babylon_skip_save()).
+/datum/babylon_save/proc/test_area_tools_copy_settings()
+	var/list/result = list()
+	var/list/rect = area_test_rect()
+	var/z = rect[5]
+	var/x1 = rect[1]
+	var/y1 = rect[2]
+	var/datum/babylon_area_session/setup
+	var/list/made = list()
+	var/link_id = "babylon_clip_test"
+	try
+		setup = area_test_setup(rect)
+		var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister = new(locate(x1, y1, z))
+		made += canister
+		canister.set_creative_settings("source", /datum/gas/nitrogen, 2345)
+		canister.anchored = TRUE
+		var/obj/machinery/button/door/button = new(locate(x1 + 1, y1, z))
+		made += button
+		button.id = link_id
+		var/obj/machinery/door/poddoor/blast_door = new(locate(x1 + 2, y1, z))
+		made += blast_door
+		blast_door.id = link_id
+		var/obj/item/babylon_test_unsaved/unsaved = new(locate(x1 + 3, y1, z))
+		made += unsaved
+		unsaved.anchored = TRUE
+		result["unsaved_prop_opts_out"] = unsaved.babylon_skip_save()
+
+		var/datum/babylon_area_session/session = babylon_area_test_session("copy_settings")
+		session.select(x1, y1, z, x1 + 3, y1, z)
+		session.copy(null)
+		session.arm_paste()
+		session.click(locate(x1 + 8, y1 + 2, z))
+		result["paste_ok"] = session.paste(null)["ok"]
+		var/obj/machinery/portable_atmospherics/canister/babylon_creative/pasted_canister = locate() in locate(x1 + 8, y1 + 2, z)
+		result["canister_settings_kept"] = !!pasted_canister && pasted_canister.creative_mode == "source" \
+			&& pasted_canister.creative_gas == /datum/gas/nitrogen && pasted_canister.creative_pressure == 2345
+		var/obj/machinery/button/door/pasted_button = locate() in locate(x1 + 9, y1 + 2, z)
+		var/obj/item/assembly/control/control = pasted_button?.device
+		result["button_link_kept"] = pasted_button?.id == link_id && istype(control) && control.id == link_id
+		var/obj/machinery/door/poddoor/pasted_door = locate() in locate(x1 + 10, y1 + 2, z)
+		result["door_link_kept"] = pasted_door?.id == link_id
+		result["skipped_atom_not_copied"] = !(locate(/obj/item/babylon_test_unsaved) in locate(x1 + 11, y1 + 2, z)) && !QDELETED(unsaved)
+		if(pasted_canister)
+			pasted_canister.air_contents.remove(pasted_canister.air_contents.total_moles())
+		session.undo(null)
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_area_tools_copy_settings failed: [error] ([error.file]:[error.line])")
+	for(var/obj/machinery/portable_atmospherics/portable in made)
+		if(!QDELETED(portable))
+			portable.air_contents.remove(portable.air_contents.total_moles())
+	babylon_area_test_cleanup(setup, made)
+	return result

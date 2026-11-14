@@ -37,6 +37,7 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	var/list/programs_to_resume = list()
 	var/list/capture_fields_by_type = list()
 	var/list/metadata_fields_by_type = list()
+	var/list/setting_fields_by_type = list()
 	var/next_autosave_at = 0
 	var/autosave_countdown_active = FALSE
 	var/list/autosave_notices = list()

@@ -482,7 +482,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	/// One entry per tile, column by column from the south-west corner:
 	/// list("turf" = "path{vars}", "objects" = list("path{vars}", ...), "space" = TRUE/FALSE).
 	var/list/tiles = list()
-	/// Clip tag => list("reagents" = list(list(type, volume)), "contents" = nested entries).
+	/// Clip tag => list("fields" = settings (babylon_area_capture_settings),
+	/// "reagents" = list(list(type, volume)), "contents" = nested entries).
 	var/list/extras = list()
 	/// Tutorial objects: list("dx", "dy", "type", "id", "settings", "dir", "pixel_x", "pixel_y", "npc").
 	var/list/tutorial = list()
@@ -527,7 +528,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				if(!babylon_area_copyable(thing, tile))
 					continue
 				var/tag = "[++GLOB.babylon_area_next_tag]"
-				objects += "[thing.type][babylon_area_metadata(thing, tag)]"
+				objects += "[thing.type][babylon_area_metadata(thing, tag, faithful)]"
 				var/list/extra = babylon_area_capture_extra(thing, clip)
 				if(extra)
 					clip.extras[tag] = extra
@@ -544,7 +545,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		BABYLON_AREA_TICK
 	return clip
 
-/// Objects a copy takes along (not hidden effects, projectiles, holograms or tutorial NPC gear).
+/// Objects a copy takes along: not hidden effects, projectiles or holograms, nor anything a save
+/// leaves out (babylon_skip_save(), persistence.dm: tutorial NPC gear and whatever else opts out).
 /proc/babylon_area_copyable(obj/thing, turf/tile)
 	if(QDELETED(thing) || thing.loc != tile)
 		return FALSE
@@ -554,7 +556,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		return FALSE
 	if(thing.flags_1 & HOLOGRAM_1)
 		return FALSE
-	if(babylon_tutorial_skip_save(thing))
+	if(thing.babylon_skip_save())
 		return FALSE
 	if(babylon_area_protected_object(thing))
 		return FALSE
@@ -565,31 +567,42 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			return FALSE
 	return TRUE
 
-/// The map vars of an object or turf ("{\n\tdir = 4;\n\t...}"): its build state (directions,
-/// pipe layers, cable links, access ...) and, for floors, their air.
-/proc/babylon_area_metadata(atom/thing, tag)
-	var/static/list/fields = list("dir", "name", "desc", "pixel_x", "pixel_y", "pixel_z", "alpha", "color", "anchored", "amount", "icon_state", "cable_layer", "cable_color", "linked_dirs", "banned_links", "piping_layer", "pipe_color", "initialize_directions", "flipped", "welded", "opened", "locked", "hide", "id_tag", "door_id", "mineral", "glass", "heat_proof_finished", "state", "d_state", "req_access", "req_one_access", "closeOtherId", "pipe_layer", "p_init_dir", "rotation_angle", "can_rotate")
+/// Fields a copy writes into its map on top of the save engine's map fields: state that a save
+/// keeps in its records, but that a pasted object must have while it initializes.
+#define BABYLON_AREA_CLIP_FIELDS list("desc", "color", "opened", "locked")
+
+/// The map vars of an object or turf ("{\n\tdir = 4;\n\t...}"), from the save engine's own field
+/// list (babylon_save.map_fields(): build state, pipe layers, cable links, access, and the map link
+/// fields that link buttons, doors, cameras, radios ...) plus BABYLON_AREA_CLIP_FIELDS, and for
+/// floors their air. Only values that differ from the type's are written. faithful (an undo
+/// snapshot): an APC keeps its areastring; a copy builds its APC for the area it lands in.
+/proc/babylon_area_metadata(atom/thing, tag, faithful = FALSE)
+	var/datum/babylon_save/engine = GLOB.babylon_save
 	var/list/entries = list()
 	if(tag)
 		entries += "babylon_clip_tag = \"[tag]\""
-	for(var/field in fields)
+	for(var/field in engine.map_fields(thing) | BABYLON_AREA_CLIP_FIELDS)
 		if(!(field in thing.vars))
+			continue
+		if(field == "areastring" && !faithful)
 			continue
 		if(field == "icon_state" && thing.smoothing_flags)
 			continue
 		if(!issaved(thing.vars[field]))
 			continue
 		var/value = thing.vars[field]
+		if(babylon_save_keeps_default_text(thing, field, value))
+			continue
 		if(islist(value))
 			var/list/values = value
-			if(!length(values) || !(field in list("req_access", "req_one_access")))
+			if(!length(values) || !(field in engine.list_map_fields))
 				continue
 		else
 			if(!(isnull(value) || isnum(value) || istext(value) || ispath(value)))
 				continue
 			if(value == initial(thing.vars[field]))
 				continue
-		entries += "[field] = [tgm_encode(value)]"
+		entries += "[field] = [tgm_encode(istext(value) ? babylon_save_text(value) : value)]"
 	if(isopenturf(thing) && !isspaceturf(thing))
 		var/turf/open/open = thing
 		var/datum/gas_mixture/gas = open.return_air()
@@ -597,12 +610,48 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			entries += "initial_gas_mix = [tgm_encode(gas.to_string())]"
 	return length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
 
+/// An object's settings that are applied once it exists, as a restore applies them: the save
+/// engine's extra_fields (babylon_save.setting_fields(): creative machine settings, pump, filter and
+/// scrubber modes ...) that differ from the type's. Null if there are none.
+/proc/babylon_area_capture_settings(obj/thing)
+	var/datum/babylon_save/engine = GLOB.babylon_save
+	var/list/settings = list()
+	for(var/field in engine.setting_fields(thing))
+		var/value = thing.vars[field]
+		if(islist(value))
+			if(!(field in engine.list_fields))
+				continue
+			var/list/values = value
+			settings[field] = values.Copy()
+			continue
+		if(!(isnull(value) || isnum(value) || istext(value) || ispath(value)))
+			continue
+		if(value == initial(thing.vars[field]))
+			continue
+		settings[field] = value
+	return length(settings) ? settings : null
+
+/// Puts captured settings (babylon_area_capture_settings) on a pasted object.
+/proc/babylon_area_restore_settings(obj/thing, list/settings)
+	for(var/field in settings)
+		if(!(field in thing.vars))
+			continue
+		var/value = settings[field]
+		if(islist(value))
+			var/list/values = value
+			value = values.Copy()
+		thing.vars[field] = value
+	thing.update_appearance()
+
 /// Closets and storage items: their contents are copied too.
 /proc/babylon_area_is_container(atom/thing)
 	return istype(thing, /obj/structure/closet) || (isitem(thing) && thing.atom_storage)
 
 /proc/babylon_area_capture_extra(obj/thing, datum/babylon_area_clip/clip)
 	var/list/extra = list()
+	var/list/settings = babylon_area_capture_settings(thing)
+	if(settings)
+		extra["fields"] = settings
 	var/list/chems = babylon_area_capture_reagents(thing)
 	if(chems)
 		extra["reagents"] = chems
@@ -623,7 +672,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /proc/babylon_area_capture_contents(atom/container, datum/babylon_area_clip/clip, depth)
 	var/list/entries = list()
 	for(var/obj/item/item in container)
-		if(QDELETED(item) || babylon_tutorial_skip_save(item) || (item.flags_1 & HOLOGRAM_1))
+		if(QDELETED(item) || item.babylon_skip_save() || (item.flags_1 & HOLOGRAM_1))
 			continue
 		if(babylon_area_protected_object(item))
 			clip.skipped_protected++
@@ -900,6 +949,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			if(!extra)
 				continue
 			try
+				if(extra["fields"])
+					babylon_area_restore_settings(thing, extra["fields"])
 				if(extra["reagents"])
 					babylon_area_restore_reagents(thing, extra["reagents"])
 				if(!isnull(extra["contents"]) && babylon_area_is_container(thing))
@@ -1538,3 +1589,4 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return data
 
 #undef BABYLON_AREA_MAX_NESTED
+#undef BABYLON_AREA_CLIP_FIELDS
