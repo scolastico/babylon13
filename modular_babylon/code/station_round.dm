@@ -9,11 +9,14 @@
 //   job assignment or antagonist rolls; returning players get their saved body back
 //   (reattach_saved_character, Task D2) or the normal late-join menu.
 // - When the round ends, players read the round-end report (the normal restart delay, at most a
-//   minute), are sent back to the Babylon lobby and the world stops WITHOUT a save: the next start
-//   resumes the latest autosave from before the round ended. Every world reboot ends this way.
+//   minute), are sent back to the Babylon lobby and the world stops WITHOUT a save. Whether the next
+//   start resumes an autosave or begins fresh is told truthfully (babylon_next_start_text()).
+//   Every world reboot ends this way.
 
 /// Longest wait between the round's end and the return to the lobby.
 #define BABYLON_ROUND_END_DELAY_MAX (60 SECONDS)
+/// Fewer arrival seats than this: the hallway's free floor is added as arrival points.
+#define BABYLON_MIN_ARRIVAL_SEATS 4
 /// Tutorial spawn attempts per player before giving up.
 #define BABYLON_TUTORIAL_SPAWN_TRIES 3
 
@@ -88,12 +91,13 @@
 		// Tutorials and resumed rounds are only ready once their round runs: report the failure
 		// (the supervisor shows it) instead of a silent startup timeout.
 		if(!boot_error)
-			boot_error = "The round could not be set up; see the world's log."
+			boot_error = "This world's round could not start. Try starting it again; if it keeps failing, tell an admin."
 			log_world("Babylon: round setup failed in a [round_mode] world.")
 		return
 	SSticker.start_immediately = FALSE
 	SSticker.SetTimeLeft(-1)
 	round_started_by = null
+	to_chat(world, span_warning("The round could not start. [html_encode(babylon_world_owner_name())] can press Start round to try again; if it keeps failing, tell an admin."))
 	SStitle.show_title_screen()
 
 /// The round waits for its owner: pre-round, no start requested.
@@ -101,14 +105,50 @@
 	var/datum/babylon_save/session = GLOB.babylon_save
 	return session?.round_mode == "hold" && SSticker.current_state <= GAME_STATE_PREGAME && !SSticker.start_immediately && SSticker.GetTimeLeft() < 0
 
-/// The world owner's key when connected, else their ckey.
+/// The world owner's key: remembered from the last time they were connected, else their ckey.
 /proc/babylon_world_owner_name()
+	var/static/last_seen_key
 	var/owner = GLOB.babylon_world.owner_ckey
 	var/client/owner_client = GLOB.directory[owner]
-	return owner_client?.key || owner || "the world's owner"
+	if(owner_client?.key)
+		last_seen_key = owner_client.key
+	return last_seen_key || owner || "the world's owner"
 
-/proc/babylon_round_status_text()
-	return "Waiting for [babylon_world_owner_name()] to start the round"
+/// The owner is connected right now.
+/proc/babylon_world_owner_online()
+	return !!GLOB.directory[GLOB.babylon_world.owner_ckey]
+
+/// What the waiting round says to this viewer: the owner and admins start it themselves, everyone
+/// else is told whom they wait for (or that the owner is away).
+/proc/babylon_round_status_text(client/viewer)
+	return babylon_round_status_for(viewer && babylon_may_start_round(viewer), babylon_world_owner_online(), babylon_world_owner_name())
+
+/proc/babylon_round_status_for(may_start, owner_online, owner_name)
+	if(may_start)
+		return "You start this round. Press START ROUND when everyone is ready."
+	if(owner_online)
+		return "Waiting for [owner_name] to start the round. Tick READY to get a job when it starts."
+	return "[owner_name] is offline. Only they or an admin can start this round; you can OBSERVE or return to the lobby."
+
+/// Players ready for the roundstart, and all players in the menu.
+/proc/babylon_ready_counts()
+	var/ready_players = 0
+	var/total = 0
+	for(var/mob/dead/new_player/player as anything in GLOB.new_player_list)
+		total++
+		if(player.ready == PLAYER_READY_TO_PLAY)
+			ready_players++
+	return list(ready_players, total)
+
+/// What the end of the round says about the world's next start. Players who are not the owner
+/// only hear what is true for everyone.
+/proc/babylon_next_start_text(for_owner = FALSE)
+	return babylon_next_start_message(babylon_station_saving_available() && babylon_persistence_enabled(), for_owner)
+
+/proc/babylon_next_start_message(saves, for_owner)
+	if(!saves)
+		return for_owner ? null : "Next time this world starts, it begins a fresh round."
+	return for_owner ? "Next time you start this world, it picks up from its last autosave before the round ended. To begin fresh, reset or roll back the world in the lobby." : null
 
 /// Who may start the round: the world's owner and server administrators, never visitors.
 /proc/babylon_round_starter_allowed(player_ckey, role, server_rights, visitor)
@@ -130,17 +170,28 @@
 			to_chat(player, span_warning("Only the world's owner or a server administrator can start the round."))
 		return FALSE
 	if(!babylon_round_on_hold())
-		to_chat(player, span_warning("The round is already starting."))
+		to_chat(player, span_warning(SSticker.HasRoundStarted() ? "The round has already started." : "The round is already starting."))
 		return FALSE
 	log_game("[key_name(player)] started the round.")
-	return GLOB.babylon_save.begin_round(player.key)
+	return GLOB.babylon_save.begin_round(player.key, player)
 
-/datum/babylon_save/proc/begin_round(starter)
+/// Starts the held round. The starter is marked READY (unless observing), so that pressing Start
+/// round does not leave them without a job.
+/datum/babylon_save/proc/begin_round(starter, client/starter_client)
 	if(round_mode != "hold" || !babylon_round_on_hold() || SSticker.current_state != GAME_STATE_PREGAME)
 		return FALSE
 	round_started_by = starter
+	mark_starter_ready(starter_client?.mob)
 	SSticker.start_immediately = TRUE
 	to_chat(world, span_boldannounce("[html_encode(starter)] started the round."))
+	return TRUE
+
+/// The starter gets a job too, unless they already observe (an observer's mob is no new_player).
+/datum/babylon_save/proc/mark_starter_ready(mob/starter_mob)
+	if(!istype(starter_mob, /mob/dead/new_player))
+		return FALSE
+	var/mob/dead/new_player/menu = starter_mob
+	menu.ready = PLAYER_READY_TO_PLAY
 	return TRUE
 
 /// Resumed rounds and tutorials: no roundstart jobs and no roundstart antagonists.
@@ -176,31 +227,58 @@
 /// Babylon's look on tg's menu (modular_babylon/lobby/style.css palette): colours and font only.
 #define BABYLON_TITLE_STYLE {"<style>
 .container_nav{border:1px solid #6bcdc1 !important;border-radius:9px !important;background:rgba(16,23,34,.9) !important;box-shadow:0 6px 24px rgba(0,0,0,.6) !important;opacity:1 !important}
+.container_logo{display:none !important}
 .container_nav hr{background-color:#34465e !important;box-shadow:none !important}
 .menu_button{color:#e3eaf4 !important;font-family:'Segoe UI',Arial,sans-serif !important;font-weight:600 !important;letter-spacing:.5px !important;text-shadow:1px 1px #000 !important}
-.menu_button:hover{color:#7dd3c7 !important}
+.menu_button:hover{color:#7dd3c7 !important;transform:none !important}
+.menu_button:hover::before,.menu_button:active::before{content:"›" !important;font-family:inherit !important}
 .checked{color:#9be7be !important}
 .unchecked{color:#ffc2c7 !important}
 .menu_notice{font-family:'Segoe UI',Arial,sans-serif !important;color:#ffe1a0 !important}
-.babylon_brand{font:700 1.6vmin 'Segoe UI',Arial,sans-serif;letter-spacing:3px;color:#7dd3c7;text-align:left;padding-left:5vmin;margin-bottom:.8vmin}
-.babylon_round_status{font:600 2.6vmin 'Segoe UI',Arial,sans-serif;color:#ffe1a0;text-align:left;padding-left:5vmin;margin:0 0 1vmin 0}
+.babylon_brand{font:700 2vmin 'Segoe UI',Arial,sans-serif;letter-spacing:3px;color:#7dd3c7;text-align:left;padding-left:5vmin;margin-bottom:.8vmin}
+.babylon_round_status{font:600 2.2vmin/1.3 'Segoe UI',Arial,sans-serif;color:#ffe1a0;text-align:left;padding:0 2vmin 0 5vmin;margin:0 0 1vmin 0}
 .menu_button.babylon_start_round{background:#256d66 !important;border:1px solid #6bcdc1;border-radius:6px;color:#fff !important;height:5vmin;line-height:5vmin;margin-bottom:1vmin}
 .menu_button.babylon_start_round:hover{background:#2d7f77 !important;color:#fff !important}
 </style>"}
 
+/// While the round is held the menu holds more (status, Start round): the box sits higher, so a long,
+/// wrapped status line cannot push the menu past the bottom of a short window. The default box
+/// is 90vmin wide, 22.5vmin below the middle; its buttons (up to 12 x 4vmin) plus these lines
+/// reach about 96vmin of a 100vmin window otherwise.
+#define BABYLON_TITLE_STYLE_HELD "<style>.container_nav{top:calc(50% + 15vmin) !important}</style>"
+
 /// What Babylon adds to the top of the menu for this player: the round's status and, for the
-/// owner and administrators, the Start round button.
+/// owner and administrators, the Start round button (with how many players are ready).
 /proc/babylon_title_additions(client/player, menu_ref)
 	. = {"<div class="babylon_brand">BABYLON13</div>"}
+	var/datum/babylon_save/session = GLOB.babylon_save
+	if(session.round_mode == "auto" && !babylon_round_on_hold())
+		. += {"<p class="babylon_round_status">Starting your tutorial…</p>"}
+		if(player && session.tutorial_spawn_failures[player.ckey] >= BABYLON_TUTORIAL_SPAWN_TRIES)
+			. += {"<a class="menu_button babylon_start_round" href='byond://?src=[menu_ref];babylon_retry_tutorial=1'>RETRY TUTORIAL</a>"}
+		return
 	if(!babylon_round_on_hold())
 		return
-	. += {"<p class="babylon_round_status">[html_encode(babylon_round_status_text())]</p>"}
+	. = BABYLON_TITLE_STYLE_HELD + .
+	. += {"<p class="babylon_round_status">[html_encode(babylon_round_status_text(player))]</p>"}
 	if(babylon_may_start_round(player))
-		. += {"<a class="menu_button babylon_start_round" href='byond://?src=[menu_ref];babylon_start_round=1'>START ROUND</a>"}
+		var/list/counts = babylon_ready_counts()
+		. += {"<a class="menu_button babylon_start_round" href='byond://?src=[menu_ref];babylon_start_round=1'>START ROUND ([counts[1]] of [counts[2]] ready)</a>"}
+
+/// The ready counter is on the owner's and the admins' title screens: refresh theirs.
+/proc/babylon_refresh_starter_titles()
+	if(!babylon_round_on_hold())
+		return
+	for(var/mob/dead/new_player/menu as anything in GLOB.new_player_list)
+		if(menu.client && menu.title_screen_is_ready && babylon_may_start_round(menu.client))
+			menu.update_title_screen()
+
+/proc/babylon_title_style()
+	return BABYLON_TITLE_STYLE
 
 /mob/dead/new_player/get_title_html()
 	. = ..()
-	. = replacetext(., {"<div class="container_nav">"}, {"[BABYLON_TITLE_STYLE]<div class="container_nav">[babylon_title_additions(client, text_ref(src))]"})
+	. = replacetext(., {"<div class="container_nav">"}, {"[babylon_title_style()]<div class="container_nav">[babylon_title_additions(client, text_ref(src))]"})
 
 /mob/dead/new_player/Topic(href, href_list)
 	if(href_list["babylon_start_round"])
@@ -210,20 +288,37 @@
 		if(babylon_start_round(src))
 			SStitle.show_title_screen()
 		return
-	return ..()
+	if(href_list["babylon_retry_tutorial"])
+		if(src != usr || !client)
+			return
+		play_lobby_button_sound()
+		GLOB.babylon_save.tutorial_spawn_failures -= client.ckey
+		update_title_screen()
+		return
+	. = ..()
+	if(href_list["toggle_ready"])
+		babylon_refresh_starter_titles()
 
 /mob/dead/new_player/Login()
 	. = ..()
 	// Visitors and spectating admins leave the menu at once (showcase.dm, spectator.dm).
 	if(!client || client.babylon_showcase_visitor || client.babylon_admin_spectator)
 		return
+	var/datum/babylon_save/session = GLOB.babylon_save
+	babylon_world_owner_name() // remembers the owner's key while they are here
 	if(babylon_round_on_hold())
 		if(babylon_may_start_round(client))
-			to_chat(src, span_notice("This round starts when you press <b>Start round</b> in the menu. Set up your character first."))
+			to_chat(src, span_notice("You start this round. Tick <b>READY</b> so you get a job, then press <b>Start round</b> when your friends are ready."))
 		else
-			to_chat(src, span_notice("[babylon_round_status_text()]. Set up your character in the meantime."))
-	else if(GLOB.babylon_save.round_mode == "resume" && SSticker.HasRoundStarted())
-		INVOKE_ASYNC(GLOB.babylon_save, TYPE_PROC_REF(/datum/babylon_save, return_to_resumed_round), client)
+			to_chat(src, span_notice("[html_encode(babylon_round_status_text(client))] Set up your character in the meantime."))
+		babylon_refresh_starter_titles()
+	else if(session.round_mode == "auto")
+		to_chat(src, span_notice("Starting your tutorial…"))
+	else if(session.round_mode == "resume" && SSticker.HasRoundStarted())
+		to_chat(src, span_notice("This round continues from the world's last autosave."))
+		INVOKE_ASYNC(session, TYPE_PROC_REF(/datum/babylon_save, return_to_resumed_round), client)
+	else if(SSticker.HasRoundStarted())
+		to_chat(src, span_notice("The round is under way. Press <b>JOIN GAME</b> and pick a job; you arrive in the arrivals hallway."))
 
 /datum/babylon_save/proc/return_to_resumed_round(client/player)
 	if(!player || player.babylon_showcase_visitor || player.babylon_admin_spectator)
@@ -248,7 +343,7 @@
 	var/list/items = .
 	for(var/index in 1 to length(items))
 		if(istext(items[index]) && findtext(items[index], "Time To Start:") == 1)
-			items[index] = babylon_round_status_text()
+			items[index] = babylon_round_status_text(client)
 
 /atom/movable/screen/lobby/new_player_info/time_remaining_str()
 	if(babylon_round_on_hold())
@@ -258,7 +353,7 @@
 /client/proc/babylon_start_round_verb()
 	set name = "Start round"
 	set category = "Babylon"
-	set desc = "Start this world's round."
+	set desc = "Start the round now (players who ticked READY get their jobs)."
 	babylon_start_round(mob)
 
 /client/proc/babylon_update_start_verb()
@@ -295,7 +390,15 @@
 					seats += seat
 				else if(!floor.is_blocked_turf(TRUE))
 					floors += floor
-	if(length(seats))
+	if(length(seats) >= BABYLON_MIN_ARRIVAL_SEATS)
+		SSjob.latejoin_trackers += seats
+		latejoin_source = "arrivals chairs"
+	else if(length(seats) && length(floors))
+		// Too few seats for a group (pubbystation has one bench): the free hallway floor too.
+		SSjob.latejoin_trackers += seats
+		SSjob.latejoin_trackers += floors
+		latejoin_source = "arrivals chairs and floor"
+	else if(length(seats))
 		SSjob.latejoin_trackers += seats
 		latejoin_source = "arrivals chairs"
 	else if(length(floors))
@@ -362,7 +465,10 @@
 	if(tutorial_spawn_failures[player_key] >= BABYLON_TUTORIAL_SPAWN_TRIES)
 		log_world("Babylon: gave up spawning [player_key] in the tutorial after [BABYLON_TUTORIAL_SPAWN_TRIES] attempts.")
 		if(player)
-			to_chat(player, span_warning("Your tutorial character could not be created. Try JOIN GAME in the menu, or return to the lobby."))
+			to_chat(player, span_warning("Your tutorial character could not be created. Use <b>Return to Babylon lobby</b> (Babylon tab) and start the tutorial again; tell an admin if it keeps happening."))
+			var/mob/dead/new_player/menu = player.mob
+			if(istype(menu) && menu.title_screen_is_ready)
+				menu.update_title_screen() // offers RETRY TUTORIAL
 
 // --- Round end -----------------------------------------------------------------------------
 
@@ -400,9 +506,15 @@
 	log_world("Babylon: the round is over; returning players to the lobby in [delay / 10] s, without a save.")
 	if(world.params["babylon-api"] && !babylon_supervisor_request(list("action" = "round_ended"))?["ok"])
 		log_world("Babylon: the supervisor did not confirm the round's end; it sees the exit as a stop.")
-	to_chat(world, span_boldannounce("The round is over. Returning to the lobby…"))
-	if(delay > 0)
-		to_chat(world, span_notice("The round-end report stays open for [DisplayTimeText(delay)]. This world is not saved again: its next start resumes the last autosave from before the round ended."))
+	// tg already announces "The round has ended." on its own.
+	to_chat(world, span_notice("Read the round-end report; everyone returns to the Babylon lobby in [DisplayTimeText(delay)]."))
+	var/next_start = babylon_next_start_text()
+	if(next_start)
+		to_chat(world, span_notice(next_start))
+	var/owner_next_start = babylon_next_start_text(TRUE)
+	var/client/owner_client = GLOB.directory[GLOB.babylon_world.owner_ckey]
+	if(owner_next_start && owner_client)
+		to_chat(owner_client, span_notice(owner_next_start))
 	sleep(delay)
 	while(SSticker.delay_end)
 		sleep(1 SECONDS)
@@ -419,10 +531,12 @@
 	if(current_state != GAME_STATE_FINISHED || !session?.round_ending || !reboot_hud)
 		return
 	if(delay_end)
-		reboot_hud.maptext = MAPTEXT_PIXELLARI("<center>Return to the lobby\n DELAYED</center>")
+		reboot_hud.maptext = MAPTEXT_PIXELLARI("<center>Return to lobby\npaused by an admin</center>")
 	else
 		reboot_hud.maptext = MAPTEXT_PIXELLARI("<center>Returning to the lobby in:\n [DisplayTimeText(max(0, session.round_end_at - world.time), 1)]</center>")
 
 #undef BABYLON_TITLE_STYLE
+#undef BABYLON_TITLE_STYLE_HELD
 #undef BABYLON_ROUND_END_DELAY_MAX
 #undef BABYLON_TUTORIAL_SPAWN_TRIES
+#undef BABYLON_MIN_ARRIVAL_SEATS

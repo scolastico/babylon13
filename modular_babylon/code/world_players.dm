@@ -65,12 +65,17 @@
 		if(player)
 			qdel(player)
 
+/proc/babylon_member_prompt()
+	if(babylon_is_station_build())
+		return "BYOND account to add. Members can start this world and play in it, even when you are away. The owner or an admin starts the round."
+	return "BYOND account to add. Members can build and start this world, even when you are away."
+
 /client/proc/babylon_add_member()
 	set name = "Add member"
 	set category = "Babylon"
 	if(!babylon_world_manager())
 		return
-	var/target = tgui_input_text(mob, "BYOND account to add. Members can build and start this world, even when you are away.", "Add member", max_length = 30)
+	var/target = tgui_input_text(mob, babylon_member_prompt(), "Add member", max_length = 30)
 	if(!target || !babylon_world_request("member_add", target))
 		return
 	to_chat(src, span_notice("[html_encode(target)] is now a member of this world."))

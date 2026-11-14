@@ -65,7 +65,9 @@
 /datum/babylon_save/proc/test_station_latejoin()
 	var/list/result = list()
 	result["latejoin_points"] = length(SSjob.latejoin_trackers) || length(SSjob.latejoin_override_trackers)
-	result["source_known"] = latejoin_source in list("map", "arrivals chairs", "arrivals floor", "observer start")
+	result["source_known"] = latejoin_source in list("map", "arrivals chairs", "arrivals chairs and floor", "arrivals floor", "observer start")
+	// A few seats are padded with the hallway's free floor, so a group does not share one bench.
+	result["enough_arrival_points"] = length(SSjob.latejoin_trackers) >= 4 || latejoin_source == "observer start"
 	var/datum/job/assistant = SSjob.get_job_type(/datum/job/assistant)
 	var/atom/arrival = assistant.get_latejoin_spawn_point()
 	var/turf/arrival_turf = get_turf(arrival)
@@ -84,10 +86,28 @@
 	result["pre_round"] = SSticker.current_state == GAME_STATE_PREGAME
 	result["no_countdown"] = SSticker.GetTimeLeft() < 0 && SSticker.start_at < 0 && !SSticker.start_immediately
 	result["on_hold"] = babylon_round_on_hold()
-	result["status_names_owner"] = findtext(babylon_round_status_text(), "Waiting for [owner] to start the round") == 1
+	// Nobody is connected: others are told that the owner is away, never "waiting for" a ghost.
+	result["status_owner_offline"] = findtext(babylon_round_status_text(), "[owner] is offline. Only they or an admin can start this round; you can OBSERVE or return to the lobby.") == 1
 	var/menu = babylon_title_additions(null, "menuref")
-	result["menu_shows_waiting"] = !!findtext(menu, "Waiting for") && !!findtext(menu, "BABYLON13")
+	result["menu_shows_status"] = !!findtext(menu, "is offline") && !!findtext(menu, "BABYLON13")
 	result["menu_hides_button_from_others"] = !findtext(menu, "babylon_start_round")
+	result["menu_moves_up_while_held"] = !!findtext(menu, "calc(50% + 15vmin)")
+	result["style_hides_logo_and_emoji"] = !!findtext(babylon_title_style(), ".container_logo{display:none") && !!findtext(babylon_title_style(), "::before")
+	result["ready_counts_are_a_pair"] = length(babylon_ready_counts()) == 2
+	var/mob/dead/new_player/fake_player = new
+	var/list/before = babylon_ready_counts()
+	result["ready_starter_marked"] = mark_starter_ready(fake_player) && fake_player.ready == PLAYER_READY_TO_PLAY
+	var/list/after = babylon_ready_counts()
+	result["ready_counter_counts_them"] = after[1] == before[1] + 1 && after[2] == before[2]
+	result["observer_not_marked"] = !mark_starter_ready(null) && !mark_starter_ready(new /obj/item)
+	qdel(fake_player)
+	result["owner_status_text"] = babylon_round_status_for(TRUE, TRUE, "Owner Key") == "You start this round. Press START ROUND when everyone is ready."
+	result["member_status_owner_online"] = babylon_round_status_for(FALSE, TRUE, "Owner Key") == "Waiting for Owner Key to start the round. Tick READY to get a job when it starts."
+	result["member_status_owner_offline"] = babylon_round_status_for(FALSE, FALSE, "Owner Key") == "Owner Key is offline. Only they or an admin can start this round; you can OBSERVE or return to the lobby."
+	result["owner_key_not_empty"] = !!babylon_world_owner_name()
+	result["next_start_fresh_without_saving"] = !babylon_station_saving_available() && babylon_next_start_text() == "Next time this world starts, it begins a fresh round." && !babylon_next_start_text(TRUE)
+	result["next_start_fresh_when_not_persistent"] = babylon_next_start_message(FALSE, FALSE) == "Next time this world starts, it begins a fresh round."
+	result["next_start_resume_for_owner_only"] = !babylon_next_start_message(TRUE, FALSE) && !!findtext(babylon_next_start_message(TRUE, TRUE), "picks up from its last autosave before the round ended. To begin fresh, reset or roll back the world in the lobby.")
 	result["owner_may_start"] = babylon_round_starter_allowed(owner, "owner", FALSE, FALSE)
 	result["admin_may_start"] = babylon_round_starter_allowed("someadmin", "admin", FALSE, FALSE) && babylon_round_starter_allowed("serveradmin", "guest", TRUE, FALSE)
 	result["member_may_not"] = !babylon_round_starter_allowed("somemember", "member", FALSE, FALSE)
@@ -147,5 +167,7 @@
 	// A failed setup here is reported (status error) instead of a silent startup timeout.
 	round_setup_failed()
 	result["setup_failure_reported"] = !!boot_error
+	result["setup_failure_text"] = boot_error == "This world's round could not start. Try starting it again; if it keeps failing, tell an admin."
 	boot_error = null
+	result["menu_says_starting"] = !!findtext(babylon_title_additions(null, "menuref"), "Starting your tutorial")
 	return result

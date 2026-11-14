@@ -492,21 +492,26 @@ up again. The whole shutdown has to fit Docker's
 Worlds on station maps run normal tg rounds, with Babylon's round control:
 
 - **Start round.** The round never starts by itself: there is no lobby countdown. The
-  title screen menu (Babylon colours) and the Status tab show "Waiting for <owner> to
-  start the round". The world's owner and server administrators get a **Start round**
-  button at the top of the menu (and a `Start round` verb in the Babylon tab); the
-  server checks the permission, so nobody else can start it. The round then starts
-  normally: roundstart jobs for players who are ready, the storyteller's roundstart
+  title screen menu (Babylon colours) and the Status tab say what the round waits
+  for: the owner and administrators read "You start this round. Press START ROUND when
+  everyone is ready."; everyone else reads "Waiting for <owner> to start the round" (or
+  that the owner is offline and only they or an admin can start it). The owner and
+  server administrators get a **START ROUND (2 of 3 ready)** button at the top of the
+  menu (and a `Start round` verb in the Babylon tab); the server checks the
+  permission, so nobody else can start it. Members can start the *world*, but only
+  the owner or an admin starts its *round*. The starter is marked READY so that they
+  get a job too. The round then starts normally: roundstart jobs for players who are ready, the storyteller's roundstart
   events and antagonists. Creative Plane worlds hold for their owner too.
 - **Round end.** When the round ends (shuttle at CentCom, nuke, an admin's end round)
   the normal round-end report opens. Players keep it for the normal restart delay
   (`ROUND_END_COUNTDOWN`), at most 60 seconds, then everyone is sent back to the
   lobby and the world stops **without** a save. The supervisor records this as an
   ordinary stop (the world reports `round_ended`; the lobby shows the world as
-  stopping and admits nobody in the meantime). Once station worlds are saved
-  (persistence for station maps is still to come), the next start resumes the latest
-  autosave from before the round ended; to start over, reset or roll back the world.
-  Until then a station world starts fresh.
+  stopping and admits nobody in the meantime). Until station worlds are saved
+  (persistence for station maps is still to come) the round-end message says "Next
+  time this world starts, it begins a fresh round." Once they are saved, the owner
+  is told that the next start picks up from the last autosave before the round
+  ended, and that resetting or rolling back the world in the lobby begins fresh.
   An administrator's Reboot World ends the world the same way (a reboot would restart
   the run behind the supervisor's back).
 - **Resumed rounds** (with station persistence, still to come). A world whose save
@@ -520,7 +525,11 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   arrivals shuttle and all late-join landmarks), which station worlds do not load; the
   station maps' arrivals docks have no landmarks of their own. Station worlds therefore
   seat late-joiners in the station's arrivals hallway (its chairs and benches, else its
-  floor, else the observer start).
+  floor, else the observer start). Maps with fewer than four arrival seats (Pubbystation)
+  also get their free hallway floor as arrival points, so a group does not share one bench.
+- **Failed starts.** If the round cannot start, the world says so and the owner may press
+  Start round again; tutorial worlds show a RETRY TUTORIAL button after three failed
+  spawns of a player.
 
 ## AFK return to the lobby
 

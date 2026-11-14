@@ -45,6 +45,11 @@
 	if(world.params["babylon-lobby"])
 		src << link(world.params["babylon-lobby"])
 
+/// Whether station worlds can save and resume their round. Task D1 turns this on; until then the
+/// stop and round-end messages say that a station world is not saved.
+/proc/babylon_station_saving_available()
+	return FALSE
+
 /datum/babylon_save/proc/managed_stop()
 	if(draining)
 		// A world whose round ended is already on its way out, without a save.
@@ -53,9 +58,9 @@
 		return list("error" = "Already stopping")
 	draining = TRUE
 	var/list/result
-	if(babylon_is_station_build())
+	if(babylon_is_station_build() && !babylon_station_saving_available())
 		// Station worlds cannot save yet (multi-z persistence comes later): stop without one.
-		to_chat(world, span_notice("This world is stopping. Returning players to the lobby."))
+		to_chat(world, span_notice("This world is stopping. Station worlds are not saved yet, so this round ends here. Returning you to the lobby."))
 		result = list("ok" = TRUE, "saved" = FALSE)
 	else
 		to_chat(world, span_notice("This world is stopping. Saving progress and returning players to the lobby."))
