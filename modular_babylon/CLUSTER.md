@@ -539,28 +539,33 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 
 ## Creative machines
 
-The Creative panel's spawn list offers four creative machines (purple tint, "creative" in
-the name). They are not mapped, researched or sold. In a world without Creative they are
-ordinary, inert machines and say "Creative mode is off in this world" on examine.
-**Alt + right-click** one to change its mode and setting.
+Creative worlds can spawn four creative machines from the Creative panel (purple tint,
+"creative" in the name). Maps, research and cargo never provide them. They work in Creative
+worlds and in tutorials (a tutorial keeps its creative power and air, though its players have
+no Creative panel). In any other world they are ordinary machines that do nothing special and
+say "Creative mode is off in this world" when examined. In a Creative world,
+**Ctrl + Shift + click** one to change its mode and setting.
 
-- **Creative SMES.** *Source*: never runs out of charge and outputs its output level (set
-  in the normal SMES window, up to 10 MW). *Sink*: absorbs all surplus power on the cable
-  it stands on and on its terminal's network. It needs no terminal.
-- **Creative canister.** *Source*: refills itself with its gas (any gas of the standard
+- **Creative SMES.** *Source*: never runs out of charge and puts out its output level (set
+  in the normal SMES window, up to 10 MW). *Sink*: soaks up the power nobody else on its
+  cable or terminal network used, so it never takes power away from APCs. It needs no
+  terminal.
+- **Creative canister.** *Source*: refills itself with one gas (any gas in the standard
   list; oxygen by default, a nitrogen preset exists) to a fill pressure (default 4500 kPa,
-  100-9000), so its valve or a connector port never runs dry. *Void*: deletes all gas
-  inside it every atmos tick; on a connector port it drains the pipe network, e.g. as the
-  scrubbers' sink.
-- **Creative fluid tank** (plumbing; wrench it down, input west, output east like the
-  chemical tank). *Source*: stays full (400 u) of one reagent; only reagents the chem
-  synthesizer could make (no admin-only or ERP reagents). *Void*: destroys whatever its
-  input pulls in.
-- **Creative disposal unit.** *Source*: put on a disposal trunk, it sends one item down
-  the pipe every N seconds (default 10, 2-600) without needing pressure. Item types are
-  searched by path; only concrete items, no grenades, bombs, nuclear disks, MMIs, mob
-  holders or similar. *Void*: deletes everything that reaches it by pipe or is put inside;
-  mobs are put out on the floor, never deleted.
+  100-9000), so its valve or a connector port never runs dry. Changing only the pressure
+  keeps the gas inside. *Void*: deletes all gas inside it; on a connector port it drains the
+  pipe network, for example as the scrubbers' outlet.
+- **Creative fluid tank** (plumbing: wrench it down; input west, output east, like the
+  chemical tank). *Source*: stays full (400 u) of one reagent. Only reagents a chem
+  synthesizer could make are offered, so no admin-only or ERP reagents. *Void*: destroys
+  everything its input pulls in.
+- **Creative disposal unit.** *Source*: placed on a disposal trunk, it sends one item down
+  the pipe every N seconds (default 10, 2-600) without needing pressure. Pick the item by
+  name (e.g. "iron", "crowbar"). Grenades, bombs, nuclear disks, MMIs, mob holders,
+  lewd items and the like are not offered and are removed from containers it makes. It
+  pauses while 100 of its items still exist and says so when examined. *Void*: deletes
+  everything that reaches it by pipe or is put inside; living beings are put out on the
+  floor, never deleted.
 
 The settings are saved with the world.
 
