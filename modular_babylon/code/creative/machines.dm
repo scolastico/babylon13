@@ -4,8 +4,9 @@
 // (creative/plane.dm), never by research or cargo.
 //
 // Behaviour: the infinite effects run while babylon_creative_machines_active(): in Creative
-// worlds and in tutorial instances (an authored scenario keeps its creative power and air even
-// though the players there have no Creative panel). Anywhere else they are ordinary, inert
+// worlds, in tutorial instances (an authored scenario keeps its creative power and air even
+// though the players there have no Creative panel) and on Creative Plane maps (the map's own
+// power and air infrastructure, whatever the Creative flag). Anywhere else they are ordinary, inert
 // machines that say so on examine.
 //
 // Settings: Ctrl + Shift + click (free on all four machines; Alt-clicks are taken by plumbing
@@ -41,9 +42,10 @@ GLOBAL_VAR(babylon_creative_test_answers)
 		/obj/machinery/disposal/bin/babylon_creative/void,
 	)
 
-/// The machines' infinite behaviour runs: Creative worlds and tutorial instances.
+/// The machines' infinite behaviour runs: Creative worlds, tutorial instances and Creative
+/// Plane maps. Changing their settings stays Creative-only (babylon_creative_can_configure).
 /proc/babylon_creative_machines_active()
-	return babylon_creative_enabled() || !!GLOB.babylon_world?.is_tutorial()
+	return babylon_creative_enabled() || !!GLOB.babylon_world?.is_tutorial() || !!GLOB.babylon_world?.is_creative_plane()
 
 /// Shared examine lines: what the machine does, how to change it, or that it is inert here.
 /proc/babylon_creative_examine(list/examine_list, summary)
@@ -342,6 +344,10 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	var/creative_gas = /datum/gas/oxygen
 	/// The pressure (kPa) a source refills itself to.
 	var/creative_pressure = 4500
+	/// It belongs on the connector port on its tile: it reconnects to that port whenever it can
+	/// (mapped canisters, restored saves). Set when it starts on a port or connects; cleared when
+	/// it is disconnected (a wrench), so a player's choice sticks.
+	var/babylon_port_wanted = FALSE
 
 /obj/machinery/portable_atmospherics/canister/babylon_creative/nitrogen
 	name = "creative canister (nitrogen source)"
@@ -351,6 +357,47 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	name = "creative canister (void)"
 	creative_mode = "void"
 	greyscale_colors = "#2b1840#7b3fbf"
+
+/obj/machinery/portable_atmospherics/canister/babylon_creative/Initialize(mapload)
+	. = ..()
+	if(!(locate(/obj/machinery/atmospherics/components/unary/portables_connector) in loc))
+		return
+	babylon_port_wanted = TRUE
+	// Pipe networks exist once SSair has initialized (or a moment after a runtime load); until
+	// then a connection is impossible. process_atmos retries too.
+	if(SSair.initialized)
+		babylon_reconnect_port()
+	else
+		RegisterSignal(SSair, COMSIG_SUBSYSTEM_POST_INITIALIZE, PROC_REF(on_air_initialized))
+
+/obj/machinery/portable_atmospherics/canister/babylon_creative/Destroy()
+	UnregisterSignal(SSair, COMSIG_SUBSYSTEM_POST_INITIALIZE)
+	return ..()
+
+/obj/machinery/portable_atmospherics/canister/babylon_creative/proc/on_air_initialized(datum/source)
+	SIGNAL_HANDLER
+	UnregisterSignal(SSair, COMSIG_SUBSYSTEM_POST_INITIALIZE)
+	babylon_reconnect_port()
+
+/// Connects to a free connector port on its tile once that port's pipe network exists. TRUE if
+/// it is connected afterwards. Also called after a save is restored.
+/obj/machinery/portable_atmospherics/canister/babylon_creative/proc/babylon_reconnect_port()
+	if(connected_port)
+		return TRUE
+	var/obj/machinery/atmospherics/components/unary/portables_connector/port = locate() in loc
+	if(!port || port.connected_device || !port.parents[1])
+		return FALSE
+	return connect(port)
+
+/obj/machinery/portable_atmospherics/canister/babylon_creative/connect(obj/machinery/atmospherics/components/unary/portables_connector/new_port)
+	. = ..()
+	if(.)
+		babylon_port_wanted = TRUE
+
+/obj/machinery/portable_atmospherics/canister/babylon_creative/disconnect(destroyed = FALSE)
+	. = ..()
+	if(. && !destroyed)
+		babylon_port_wanted = FALSE
 
 /obj/machinery/portable_atmospherics/canister/babylon_creative/examine(mob/user)
 	. = ..()
@@ -368,6 +415,8 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	return babylon_creative_gas_allowed(creative_gas) ? LOWER_TEXT(GLOB.meta_gas_info[META_GAS_NAME][creative_gas]) : "nothing"
 
 /obj/machinery/portable_atmospherics/canister/babylon_creative/process_atmos()
+	if(babylon_port_wanted && !connected_port)
+		babylon_reconnect_port()
 	if(babylon_creative_machines_active() && !(machine_stat & BROKEN))
 		creative_tick()
 	. = ..()

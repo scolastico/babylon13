@@ -12,8 +12,8 @@ starts on the owner's Start round and, once it ends, the world returns everyone 
 exits without a save (the supervisor records an ordinary stop). Further maps (used to vet the map
 catalog) are only booted to the ready state, checked for the right map and late-join points, and
 stopped. Then every Creative Plane map (--creative-planes, default S, M and L) boots as a Creative
-world: its floor, landmarks, inert storyteller, refused emergency shuttle and, after a few
-seconds, air, gravity, power and the atmos loop are checked; the owner's Start round must start
+world (S without Creative mode, M and L with it): its floor, landmarks, inert storyteller, refused
+shuttles and, a few seconds into its round, power and the atmos loop are checked; the owner's Start round must start
 its round. Finally a tutorial-kind world on the first map checks that its round starts by itself.
 """
 import argparse
@@ -230,7 +230,9 @@ def main():
     def run_creative_plane(map_id):
         """A Creative world on a Creative Plane map: the map works and its round starts."""
         started = time.time()
-        world = api("create", dict(name="Station smoke %s" % map_id, visibility="private", map=map_id, creative=1))["id"]
+        # S runs without Creative mode: the plane's creative machines must work anyway.
+        creative = 0 if map_id == "creative_plane_s" else 1
+        world = api("create", dict(name="Station smoke %s" % map_id, visibility="private", map=map_id, creative=creative))["id"]
         run = wait_ready(world)
         status = topic(run["port"], run["secret"], "status")
         assert status["ready"] and status.get("build") == "station" and status.get("map") == map_id, status

@@ -11,6 +11,18 @@
 		if("creative_plane_l")
 			return 200
 
+/// The atom is on the Creative Plane (its floor or its utility corner).
+/proc/babylon_on_plane(atom/thing)
+	return istype(get_area(thing), /area/station/babylon/creative_plane)
+
+/// The APCs of the plane's two areas.
+/proc/babylon_plane_apcs()
+	var/list/apcs = list()
+	for(var/area_type in list(/area/station/babylon/creative_plane, /area/station/babylon/creative_plane/utilities))
+		var/area/plane_area = GLOB.areas_by_type[area_type]
+		apcs += plane_area?.apc
+	return apcs
+
 /// A fresh Creative Plane world, still held before its round: the map, its landmarks, air,
 /// gravity, power wiring and atmos layout, the inert storyteller and the refused shuttle.
 /// Machines and air only process once the round runs (test_creative_plane_round).
@@ -34,7 +46,7 @@
 	var/low_y = world.maxy
 	var/high_x = 0
 	var/high_y = 0
-	for(var/turf/open/floor in get_area_turfs(plane, station_z))
+	for(var/turf/open/floor in get_area_turfs(/area/station/babylon/creative_plane, station_z, TRUE))
 		low_x = min(low_x, floor.x)
 		low_y = min(low_y, floor.y)
 		high_x = max(high_x, floor.x)
@@ -42,7 +54,12 @@
 	var/start = round((255 - size) / 2) + 1
 	result["floor_size"] = high_x - low_x + 1 == size && high_y - low_y + 1 == size
 	result["floor_centred"] = low_x == start && low_y == start
-	result["walled_in"] = istype(locate(low_x - 1, low_y + 10, station_z), /turf/closed/wall) && istype(locate(high_x + 1, high_y, station_z), /turf/closed/wall)
+	// The ring cannot be breached (it would vent the whole plane); the utility room's walls can.
+	result["indestructible_ring"] = istype(locate(low_x - 1, low_y + 10, station_z), /turf/closed/indestructible/reinforced) && istype(locate(high_x + 1, high_y, station_z), /turf/closed/indestructible/reinforced) && istype(locate(low_x + 3, high_y + 1, station_z), /turf/closed/indestructible/reinforced)
+	result["room_walls_ordinary"] = istype(locate(low_x, low_y + 1, station_z), /turf/closed/wall)
+	result["utility_area"] = istype(GLOB.areas_by_type[/area/station/babylon/creative_plane/utilities], /area/station/babylon/creative_plane/utilities)
+	// Creative Plane machines run whatever the Creative flag; their settings stay Creative-only.
+	result["machines_active"] = babylon_creative_machines_active()
 	result["space_around"] = isspaceturf(locate(low_x - 5, low_y - 5, station_z)) && isspaceturf(locate(high_x + 5, high_y + 5, station_z))
 	result["fullbright"] = !plane.static_lighting && plane.base_lighting_alpha == 255
 
@@ -62,21 +79,28 @@
 	result["three_open_samples"] = length(samples) == 3 && !(null in samples) && isopenturf(samples[1]) && isopenturf(samples[2]) && isopenturf(samples[3])
 	result["breathable_air"] = air_ok
 	result["gravity"] = gravity_ok
-	var/obj/machinery/power/apc/apc = plane.apc
-	result["apc"] = !!apc && apc.operating && !!apc.cell
-	result["area_powered"] = plane.powered(AREA_USAGE_EQUIP) && plane.powered(AREA_USAGE_ENVIRON)
+	var/list/apcs = babylon_plane_apcs()
+	var/apcs_ok = length(apcs) == 2 && !(null in apcs)
+	for(var/obj/machinery/power/apc/apc as anything in apcs)
+		if(!apc?.operating || !apc.cell || !apc.area.powered(AREA_USAGE_EQUIP) || !apc.area.powered(AREA_USAGE_ENVIRON))
+			apcs_ok = FALSE
+	result["two_apcs_powered_areas"] = apcs_ok
 
 	var/list/smeses = SSmachines.get_machines_by_type(/obj/machinery/power/smes/babylon_creative)
 	var/obj/machinery/power/smes/babylon_creative/smes = length(smeses) == 1 ? smeses[1] : null
-	result["one_creative_smes"] = !!smes && get_area(smes) == plane
+	result["one_creative_smes"] = !!smes && babylon_on_plane(smes)
 	result["smes_source_with_terminal"] = !!smes && smes.creative_mode == "source" && !!smes.terminal && smes.output_attempt
-	result["smes_feeds_the_apc"] = !!smes && !!smes.powernet && smes.powernet == apc?.terminal?.powernet
+	var/feeds = !!smes?.powernet && apcs_ok
+	for(var/obj/machinery/power/apc/apc as anything in apcs)
+		if(apc?.terminal?.powernet != smes?.powernet)
+			feeds = FALSE
+	result["smes_feeds_both_apcs"] = feeds
 	result["smes_charged"] = !!smes && smes.output_attempt && smes.total_charge() > 0
 
 	// Atmos: O2 and N2 sources and a void, each on its port; mixer, two vents, two scrubbers.
 	var/list/canisters = list()
 	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
-		if(get_area(canister) == plane)
+		if(babylon_on_plane(canister))
 			canisters += canister
 	var/sources = list()
 	var/voids = 0
@@ -96,13 +120,28 @@
 	result["air_mixer_connected"] = !!mixer && mixer.on && !!mixer.nodes[1] && !!mixer.nodes[2] && !!mixer.nodes[3]
 	var/vents = 0
 	for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
-		if(get_area(vent) == plane && vent.on && vent.nodes[1])
+		if(babylon_on_plane(vent) && vent.on && vent.nodes[1])
 			vents++
 	var/scrubbers = 0
 	for(var/obj/machinery/atmospherics/components/unary/vent_scrubber/scrubber as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_scrubber))
-		if(get_area(scrubber) == plane && scrubber.on && scrubber.nodes[1])
+		if(babylon_on_plane(scrubber) && scrubber.on && scrubber.nodes[1])
 			scrubbers++
 	result["two_vents_two_scrubbers"] = vents == 2 && scrubbers == 2
+	// The canisters reconnect to their ports by themselves (mapload, restored saves), but a
+	// player's wrench sticks. Exercised on the void canister, then restored.
+	var/obj/machinery/portable_atmospherics/canister/babylon_creative/void
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in canisters)
+		if(canister.creative_mode == "void")
+			void = canister
+	if(void)
+		var/obj/machinery/atmospherics/components/unary/portables_connector/port = void.connected_port
+		void.disconnect()
+		result["wrench_sticks"] = !void.connected_port && !void.babylon_port_wanted && (void.process_atmos() || TRUE) && !void.connected_port
+		void.babylon_port_wanted = TRUE
+		void.process_atmos()
+		result["reconnects_lazily"] = void.connected_port == port
+		void.disconnect()
+		result["reconnect_proc"] = void.babylon_reconnect_port() && void.connected_port == port && void.babylon_port_wanted
 
 	// Landmarks: late-join points (the B2 setup uses the map's own), Assistant starts, observer.
 	var/latejoins_on_plane = length(SSjob.latejoin_trackers) >= 4
@@ -129,6 +168,14 @@
 	if(SSshuttle.emergency)
 		SSshuttle.emergency.request(null, set_coefficient = 1)
 		result["request_refused"] = SSshuttle.emergency.mode == SHUTTLE_IDLE
+	// Nor the supply shuttle: its console refuses, and a request to the missing dock is ignored.
+	result["no_cargo_dock"] = babylon_dock_missing("cargo_home")
+	if(SSshuttle.supply)
+		var/obj/machinery/computer/cargo/console = new(respawn_turf)
+		console.ui_act("send", list(), null, null)
+		SSshuttle.supply.request(SSshuttle.getDock("cargo_home"))
+		result["supply_refused"] = SSshuttle.supply.mode == SHUTTLE_IDLE
+		qdel(console)
 	return result
 
 /// After the owner's Start round on a Creative Plane, a few seconds into the round (machines and
@@ -137,9 +184,12 @@
 /datum/babylon_save/proc/test_creative_plane_round()
 	var/list/result = list()
 	result["round_running"] = SSticker.current_state == GAME_STATE_PLAYING
-	var/area/plane = GLOB.areas_by_type[/area/station/babylon/creative_plane]
-	var/obj/machinery/power/apc/apc = plane?.apc
-	result["apc_has_power"] = !!apc && apc.operating && apc.main_status == APC_HAS_POWER && plane.powered(AREA_USAGE_EQUIP)
+	var/list/apcs = babylon_plane_apcs()
+	var/apcs_ok = length(apcs) == 2 && !(null in apcs)
+	for(var/obj/machinery/power/apc/apc as anything in apcs)
+		if(!apc?.operating || apc.main_status != APC_HAS_POWER || !apc.area.powered(AREA_USAGE_EQUIP))
+			apcs_ok = FALSE
+	result["apcs_have_power"] = apcs_ok
 	var/list/smeses = SSmachines.get_machines_by_type(/obj/machinery/power/smes/babylon_creative)
 	var/obj/machinery/power/smes/babylon_creative/smes = length(smeses) == 1 ? smeses[1] : null
 	result["smes_outputs"] = !!smes && smes.outputting && smes.powernet?.avail > 0
@@ -149,11 +199,16 @@
 			capacity += cell.max_charge()
 		result["smes_stays_full"] = capacity > 0 && smes.total_charge() >= capacity * 0.99
 		var/distro_pressure = 0
+		var/oxygen_share = 0
 		for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
-			if(get_area(vent) == plane)
+			if(babylon_on_plane(vent))
 				var/datum/gas_mixture/pipe_air = vent.airs[1]
 				distro_pressure = max(distro_pressure, pipe_air.return_pressure())
+				var/total = pipe_air.total_moles()
+				oxygen_share = total ? (pipe_air.moles[/datum/gas/oxygen] || 0) / total : 0
 		result["distro_pressurised"] = distro_pressure > 1000
+		// The air mixer's 21 % oxygen / 79 % nitrogen.
+		result["distro_is_air"] = oxygen_share > 0.18 && oxygen_share < 0.24
 	var/turf/open/middle = get_turf(respawn_turf)
 	var/datum/gas_mixture/air = middle?.return_air()
 	result["still_breathable"] = !!air && air.return_pressure() > 90 && air.return_pressure() < 120
@@ -176,9 +231,9 @@
 /// Numbers behind the Creative Plane tests' power and atmos checks, for the smoke report (not asserted).
 /datum/babylon_save/proc/test_creative_plane_info()
 	var/list/result = list()
-	var/area/plane = GLOB.areas_by_type[/area/station/babylon/creative_plane]
-	var/obj/machinery/power/apc/apc = plane?.apc
-	if(apc)
+	for(var/obj/machinery/power/apc/apc as anything in babylon_plane_apcs())
+		if(!apc)
+			continue
 		result["apc_main_status"] = apc.main_status
 		result["apc_operating"] = apc.operating
 		result["apc_avail"] = apc.avail()
@@ -202,7 +257,7 @@
 		result["mixer operational"] = mixer.is_operational
 	var/vent_index = 0
 	for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
-		if(get_area(vent) != plane)
+		if(!babylon_on_plane(vent))
 			continue
 		vent_index++
 		var/datum/gas_mixture/air = vent.airs[1]

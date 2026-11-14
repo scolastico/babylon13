@@ -67,20 +67,24 @@ class CreativePlaneTest(unittest.TestCase):
                 ys = {y for _, y in grid}
                 self.assertEqual((min(xs), max(xs), min(ys), max(ys)), (1, 255, 1, 255))
                 floor = [p for p, key in grid.items() if any(t.startswith("/turf/open/floor") for t in keys[key])]
-                plane_area = [p for p, key in grid.items() if plane.AREA in keys[key]]
+                plane_area = [p for p, key in grid.items() if plane.AREA in keys[key] or plane.UTILITY_AREA in keys[key]]
                 fx = [x for x, _ in floor]
                 fy = [y for _, y in floor]
                 self.assertEqual((max(fx) - min(fx) + 1, max(fy) - min(fy) + 1), (size, size))
                 # Centred: the space on both sides differs by at most one tile.
                 self.assertLessEqual(abs((min(fx) - 1) - (255 - max(fx))), 1)
                 self.assertLessEqual(abs((min(fy) - 1) - (255 - max(fy))), 1)
-                # The area is the floor plus its wall ring; everything else is space.
+                # The two areas are the floor plus its wall ring; everything else is space.
                 self.assertEqual(len(plane_area), (size + 2) ** 2)
                 space = [p for p, key in grid.items() if keys[key] == [plane.SPACE, plane.SPACE_AREA]]
                 self.assertEqual(len(space), 255 * 255 - (size + 2) ** 2)
                 ring = [(x, y) for x in range(min(fx) - 1, max(fx) + 2) for y in (min(fy) - 1, max(fy) + 1)]
                 ring += [(x, y) for y in range(min(fy) - 1, max(fy) + 2) for x in (min(fx) - 1, max(fx) + 1)]
+                # The ring is indestructible (a breach would vent the whole plane); the room's walls are not.
+                self.assertTrue(plane.OUTER_WALL.startswith("/turf/closed/indestructible/"))
                 self.assertTrue(all(plane.OUTER_WALL in keys[grid[p]] for p in ring))
+                self.assertEqual(sum(1 for key in grid.values() if plane.OUTER_WALL in keys[key]), 4 * (size + 1))
+                self.assertTrue(any(plane.ROOM_WALL in keys[key] for key in grid.values()))
 
     def test_landmarks_present(self):
         for size_id in plane.SIZES:
@@ -112,9 +116,26 @@ class CreativePlaneTest(unittest.TestCase):
                 step = STEP[direction(terminal)]
                 self.assertEqual((tx + step[0], ty + step[1]), (sx, sy))
                 self.assertNotIn(plane.CABLE, keys[grid[(tx, ty)]])
-                (ax, ay, _), = find(full, grid, plane.APC)
-                self.assertIn(plane.CABLE, keys[grid[(ax, ay)]])
-                self.assertIn(plane.OUTER_WALL, keys[grid[(ax, ay - 1)]])
+                # One APC per area, each on a cable joined to the main line, mounted on a wall south.
+                apcs = find(full, grid, plane.APC)
+                self.assertEqual(sorted(next(p for p in keys[grid[(x, y)]] if p.startswith("/area/")) for x, y, _ in apcs),
+                                 [plane.AREA, plane.UTILITY_AREA])
+                for ax, ay, _ in apcs:
+                    self.assertIn(plane.CABLE, keys[grid[(ax, ay)]])
+                    self.assertTrue(keys[grid[(ax, ay - 1)]][-2].startswith("/turf/closed"))
+                cables = {(x, y) for x, y, _ in find(full, grid, plane.CABLE)}
+                reached, frontier = {(sx, sy)}, [(sx, sy)]
+                while frontier:
+                    x, y = frontier.pop()
+                    for dx, dy in STEP.values():
+                        if (x + dx, y + dy) in cables and (x + dx, y + dy) not in reached:
+                            reached.add((x + dx, y + dy))
+                            frontier.append((x + dx, y + dy))
+                self.assertEqual(reached, cables)  # one network: SMES, both APCs, edge and spine
+                self.assertIn(plane.UTILITY_AREA, keys[grid[(sx, sy)]])
+                (px, py, plaque), = find(full, grid, "/obj/structure/plaque/static_plaque")
+                self.assertIn("Ctrl + Shift + click", plaque)
+                self.assertIn(plane.UTILITY_AREA, keys[grid[(px, py)]])
 
                 canisters = {}
                 for path in ("/obj/machinery/portable_atmospherics/canister/babylon_creative",
@@ -124,7 +145,7 @@ class CreativePlaneTest(unittest.TestCase):
                     canisters[path.rsplit("/", 1)[1]] = entry
                     tile = keys[grid[(cx, cy)]]
                     self.assertIn("/obj/machinery/atmospherics/components/unary/portables_connector/visible", tile)
-                    self.assertIn(plane.CONNECT, tile)
+                    self.assertIn(plane.UTILITY_AREA, tile)
                 self.assertIn("creative_gas = /datum/gas/oxygen", canisters["babylon_creative"])
                 self.assertIn("creative_gas = /datum/gas/nitrogen", canisters["nitrogen"])
                 for name in ("babylon_creative", "nitrogen"):
