@@ -11,9 +11,43 @@
 /proc/babylon_tutorial_fill_text(text, mob/player)
 	return replacetext("[text]", "\[player]", player ? player.real_name : "you")
 
-/// The friendly "Guide" chat box.
+/// The friendly "Guide" chat box, headed with the speaker's name. Lines are kept.
 /proc/babylon_tutorial_guide_message(speaker, text)
-	return custom_boxed_message("green_box", "<span class='nicegreen'><b>[html_encode(speaker)]</b></span><br>[replacetext(html_encode(text), "\n", "<br>")]")
+	return custom_boxed_message("green_box", "<span class='nicegreen' style='font-size: 110%'><b>[html_encode(speaker)]</b></span><br><span class='notice'>[replacetext(html_encode(text), "\n", "<br>")]</span>")
+
+/// "Show until" for actions that show something: the next step, some seconds, or a trigger.
+/proc/babylon_tutorial_until_fields(default_seconds)
+	return list(
+		babylon_tutorial_field("until", "Show until", "choice", "next", "The next step: until a trigger listening after this step fires (at most 10 minutes).", options = babylon_tutorial_options(list("next" = "The next step's trigger fires", "seconds" = "Some seconds have passed", "trigger" = "A chosen trigger fires"))),
+		babylon_tutorial_field("duration", "Seconds", "number", default_seconds, null, min = 1, max = 600, when = list("until" = list("seconds"))),
+		babylon_tutorial_field("until_trigger", "Until trigger", "id", "", null, filter = list("trigger"), when = list("until" = list("trigger")), required = TRUE),
+	)
+
+/// How long something shown by an action lasts at most.
+/obj/babylon_tutorial/action/proc/show_duration()
+	return setting("until") == "seconds" ? setting("duration") SECONDS : 10 MINUTES
+
+/// A speaker says something to the run's player only, in say style with a chat bubble over the
+/// speaker. When the player could not hear it (too far, another level, the speaker is out cold or
+/// dead), it arrives as a Guide box headed with the speaker's name instead.
+/proc/babylon_tutorial_speak(datum/babylon_tutorial_run/run, atom/movable/speaker, text)
+	var/mob/living/player = run.player
+	var/name = speaker ? speaker.name : "Guide"
+	var/audible = speaker && get_dist(speaker, player) <= 7 && speaker.z == player.z
+	if(isliving(speaker) && !babylon_tutorial_awake(speaker))
+		audible = FALSE
+	if(!audible)
+		to_chat(player, babylon_tutorial_guide_message(name, text))
+		return FALSE
+	for(var/line in splittext(text, "\n"))
+		line = trim(line)
+		if(!length(line))
+			continue
+		to_chat(player, "<span class='game say'><span class='name'>[html_encode(name)]</span> <span class='message'>says, \"[html_encode(line)]\"</span></span>")
+		// Runechat over the speaker, for this player only (it needs their client).
+		if(player.client)
+			player.create_chat_message(speaker, null, line)
+	return TRUE
 
 // ---------------------------------------------------------------------------------------------
 // Message
@@ -21,7 +55,8 @@
 /obj/babylon_tutorial/action/message
 	tutorial_kind = "message"
 	kind_name = "Message"
-	kind_desc = "Tells the player something: a Guide box in chat, or a speaker (NPC or marked object) says it aloud."
+	kind_desc = "Tells the player something: a Guide box in chat, or an NPC or marked object says it to them."
+	kind_example = "e.g. \"Grab the health analyzer from the table.\""
 	ui_icon = "message"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "talk_help"
@@ -29,25 +64,24 @@
 /obj/babylon_tutorial/action/message/own_schema()
 	return list(
 		babylon_tutorial_field("text", "Text", "longtext", "", "What to say. \[player] is replaced by the player's name.", required = TRUE, placeholder = "Hi \[player]! See the scanner on the table?"),
-		babylon_tutorial_field("style", "Style", "choice", "chat", "Guide box: a highlighted message only the player sees. Speaker: someone in the world says it aloud.", options = babylon_tutorial_options(list("chat" = "Guide box in chat", "speaker" = "Spoken by a speaker"))),
-		babylon_tutorial_field("guide_name", "Guide name", "text", "Guide", "The name above the Guide box.", when = list("style" = list("chat"))),
-		babylon_tutorial_field("speaker", "Speaker", "id", "", "An NPC spawner (its NPC speaks) or a marker (the object on it speaks).", filter = list("npc", "marker"), when = list("style" = list("speaker")), required = TRUE),
-		babylon_tutorial_field("hint", "Screen hint", "text", "", "Optional: a short hint that pops up over the player for important steps."),
+		babylon_tutorial_field("style", "Style", "choice", "chat", "Guide box: a highlighted message in the player's chat. Speaker: an NPC or marked object says it (only this player hears it).", options = babylon_tutorial_options(list("chat" = "Guide box in chat", "speaker" = "Spoken by a speaker"))),
+		babylon_tutorial_field("guide_name", "Guide name", "text", "Guide", "The name above the Guide box.", when = list("style" = list("chat")), is_name = TRUE),
+		babylon_tutorial_field("speaker", "Speaker", "id", "", "An NPC spawner (its NPC speaks) or a marker (the object on it speaks). If the player is too far away to hear, the text is shown as a Guide box instead.", filter = list("npc", "marker"), when = list("style" = list("speaker")), required = TRUE),
+		babylon_tutorial_field("hint", "Objective (stays on screen)", "text", "", "Optional: a short goal shown on the player's screen until the next objective or the end, e.g. \"Scan the patient\"."),
 	)
 
 /obj/babylon_tutorial/action/message/perform(datum/babylon_tutorial_run/run)
 	var/text = babylon_tutorial_fill_text(setting("text"), run.player)
+	var/title = setting("guide_name") || "Guide"
 	if(setting("style") == "speaker")
 		var/atom/movable/speaker = babylon_tutorial_speaker(setting("speaker"))
-		if(speaker)
-			speaker.say(text, forced = "tutorial")
-		else
-			to_chat(run.player, babylon_tutorial_guide_message("Guide", text))
+		title = speaker ? speaker.name : title
+		babylon_tutorial_speak(run, speaker, text)
 	else
-		to_chat(run.player, babylon_tutorial_guide_message(setting("guide_name") || "Guide", text))
+		to_chat(run.player, babylon_tutorial_guide_message(title, text))
 	var/hint = setting("hint")
 	if(length(hint))
-		run.player.balloon_alert(run.player, babylon_tutorial_fill_text(hint, run.player))
+		run.set_objective(babylon_tutorial_fill_text(hint, run.player), title)
 	run.player.playsound_local(get_turf(run.player), 'sound/misc/bloop.ogg', 30, FALSE)
 
 /obj/babylon_tutorial/action/message/summary()
@@ -74,7 +108,8 @@
 /obj/babylon_tutorial/action/point
 	tutorial_kind = "point"
 	kind_name = "Point"
-	kind_desc = "Points at a target: a speaker points at it and an arrow over it shows the player where to look."
+	kind_desc = "Shows the player where to look: an arrow over the target, and a speaker can point at it."
+	kind_example = "e.g. point at the health analyzer until the player picks it up."
 	ui_icon = "arrow-pointer"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "arrow"
@@ -82,45 +117,47 @@
 /obj/babylon_tutorial/action/point/own_schema()
 	return list(
 		babylon_tutorial_field("target", "Target", "id", "", "What to point at: a marker (its object or tile) or an NPC spawner (its NPC).", filter = list("marker", "npc"), required = TRUE),
-		babylon_tutorial_field("from", "Pointed at by", "choice", "arrow", "Arrow only: a bouncing arrow over the target. A speaker: an NPC or marked object also points at it, again and again.", options = babylon_tutorial_options(list("arrow" = "Arrow only", "speaker" = "A speaker and the arrow"))),
+		babylon_tutorial_field("from", "Pointed at by", "choice", "arrow", "Arrow only: a bouncing arrow over the target. A speaker: an NPC or marked object also points at it, every 4 seconds.", options = babylon_tutorial_options(list("arrow" = "Arrow only", "speaker" = "A speaker and the arrow"))),
 		babylon_tutorial_field("speaker", "Speaker", "id", "", "Who points.", filter = list("npc", "marker"), when = list("from" = list("speaker")), required = TRUE),
-		babylon_tutorial_field("duration", "Show for (seconds)", "number", 15, "How long the arrow stays (the speaker points again every 4 seconds meanwhile).", min = 1, max = 600),
-	)
+	) + babylon_tutorial_until_fields(15)
 
 /obj/babylon_tutorial/action/point/perform(datum/babylon_tutorial_run/run)
 	var/atom/target = babylon_tutorial_resolve(setting("target"))
 	if(!target)
 		return
-	var/duration = setting("duration") SECONDS
+	var/duration = show_duration()
+	var/list/clear_on = run.clear_triggers_for(src)
 	var/image/arrow = image('icons/hud/screen_gen.dmi', target, "arrow_large", ABOVE_ALL_MOB_LAYER)
 	SET_PLANE_EXPLICIT(arrow, POINT_PLANE, target)
 	arrow.pixel_y = 20
 	arrow.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
 	animate(arrow, pixel_y = 28, time = 5, loop = -1, easing = SINE_EASING)
 	animate(pixel_y = 20, time = 5, easing = SINE_EASING)
-	run.show_image(arrow, duration)
+	run.show_image(arrow, duration, target, clear_on)
 	if(setting("from") == "speaker")
 		var/atom/movable/speaker = babylon_tutorial_speaker(setting("speaker"))
 		if(speaker)
-			run.repeat_point(speaker, target, world.time + duration)
+			run.repeat_point(speaker, target, world.time + duration, clear_on)
 
 /obj/babylon_tutorial/action/point/summary()
 	return "at [setting("target") || "?"]"
 
-/// Lets a speaker point: a mob uses its own point, an object (a marked machine, a hidden
-/// marker) gets a visible arrow flying from its tile.
-/proc/babylon_tutorial_point(atom/movable/speaker, atom/target)
-	if(ismob(speaker))
-		var/mob/pointer = speaker
-		if(babylon_tutorial_awake(pointer))
-			pointer.point_at(target, TRUE)
+/// A speaker points at a target for the run's player only: an arrow flies from the speaker to
+/// the target (a private image) and the player reads "<speaker> points at <target>.".
+/proc/babylon_tutorial_point(datum/babylon_tutorial_run/run, atom/movable/speaker, atom/target)
+	if(isliving(speaker) && !babylon_tutorial_awake(speaker))
 		return
 	var/turf/origin = get_turf(speaker)
 	var/turf/destination = get_turf(target)
 	if(!origin || !destination || origin.z != destination.z)
 		return
-	var/obj/effect/temp_visual/point/visual = new(origin, 0)
-	animate(visual, pixel_x = (destination.x - origin.x) * ICON_SIZE_X + target.pixel_x, pixel_y = (destination.y - origin.y) * ICON_SIZE_Y + target.pixel_y, time = 1.7, easing = EASE_OUT)
+	var/image/flying = image('icons/hud/screen_gen.dmi', origin, "arrow", ABOVE_ALL_MOB_LAYER)
+	SET_PLANE_EXPLICIT(flying, POINT_PLANE, origin)
+	flying.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
+	animate(flying, pixel_x = (destination.x - origin.x) * ICON_SIZE_X + target.pixel_x, pixel_y = (destination.y - origin.y) * ICON_SIZE_Y + target.pixel_y, time = 1.7, easing = EASE_OUT)
+	run.show_image(flying, 2.5 SECONDS)
+	if(get_dist(origin, run.player) <= 7)
+		to_chat(run.player, span_emote("<b>[html_encode(speaker.name)]</b> points at [html_encode(target.name)]."))
 
 // ---------------------------------------------------------------------------------------------
 // Highlight
@@ -128,7 +165,8 @@
 /obj/babylon_tutorial/action/highlight
 	tutorial_kind = "highlight"
 	kind_name = "Highlight"
-	kind_desc = "Outlines a target for a while, so the player spots it."
+	kind_desc = "Outlines a target so the player spots it (only they see it)."
+	kind_example = "e.g. outline the medkit on the shelf."
 	ui_icon = "highlighter"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "selector"
@@ -136,9 +174,8 @@
 /obj/babylon_tutorial/action/highlight/own_schema()
 	return list(
 		babylon_tutorial_field("target", "Target", "id", "", "A marker (its object) or an NPC spawner (its NPC).", filter = list("marker", "npc"), required = TRUE),
-		babylon_tutorial_field("duration", "Seconds", "number", 10, null, min = 1, max = 600),
 		babylon_tutorial_field("color", "Colour", "choice", "#ffd34d", null, options = babylon_tutorial_options(list("#ffd34d" = "Yellow", "#4dffb8" = "Green", "#4db8ff" = "Blue", "#ff6b6b" = "Red"))),
-	)
+	) + babylon_tutorial_until_fields(10)
 
 /obj/babylon_tutorial/action/highlight/perform(datum/babylon_tutorial_run/run)
 	var/atom/target = babylon_tutorial_resolve(setting("target"))
@@ -159,10 +196,10 @@
 	glow.filters = filter(type = "outline", size = 2, color = setting("color") || "#ffd34d")
 	animate(glow.filters[1], size = 1, time = 6, loop = -1)
 	animate(size = 2, time = 6)
-	run.show_image(glow, setting("duration") SECONDS)
+	run.show_image(glow, show_duration(), target, run.clear_triggers_for(src))
 
 /obj/babylon_tutorial/action/highlight/summary()
-	return "[setting("target") || "?"] for [setting("duration")] s"
+	return "[setting("target") || "?"][setting("until") == "seconds" ? " for [setting("duration")] s" : ""]"
 
 // ---------------------------------------------------------------------------------------------
 // Teleport
@@ -197,14 +234,15 @@
 /obj/babylon_tutorial/action/spawn_npc
 	tutorial_kind = "spawn_npc"
 	kind_name = "Spawn NPC"
-	kind_desc = "Makes an NPC spawner create its NPC (again: an existing one is replaced)."
+	kind_desc = "Makes an NPC spawner create its NPC again. The new NPC replaces the old one for everyone in the world."
+	kind_example = "e.g. a second patient appears after the first one is treated."
 	ui_icon = "person-circle-plus"
 	view_icon = 'icons/effects/mapping_helpers.dmi'
 	view_state = "mobspawner"
 
 /obj/babylon_tutorial/action/spawn_npc/own_schema()
 	return list(
-		babylon_tutorial_field("target", "NPC spawner", "id", "", null, filter = list("npc"), required = TRUE),
+		babylon_tutorial_field("target", "NPC spawner", "id", "", "Its NPC is created again for everyone in this world (an existing one is removed).", filter = list("npc"), required = TRUE),
 	)
 
 /obj/babylon_tutorial/action/spawn_npc/perform(datum/babylon_tutorial_run/run)
@@ -223,6 +261,7 @@
 	tutorial_kind = "give_item"
 	kind_name = "Give item"
 	kind_desc = "Puts an item into the player's hand (or at their feet when both hands are full)."
+	kind_example = "e.g. hand the player a health analyzer."
 	ui_icon = "gift"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "random_loot"
@@ -373,4 +412,12 @@
 			return TRUE
 		if("close")
 			ui.close()
+			if(!test_run)
+				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the Babylon tab."))
+			return TRUE
+		if("again")
+			if(!test_run || !isliving(usr))
+				return FALSE
+			ui.close()
+			babylon_tutorial_begin(usr, TRUE, TRUE, TRUE)
 			return TRUE

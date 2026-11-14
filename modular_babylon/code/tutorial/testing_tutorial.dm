@@ -106,7 +106,7 @@
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/sound, base, "trig_sound", list("sound" = "ding"), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/say, base, "trig_say", list("phrase" = "ready", "actions" = list("trig_sound", "trig_enable")), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/toggle, base, "trig_enable", list("mode" = "enable", "triggers" = list("trig_button")), made)
-		var/obj/babylon_tutorial/trigger/button/button = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/button, locate(base.x + 1, base.y, base.z), "trig_button", list("label" = "big red button", "enabled_at_start" = 0, "once" = 0, "cooldown" = 30, "actions" = list("trig_sound")), made)
+		var/obj/babylon_tutorial/trigger/button/button = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/button, locate(base.x + 1, base.y, base.z), "trig_button", list("label" = "big red button", "starts" = "manual", "once" = 0, "cooldown" = 30, "actions" = list("trig_sound")), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "trig_timer", list("seconds" = 1, "actions" = list("trig_delayed")), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/message, base, "trig_delayed", list("text" = "later", "delay" = 600), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, marker_tile, "trig_table_spot", list("target" = "tile"), made)
@@ -168,8 +168,8 @@
 		result["not_an_effect"] = !istype(message, /obj/effect)
 
 		// Every kind has a schema with known types and unique keys.
-		var/schemas_ok = length(babylon_tutorial_kinds()) >= 17
-		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "zone", "effects")
+		var/schemas_ok = length(babylon_tutorial_kinds()) >= 19
+		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "zone", "effects", "target")
 		for(var/kind in babylon_tutorial_kinds())
 			var/list/keys = list()
 			for(var/list/field as anything in babylon_tutorial_schema(babylon_tutorial_kinds()[kind]))
@@ -195,10 +195,18 @@
 		result["wrong_category_reported"] = findtext(holding.issues()["actions"], "not a") != 0
 		holding.set_setting("actions", list("obj_message"))
 		result["valid_reference_clean"] = !holding.issues()["actions"]
-		var/obj/babylon_tutorial/marker/duplicate = babylon_tutorial_test_place(/obj/babylon_tutorial/marker, base, "obj_message", list(), made)
-		result["duplicate_id_reported"] = !!duplicate.issues()["id"]
-		var/list/warnings = babylon_tutorial_overview_warnings()
-		result["overview_warns_duplicate"] = ("The id \"obj_message\" is used more than once." in warnings)
+		// Ids can still clash after a map paste: the clash is reported.
+		var/obj/babylon_tutorial/marker/duplicate = babylon_tutorial_test_place(/obj/babylon_tutorial/marker, base, null, list(), made)
+		result["taken_id_refused"] = !!duplicate.set_tutorial_id("obj_message")
+		duplicate.tutorial_id = "obj_message"
+		babylon_tutorial_changed()
+		var/list/duplicate_issues = duplicate.issues()
+		result["duplicate_id_reported"] = !!duplicate_issues["id"]
+		var/found_duplicate = FALSE
+		for(var/text in babylon_tutorial_overview_texts())
+			if(findtext(text, "already uses the id \"obj_message\""))
+				found_duplicate = TRUE
+		result["overview_warns_duplicate"] = found_duplicate
 		qdel(duplicate)
 		result["unique_ids"] = babylon_tutorial_unique_id("obj_hold") != "obj_hold"
 		result["search_finds_analyzer"] = FALSE
@@ -343,5 +351,133 @@
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_npc_effects failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_test_cleanup(made)
+	return result
+
+/// The review round: safe names and texts, NPC safety (reagents, diseases, unhurtable), no
+/// references to deleted objects, zone limits, renaming, step chains, private speech, "until the
+/// next step", the start trigger and preset ids.
+/datum/babylon_save/proc/test_tutorial_review()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(56)
+	try
+		// Names: markup is refused or stripped, never stored.
+		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, base, "rev_npc", list("npc_name" = "Patient"), made)
+		var/bad = "<span class='danger'>x</span>"
+		var/list/name_fields = list(list(spawner, "npc_name"))
+		var/obj/babylon_tutorial/marker/speaker_marker = babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(base.x + 2, base.y, base.z), "rev_marker", list("target" = "tile"), made)
+		name_fields += list(list(speaker_marker, "speaker_name"))
+		var/obj/babylon_tutorial/trigger/button/button = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/button, locate(base.x + 3, base.y, base.z), "rev_button", list(), made)
+		name_fields += list(list(button, "label"))
+		var/names_safe = TRUE
+		for(var/list/entry as anything in name_fields)
+			var/obj/babylon_tutorial/object = entry[1]
+			var/error = object.set_setting(entry[2], bad)
+			var/value = object.setting(entry[2])
+			if(!error && (findtext(value, "<") || findtext(value, ">")))
+				names_safe = FALSE
+		result["names_never_hold_markup"] = names_safe && !findtext(button.name, "<")
+
+		// Blood reagents: only the curated list.
+		var/blocked_ok = TRUE
+		for(var/path in list("/datum/reagent/magillitis", "/datum/reagent/mutationtoxin", "/datum/reagent/gluttonytoxin", "/datum/reagent/xenomicrobes", "/datum/reagent/romerol", "/datum/reagent/aslimetoxin", "/datum/reagent/cyborg_mutation_nanomachines"))
+			var/list/cleaned = babylon_tutorial_clean_effects(list(list("kind" = "reagent", "type" = path, "amount" = 5, "chance" = 100)))
+			if(!cleaned["error"])
+				blocked_ok = FALSE
+		result["dangerous_reagents_refused"] = blocked_ok
+		var/list/allowed_reagent = babylon_tutorial_clean_effects(list(list("kind" = "reagent", "type" = "[/datum/reagent/medicine/epinephrine]", "amount" = 5, "chance" = 100)))
+		result["medicine_allowed"] = !allowed_reagent["error"]
+
+		// Diseases never spread; unhurtable until made vulnerable.
+		spawner.set_setting("effects", list(list("kind" = "disease", "type" = "[/datum/disease/cold]", "chance" = 100)))
+		spawner.set_setting("invulnerable", 1)
+		var/mob/living/carbon/human/npc = spawner.spawn_npc()
+		var/datum/disease/illness = length(npc.diseases) ? npc.diseases[1] : null
+		result["disease_not_contagious"] = illness && illness.spread_flags == DISEASE_SPREAD_NON_CONTAGIOUS
+		result["npc_unhurtable"] = HAS_TRAIT(npc, TRAIT_GODMODE)
+		var/obj/babylon_tutorial/action/npc_vulnerable/vulnerable = babylon_tutorial_test_place(/obj/babylon_tutorial/action/npc_vulnerable, base, "rev_vulnerable", list("target" = "rev_npc"), made)
+		var/mob/living/carbon/human/player = new(locate(base.x, base.y + 1, base.z))
+		made += player
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, FALSE, TRUE)
+		run.perform(null, vulnerable)
+		result["npc_made_vulnerable"] = !HAS_TRAIT(npc, TRAIT_GODMODE)
+		var/obj/item/uniform = npc.w_uniform
+		result["outfit_items_never_saved"] = !uniform || (uniform.babylon_tutorial_npc_item && babylon_tutorial_skip_save(uniform))
+		if(uniform)
+			npc.dropItemToGround(uniform, TRUE)
+			spawner.spawn_npc()
+			result["dropped_outfit_cleaned_on_respawn"] = QDELETED(uniform)
+
+		// Give item refuses Hilbert's hotel; gas zones are capped.
+		result["hilbert_refused"] = !babylon_tutorial_type_allowed(/obj/item/hilbertshotel, null)
+		var/obj/babylon_tutorial/trigger/condition/gas = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/condition, base, "rev_gas", list("condition" = "gas"), made)
+		result["gas_zone_capped"] = !!gas.set_setting("zone", list(1, 1, 100, 100, base.z)) && isnull(gas.set_setting("zone", list(base.x, base.y, base.x + 9, base.y + 9, base.z)))
+
+		// Renaming rewrites the links; taken ids are refused.
+		var/obj/babylon_tutorial/action/message/hello = babylon_tutorial_test_place(/obj/babylon_tutorial/action/message, base, "rev_hello", list("text" = "Hello"), made)
+		var/obj/babylon_tutorial/trigger/start/start = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/start, base, "rev_start", list("actions" = list("rev_hello")), made)
+		var/obj/babylon_tutorial/action/point/point = babylon_tutorial_test_place(/obj/babylon_tutorial/action/point, base, "rev_point", list("target" = "rev_npc"), made)
+		var/obj/babylon_tutorial/trigger/say/say = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/say, base, "rev_say", list("phrase" = "it's done", "starts" = "after", "after" = "rev_start", "actions" = list("rev_point")), made)
+		var/obj/babylon_tutorial/trigger/timer/after_say = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "rev_next", list("seconds" = 600, "starts" = "after", "after" = "rev_say"), made)
+		result["rename_refuses_taken"] = !!hello.set_tutorial_id("rev_start")
+		result["rename_rewrites_links"] = isnull(hello.set_tutorial_id("rev_welcome")) && (start.setting("actions") ~= list("rev_welcome")) && (hello.last_rename_links ~= list("rev_start"))
+
+		// Steps: the start trigger fires once; the say trigger listens only after it.
+		babylon_tutorial_end(player)
+		run = babylon_tutorial_begin(player, FALSE, TRUE)
+		result["chained_trigger_waits"] = run.is_enabled(start) && !run.is_enabled(say)
+		run.check_triggers()
+		run.check_triggers()
+		result["start_trigger_fires_once"] = run.fired[start] == 1 && ("rev_start>rev_welcome" in run.history)
+		result["chain_starts_listening"] = run.is_enabled(say)
+		// Said text arrives encoded ("it&#39;s"): the phrase still matches.
+		player.say("ok it's done")
+		run.check_triggers()
+		result["say_matches_encoded_text"] = run.fired[say] == 1
+		result["point_until_next_step"] = length(run.images) == 1
+		var/image/arrow = run.images[1]
+		var/list/info = run.images[arrow]
+		result["point_waits_for_next_trigger"] = (after_say in info["clear_on"])
+		run.fire(after_say)
+		result["point_cleared_by_next_step"] = !length(run.images)
+
+		// Deleted objects leave no references in runs; deleted targets take their images along.
+		run.perform(null, point)
+		var/mob/living/carbon/human/old_npc = spawner.current_npc()
+		spawner.spawn_npc()
+		result["images_follow_their_target"] = QDELETED(old_npc) && !length(run.images)
+		run.set_enabled(after_say, TRUE)
+		run.hits[after_say] = TRUE
+		run.last_state[after_say] = TRUE
+		qdel(after_say)
+		result["deleted_trigger_forgotten"] = !(after_say in run.enabled) && !(after_say in run.hits) && !(after_say in run.last_state) && !(after_say in run.fired)
+
+		// Speech: private, and a Guide box when the player cannot hear the speaker.
+		result["speech_heard_nearby"] = babylon_tutorial_speak(run, spawner.current_npc(), "Hello there")
+		player.forceMove(locate(base.x + 11, base.y + 9, base.z))
+		result["speech_falls_back_when_far"] = !babylon_tutorial_speak(run, spawner.current_npc(), "Hello there")
+
+		// Objective: encoded on screen, removed at the end.
+		run.set_objective("<b>Scan</b> the patient", "Guide")
+		var/atom/movable/screen/alert/objective = player.alerts["babylon_tutorial_objective"]
+		result["objective_shown_encoded"] = objective && findtext(objective.maptext, "&lt;b&gt;") && !findtext(objective.maptext, "<b>")
+		babylon_tutorial_end(player)
+		result["objective_cleared"] = !player.alerts["babylon_tutorial_objective"]
+
+		// Preset ids name what they are.
+		var/obj/babylon_tutorial/npc_spawner/guide = babylon_tutorial_place_npc(locate(base.x + 4, base.y, base.z), "guide")
+		made += guide
+		var/obj/babylon_tutorial/npc_spawner/patient = babylon_tutorial_place_npc(locate(base.x + 5, base.y, base.z), "bruised")
+		made += patient
+		result["preset_ids"] = findtext(guide.tutorial_id, "guide") == 1 && findtext(patient.tutorial_id, "patient") == 1
+
+		// Placed triggers chain after the last placed one.
+		var/obj/babylon_tutorial/trigger/zone/placed = babylon_tutorial_place(/obj/babylon_tutorial/trigger/zone, base)
+		made += placed
+		result["placed_trigger_chains"] = placed.setting("starts") == "after" && length(placed.setting("after"))
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_review failed: [error] ([error.file]:[error.line])")
 	babylon_tutorial_test_cleanup(made)
 	return result

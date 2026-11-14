@@ -10,9 +10,18 @@
 	/// Created by a tutorial NPC spawner: never saved, removed and re-created by its spawner.
 	var/babylon_tutorial_npc = FALSE
 
-/// Atoms a checkpoint must not save: tutorial NPCs and everything they carry. The station
-/// build's checkpoint (D1) skips mobs for which this is TRUE.
+/obj/item
+	/// Part of a tutorial NPC's outfit: never saved, even when it was taken off the NPC.
+	var/babylon_tutorial_npc_item = FALSE
+
+/// Atoms a checkpoint must not save: tutorial NPCs, everything they carry and their outfit's
+/// items wherever they are. The station build's checkpoint (D1) skips mobs and items for which
+/// this is TRUE.
 /proc/babylon_tutorial_skip_save(atom/thing)
+	if(isitem(thing))
+		var/obj/item/item = thing
+		if(item.babylon_tutorial_npc_item)
+			return TRUE
 	for(var/atom/holder = thing; holder && !isturf(holder); holder = holder.loc)
 		if(isliving(holder))
 			var/mob/living/body = holder
@@ -29,19 +38,26 @@
 	tutorial_category = "npc"
 	kind_name = "NPC spawner"
 	kind_desc = "Creates a standing NPC: a guide, a patient with injuries or an illness, a bystander."
+	kind_example = "e.g. a patient with a broken leg in front of the medbay bed."
+	id_help = "Actions and triggers refer to this NPC by its id (point at it, use an item on it, check its health)."
 	ui_icon = "user-nurse"
 	view_icon = 'icons/effects/mapping_helpers.dmi'
 	view_state = "corpsehuman"
 	/// The NPC this spawner created.
 	var/datum/weakref/npc_ref
+	/// Weakrefs to the items its outfit put on the NPC (removed with the NPC).
+	var/list/outfit_items = list()
+	/// settings_json when the NPC was created: the window says when a respawn would change it.
+	var/spawned_settings
 
 /obj/babylon_tutorial/npc_spawner/settings_schema()
 	return list(
-		babylon_tutorial_field("npc_name", "Name", "text", "Guide", "The NPC's name."),
+		babylon_tutorial_field("npc_name", "Name", "text", "Guide", "The NPC's name.", is_name = TRUE),
 		babylon_tutorial_field("outfit", "Outfit", "typepath", "[/datum/outfit/job/assistant]", "A job outfit (ids and gear are left out).", options = babylon_tutorial_outfit_options(), base = /datum/outfit/job, placeholder = "Search outfits, e.g. doctor"),
 		babylon_tutorial_field("species", "Species", "choice", "[/datum/species/human]", null, options = babylon_tutorial_species_options()),
 		babylon_tutorial_field("facing", "Facing", "choice", "[SOUTH]", null, options = babylon_tutorial_options(list("[SOUTH]" = "South (down)", "[NORTH]" = "North (up)", "[EAST]" = "East (right)", "[WEST]" = "West (left)"))),
 		babylon_tutorial_field("spawn_at_start", "Spawn at the start", "bool", 1, "On: the NPC is there from the start. Off: it appears when a Spawn NPC action runs."),
+		babylon_tutorial_field("invulnerable", "Unhurtable until made vulnerable", "bool", 0, "On: nothing can hurt the NPC until a \"Make NPC vulnerable\" action runs (its effects still apply when it is created)."),
 		babylon_tutorial_field("effects", "Effects", "effects", list(), "What is wrong with the NPC. Each effect happens with its chance (100% = always) every time the NPC is created."),
 	)
 
@@ -66,6 +82,20 @@
 	npc_ref = null
 	if(npc)
 		qdel(npc)
+	// Outfit items someone took off the NPC go with it, unless a player is carrying them.
+	for(var/datum/weakref/item_ref as anything in outfit_items)
+		var/obj/item/item = item_ref.resolve()
+		if(!item)
+			continue
+		var/mob/living/holder = get(item, /mob/living)
+		if(holder && !holder.babylon_tutorial_npc)
+			continue
+		qdel(item)
+	outfit_items.Cut()
+
+/// The NPC's settings changed since it was created (a respawn would apply them).
+/obj/babylon_tutorial/npc_spawner/proc/npc_outdated()
+	return current_npc() && spawned_settings != settings_json
 
 /// Creates the NPC (replacing the old one) and applies its effects. Returns the NPC.
 /obj/babylon_tutorial/npc_spawner/proc/spawn_npc()
@@ -84,12 +114,18 @@
 	var/outfit = text2path(setting("outfit"))
 	if(ispath(outfit, /datum/outfit/job) && babylon_tutorial_type_allowed(outfit, null))
 		npc.equipOutfit(outfit, TRUE)
+	for(var/obj/item/item in npc.get_all_contents())
+		item.babylon_tutorial_npc_item = TRUE
+		outfit_items += WEAKREF(item)
 	npc.setDir(text2num(setting("facing")) || SOUTH)
 	// Tutorial NPCs never starve or die of thirst while they wait for the player.
 	ADD_TRAIT(npc, TRAIT_NOHUNGER, BABYLON_TUTORIAL_NPC_TRAIT)
 	ADD_TRAIT(npc, TRAIT_NOTHIRST, BABYLON_TUTORIAL_NPC_TRAIT)
 	npc_ref = WEAKREF(npc)
+	spawned_settings = settings_json
 	babylon_tutorial_apply_effects(npc, setting("effects"))
+	if(setting("invulnerable"))
+		ADD_TRAIT(npc, TRAIT_GODMODE, BABYLON_TUTORIAL_NPC_TRAIT)
 	babylon_tutorial_changed()
 	return npc
 
@@ -137,6 +173,41 @@
 		"[/datum/disease/asthma_attack]" = "Asthma attack (albuterol)",
 		"[/datum/disease/adrenal_crisis]" = "Adrenal Crisis",
 		"[/datum/disease/anxiety]" = "Severe Anxiety",
+	)
+
+/// Reagent path => label: what can be in a tutorial NPC's blood (medicine, common poisons and a
+/// few drugs a medical tutorial needs). Nothing that transforms, spreads or harms the world.
+/proc/babylon_tutorial_blood_reagents()
+	return list(
+		"[/datum/reagent/medicine/c2/libital]" = "Libital (brute medicine)",
+		"[/datum/reagent/medicine/c2/aiuri]" = "Aiuri (burn medicine)",
+		"[/datum/reagent/medicine/c2/multiver]" = "Multiver (toxin medicine)",
+		"[/datum/reagent/medicine/c2/convermol]" = "Convermol (suffocation medicine)",
+		"[/datum/reagent/medicine/c2/seiver]" = "Seiver (toxin medicine)",
+		"[/datum/reagent/medicine/c2/probital]" = "Probital",
+		"[/datum/reagent/medicine/epinephrine]" = "Epinephrine",
+		"[/datum/reagent/medicine/morphine]" = "Morphine",
+		"[/datum/reagent/medicine/salbutamol]" = "Salbutamol",
+		"[/datum/reagent/medicine/albuterol]" = "Albuterol",
+		"[/datum/reagent/medicine/spaceacillin]" = "Spaceacillin",
+		"[/datum/reagent/medicine/salglu_solution]" = "Saline-glucose solution",
+		"[/datum/reagent/medicine/coagulant]" = "Coagulant",
+		"[/datum/reagent/medicine/atropine]" = "Atropine",
+		"[/datum/reagent/medicine/mannitol]" = "Mannitol",
+		"[/datum/reagent/medicine/potass_iodide]" = "Potassium iodide",
+		"[/datum/reagent/toxin]" = "Toxin",
+		"[/datum/reagent/toxin/lexorin]" = "Lexorin",
+		"[/datum/reagent/toxin/cyanide]" = "Cyanide",
+		"[/datum/reagent/toxin/histamine]" = "Histamine",
+		"[/datum/reagent/toxin/formaldehyde]" = "Formaldehyde",
+		"[/datum/reagent/toxin/venom]" = "Venom",
+		"[/datum/reagent/toxin/chloralhydrate]" = "Chloral hydrate",
+		"[/datum/reagent/toxin/plasma]" = "Plasma",
+		"[/datum/reagent/consumable/ethanol]" = "Ethanol",
+		"[/datum/reagent/drug/space_drugs]" = "Space drugs",
+		"[/datum/reagent/drug/nicotine]" = "Nicotine",
+		"[/datum/reagent/drug/methamphetamine]" = "Methamphetamine",
+		"[/datum/reagent/water]" = "Water",
 	)
 
 /proc/babylon_tutorial_body_zones()
@@ -224,10 +295,10 @@
 					return list("error" = "Choose a disease.")
 				effect["type"] = disease
 			if("reagent")
-				var/reagent = text2path("[entry["type"]]")
-				if(!ispath(reagent, /datum/reagent) || !babylon_tutorial_type_allowed(reagent, null))
-					return list("error" = "Choose a reagent.")
-				effect["type"] = "[reagent]"
+				var/reagent = "[entry["type"]]"
+				if(!babylon_tutorial_blood_reagents()[reagent])
+					return list("error" = "Choose a reagent from the list.")
+				effect["type"] = reagent
 		cleaned += list(effect)
 	return list("value" = cleaned)
 
@@ -256,10 +327,14 @@
 			if("disease")
 				var/disease_path = text2path(effect["type"])
 				if(ispath(disease_path, /datum/disease))
-					npc.ForceContractDisease(new disease_path(), FALSE, TRUE)
+					// The NPC's illness stays with the NPC: it never spreads to players.
+					var/datum/disease/illness = new disease_path()
+					illness.spread_flags = DISEASE_SPREAD_NON_CONTAGIOUS
+					illness.spread_text = "Non-contagious"
+					npc.ForceContractDisease(illness, FALSE, TRUE)
 			if("reagent")
 				var/reagent_path = text2path(effect["type"])
-				if(ispath(reagent_path, /datum/reagent))
+				if(ispath(reagent_path, /datum/reagent) && babylon_tutorial_blood_reagents()[effect["type"]])
 					npc.reagents.add_reagent(reagent_path, amount)
 			if("unconscious")
 				npc.Unconscious(amount SECONDS, ignore_canstun = TRUE)
@@ -273,28 +348,53 @@
 	return applied
 
 // ---------------------------------------------------------------------------------------------
+// Make NPC vulnerable
+
+/obj/babylon_tutorial/action/npc_vulnerable
+	tutorial_kind = "npc_vulnerable"
+	kind_name = "Make NPC vulnerable"
+	kind_desc = "An NPC that was unhurtable can be hurt from now on (for everyone in this world)."
+	kind_example = "e.g. the sparring partner can be hit once the lesson starts."
+	ui_icon = "shield-halved"
+	view_icon = 'icons/effects/mapping_helpers.dmi'
+	view_state = "mobspawner"
+
+/obj/babylon_tutorial/action/npc_vulnerable/own_schema()
+	return list(
+		babylon_tutorial_field("target", "NPC spawner", "id", "", "Its NPC loses the \"Unhurtable until made vulnerable\" protection.", filter = list("npc"), required = TRUE),
+	)
+
+/obj/babylon_tutorial/action/npc_vulnerable/perform(datum/babylon_tutorial_run/run)
+	var/mob/living/npc = babylon_tutorial_resolve(setting("target"))
+	if(isliving(npc) && npc.babylon_tutorial_npc)
+		REMOVE_TRAIT(npc, TRAIT_GODMODE, BABYLON_TUTORIAL_NPC_TRAIT)
+
+/obj/babylon_tutorial/action/npc_vulnerable/summary()
+	return "[setting("target") || "?"]"
+
+// ---------------------------------------------------------------------------------------------
 // Presets (the wand's NPC mode)
 
 /// Preset id => list(name, desc, icon, settings): ready-made NPC spawners.
 /proc/babylon_tutorial_npc_presets()
 	return list(
-		"guide" = list("name" = "Guide", "desc" = "A friendly guide who can talk and point. No injuries.", "icon" = "person-chalkboard", "settings" = list(
+		"guide" = list("name" = "Guide", "desc" = "A friendly guide who can talk and point. No injuries.", "id_prefix" = "guide", "icon" = "person-chalkboard", "settings" = list(
 			"npc_name" = "Guide", "outfit" = "[/datum/outfit/job/curator]", "effects" = list())),
-		"bystander" = list("name" = "Bystander", "desc" = "An ordinary crew member standing around.", "icon" = "person", "settings" = list(
+		"bystander" = list("name" = "Bystander", "desc" = "An ordinary crew member standing around.", "id_prefix" = "bystander", "icon" = "person", "settings" = list(
 			"npc_name" = "Crew member", "outfit" = "[/datum/outfit/job/assistant]", "effects" = list())),
-		"bruised" = list("name" = "Bruised patient", "desc" = "40 brute damage on the chest: treat with sutures or bruise packs.", "icon" = "user-injured", "settings" = list(
+		"bruised" = list("name" = "Bruised patient", "desc" = "40 brute damage on the chest: treat with sutures or bruise packs.", "id_prefix" = "patient", "icon" = "user-injured", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "brute", "amount" = 40, "zone" = BODY_ZONE_CHEST, "chance" = 100)))),
-		"burned" = list("name" = "Burned patient", "desc" = "35 burn damage on the left arm: treat with ointment or mesh.", "icon" = "fire", "settings" = list(
+		"burned" = list("name" = "Burned patient", "desc" = "35 burn damage on the left arm: treat with ointment or mesh.", "id_prefix" = "patient", "icon" = "fire", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "burn", "amount" = 35, "zone" = BODY_ZONE_L_ARM, "chance" = 100)))),
-		"poisoned" = list("name" = "Poisoned patient", "desc" = "30 toxin damage: treat with a toxin medicine.", "icon" = "skull-crossbones", "settings" = list(
+		"poisoned" = list("name" = "Poisoned patient", "desc" = "30 toxin damage: treat with a toxin medicine.", "id_prefix" = "patient", "icon" = "skull-crossbones", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "tox", "amount" = 30, "chance" = 100)))),
-		"fracture" = list("name" = "Broken leg", "desc" = "A hairline fracture on the right leg: needs a splint or bone gel.", "icon" = "bone", "settings" = list(
+		"fracture" = list("name" = "Broken leg", "desc" = "A hairline fracture on the right leg: needs a splint or bone gel.", "id_prefix" = "patient", "icon" = "bone", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "wound", "type" = "[/datum/wound/blunt/bone/severe]", "zone" = BODY_ZONE_R_LEG, "chance" = 100)))),
-		"bleeding" = list("name" = "Bleeding patient", "desc" = "A cut on the left arm that bleeds and some blood lost: gauze and blood.", "icon" = "droplet", "settings" = list(
+		"bleeding" = list("name" = "Bleeding patient", "desc" = "A cut on the left arm that bleeds and some blood lost: gauze and blood.", "id_prefix" = "patient", "icon" = "droplet", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "bleed", "amount" = 80, "zone" = BODY_ZONE_L_ARM, "chance" = 100)))),
-		"sick" = list("name" = "Sick patient", "desc" = "Has the cold: cure it with spaceacillin.", "icon" = "virus", "settings" = list(
+		"sick" = list("name" = "Sick patient", "desc" = "Has the cold: cure it with spaceacillin.", "id_prefix" = "patient", "icon" = "virus", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "disease", "type" = "[/datum/disease/cold]", "chance" = 100)))),
-		"unconscious" = list("name" = "Unconscious patient", "desc" = "Out cold for 10 minutes, with some suffocation damage.", "icon" = "bed", "settings" = list(
+		"unconscious" = list("name" = "Unconscious patient", "desc" = "Out cold for 10 minutes, with some suffocation damage.", "id_prefix" = "patient", "icon" = "bed", "settings" = list(
 			"npc_name" = "Patient", "effects" = list(list("kind" = "unconscious", "amount" = 600, "chance" = 100), list("kind" = "oxy", "amount" = 30, "chance" = 100)))),
 	)
 
@@ -312,7 +412,7 @@
 		if(!cleaned["error"])
 			values[key] = cleaned["value"]
 	spawner.store_settings(values)
-	spawner.tutorial_id = babylon_tutorial_unique_id(preset_id == "guide" ? "guide" : "npc")
+	spawner.tutorial_id = babylon_tutorial_unique_id(preset["id_prefix"] || "npc")
 	spawner.spawn_npc()
 	return spawner
 

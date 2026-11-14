@@ -8,12 +8,29 @@
 	return FALSE
 
 // ---------------------------------------------------------------------------------------------
+// Tutorial starts
+
+/obj/babylon_tutorial/trigger/start
+	tutorial_kind = "start"
+	kind_name = "Tutorial starts"
+	kind_desc = "Fires once, right when the tutorial starts for the player."
+	kind_example = "e.g. a welcome message and a point at the guide."
+	ui_icon = "flag"
+	view_icon = 'icons/effects/landmarks_static.dmi'
+	view_state = "observer_start"
+	edge_triggered = FALSE
+
+/obj/babylon_tutorial/trigger/start/check(datum/babylon_tutorial_run/run)
+	return !run.fired[src]
+
+// ---------------------------------------------------------------------------------------------
 // Zone
 
 /obj/babylon_tutorial/trigger/zone
 	tutorial_kind = "zone"
 	kind_name = "Zone"
 	kind_desc = "Fires when the player walks into a rectangle of tiles."
+	kind_example = "e.g. the player enters medbay."
 	ui_icon = "vector-square"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "navigate"
@@ -58,6 +75,7 @@
 	tutorial_kind = "holding"
 	kind_name = "Holding"
 	kind_desc = "Fires when the player holds an item of a type in a hand."
+	kind_example = "e.g. the player picks up the health analyzer."
 	ui_icon = "hand-holding"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "grab"
@@ -93,7 +111,8 @@
 /obj/babylon_tutorial/trigger/used_on
 	tutorial_kind = "used_on"
 	kind_name = "Used on"
-	kind_desc = "Fires when the player uses an item of a type on a target (e.g. a health analyzer on an NPC)."
+	kind_desc = "Fires when the player uses an item of a type on a target."
+	kind_example = "e.g. a health analyzer used on the patient NPC."
 	ui_icon = "hand-pointer"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "help"
@@ -144,6 +163,12 @@
 /obj/babylon_tutorial/trigger/used_on/check(datum/babylon_tutorial_run/run)
 	return run.take_hit(src)
 
+/obj/babylon_tutorial/trigger/used_on/find_issues()
+	. = ..()
+	var/obj/babylon_tutorial/target = babylon_tutorial_find(setting("target"))
+	if(target && isturf(target.target_atom()))
+		.["target"] = istype(target, /obj/babylon_tutorial/npc_spawner) ? "[target.tutorial_id] has no NPC right now: spawn it first." : "There is nothing on [target.tutorial_id]'s tile to use the item on."
+
 /obj/babylon_tutorial/trigger/used_on/summary()
 	return "[babylon_tutorial_type_label(setting("item_type"))] on [setting("target") || "?"], " + ..()
 
@@ -154,6 +179,7 @@
 	tutorial_kind = "condition"
 	kind_name = "Condition"
 	kind_desc = "Fires when something in the world becomes true: gas, power, a fluid, a structure or an NPC's state."
+	kind_example = "e.g. the patient's brute damage is healed to 10 or less."
 	ui_icon = "list-check"
 	view_icon = 'icons/effects/mapping_helpers.dmi'
 	view_state = "trait"
@@ -169,7 +195,7 @@
 			"npc" = "NPC state",
 		))),
 		// Gas
-		babylon_tutorial_field("zone", "Zone", "zone", null, "The tiles whose air is measured. Without a zone it is this trigger's tile.", when = list("condition" = list("gas"))),
+		babylon_tutorial_field("zone", "Zone", "zone", null, "The tiles whose air is measured (at most 1000). Without a zone it is this trigger's tile.", when = list("condition" = list("gas")), max_tiles = 1000),
 		babylon_tutorial_field("gas", "Gas", "choice", "total", "Which gas to measure.", options = babylon_tutorial_gas_options(), when = list("condition" = list("gas"))),
 		babylon_tutorial_field("measure", "Measure", "choice", "pressure", "Pressure: the average over the zone (kPa). Moles: the amount in the whole zone.", options = babylon_tutorial_options(list("pressure" = "Pressure (kPa)", "moles" = "Moles")), when = list("condition" = list("gas"))),
 		// Power
@@ -196,7 +222,30 @@
 		babylon_tutorial_field("amount", "Amount", "number", 0, "Pressure in kPa, moles, units of fluid, charge in % or health.", min = -200, max = 100000, when = list("condition" = list("gas", "fluid", "power", "npc"))),
 	)
 
+/obj/babylon_tutorial/trigger/condition
+	/// The last evaluation, shared by every run during one subsystem fire.
+	var/cached_result
+	var/cached_fire = -1
+
 /obj/babylon_tutorial/trigger/condition/check(datum/babylon_tutorial_run/run)
+	// The world is the same for every run: evaluate once per fire (tests call evaluate directly).
+	if(SSbabylon_tutorial.firing_now)
+		if(cached_fire != SSbabylon_tutorial.fire_count)
+			cached_fire = SSbabylon_tutorial.fire_count
+			cached_result = evaluate()
+		return cached_result
+	return evaluate()
+
+/obj/babylon_tutorial/trigger/condition/find_issues()
+	. = ..()
+	var/condition = setting("condition")
+	if(condition in list("fluid", "npc"))
+		var/obj/babylon_tutorial/target = babylon_tutorial_find(setting("target"))
+		if(target && isturf(target.target_atom()))
+			.["target"] = condition == "npc" ? "[target.tutorial_id] has no NPC right now." : "There is nothing on [target.tutorial_id]'s tile to measure."
+
+/// Whether the condition holds in the world right now.
+/obj/babylon_tutorial/trigger/condition/proc/evaluate()
 	var/amount = setting("amount")
 	switch(setting("condition"))
 		if("gas")
@@ -328,6 +377,7 @@
 	tutorial_kind = "button"
 	kind_name = "Button"
 	kind_desc = "A real button everyone can see; fires when the player presses it."
+	kind_example = "e.g. \"Press when you are ready\"."
 	ui_icon = "circle-dot"
 	name = "button"
 	desc = "Press it."
@@ -341,7 +391,7 @@
 
 /obj/babylon_tutorial/trigger/button/own_schema()
 	return list(
-		babylon_tutorial_field("label", "Label", "text", "button", "The button's name, as players see it."),
+		babylon_tutorial_field("label", "Label", "text", "Button", "The button's name, as players see it.", is_name = TRUE),
 	)
 
 /obj/babylon_tutorial/trigger/button/Initialize(mapload)
@@ -378,6 +428,7 @@
 	tutorial_kind = "say"
 	kind_name = "Say"
 	kind_desc = "Fires when the player says a phrase (any part of what they say, upper/lower case ignored)."
+	kind_example = "e.g. the player says \"ready\"."
 	ui_icon = "comment"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "talk_hello"
@@ -396,7 +447,8 @@
 
 /obj/babylon_tutorial/trigger/say/proc/heard(datum/babylon_tutorial_run/run, message)
 	var/phrase = setting("phrase")
-	if(length(phrase) && findtext(message, phrase))
+	// Said text arrives HTML-encoded ("it&#39;s"); compare what the player typed.
+	if(length(phrase) && findtext(html_decode(message), phrase))
 		run.hit(src)
 
 // ---------------------------------------------------------------------------------------------
@@ -405,7 +457,8 @@
 /obj/babylon_tutorial/trigger/timer
 	tutorial_kind = "timer"
 	kind_name = "Timer"
-	kind_desc = "Fires a number of seconds after it was enabled (at the start or by an action)."
+	kind_desc = "Fires a number of seconds after it started listening."
+	kind_example = "e.g. a hint 30 seconds after a step began, if the player is stuck."
 	ui_icon = "stopwatch"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "generic_event"

@@ -49,6 +49,10 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	var/kind_name = "Tutorial object"
 	/// One line telling builders what this object does.
 	var/kind_desc = ""
+	/// An example use, for the wand's palette ("e.g. ...").
+	var/kind_example = ""
+	/// What the id is for, under the id field.
+	var/id_help = "Other parts refer to this object by its id."
 	/// Font Awesome icon for the tgui windows.
 	var/ui_icon = "circle"
 	/// The image a wand holder sees.
@@ -57,6 +61,10 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	/// Decoded settings_json, and the JSON it was decoded from.
 	var/list/settings_cache
 	var/settings_cache_json
+	/// issues() cached: the result, and the tutorial version and time it was computed at.
+	var/list/issues_cache
+	var/issues_version = -1
+	var/issues_time = -1
 
 /obj/babylon_tutorial/Initialize(mapload)
 	. = ..()
@@ -70,6 +78,9 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 
 /obj/babylon_tutorial/Destroy()
 	GLOB.babylon_tutorial_objects -= src
+	// No run may keep a reference to a removed object (runtime.dm).
+	for(var/datum/babylon_tutorial_run/run as anything in GLOB.babylon_tutorial_runs)
+		run.forget(src)
 	babylon_tutorial_changed()
 	return ..()
 
@@ -139,13 +150,57 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /obj/babylon_tutorial/proc/settings_changed()
 	return
 
+/// Gives the object a new id. Ids in other objects' settings that referred to the old one are
+/// rewritten (unless another object still has the old id). Null on success, else why not;
+/// last_rename_links lists the objects whose links were updated.
 /obj/babylon_tutorial/proc/set_tutorial_id(value)
 	value = trim("[value]")
+	if(value == tutorial_id)
+		last_rename_links = list()
+		return null
 	if(!babylon_tutorial_valid_id(value))
 		return "Ids use letters, digits, _ and - only (at most [BABYLON_TUTORIAL_ID_MAX] characters)."
+	var/obj/babylon_tutorial/taken = babylon_tutorial_find(value)
+	if(taken && taken != src)
+		return "\"[value]\" is already used by a [taken.kind_name]. Pick another id."
+	var/old_id = tutorial_id
 	tutorial_id = value
+	last_rename_links = list()
+	var/obj/babylon_tutorial/twin = babylon_tutorial_find(old_id)
+	if(old_id && !twin)
+		last_rename_links = babylon_tutorial_rewrite_links(old_id, value)
 	babylon_tutorial_changed()
 	return null
+
+/obj/babylon_tutorial
+	/// Ids of the objects whose links the last set_tutorial_id() rewrote.
+	var/list/last_rename_links = list()
+
+/// Replaces an id in every id and idlist setting. Returns the ids of the objects changed.
+/proc/babylon_tutorial_rewrite_links(old_id, new_id)
+	var/list/changed = list()
+	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
+		var/list/values = object.settings().Copy()
+		var/touched = FALSE
+		for(var/list/field as anything in babylon_tutorial_schema(object.type))
+			var/key = field["key"]
+			switch(field["type"])
+				if("id")
+					if(values[key] == old_id)
+						values[key] = new_id
+						touched = TRUE
+				if("idlist")
+					var/list/ids = values[key]
+					if(islist(ids) && (old_id in ids))
+						var/list/renamed = list()
+						for(var/id in ids)
+							renamed += id == old_id ? new_id : id
+						values[key] = renamed
+						touched = TRUE
+		if(touched)
+			object.store_settings(values)
+			changed += object.tutorial_id
+	return changed
 
 /// The fields of this kind's settings: a list of babylon_tutorial_field() lists.
 /obj/babylon_tutorial/proc/settings_schema()
@@ -177,7 +232,16 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	return refs
 
 /// Problems with this object's settings, for the configure window: list(field key = message).
+/// Cached until the tutorial changes, and for at most a second (targets on tiles can change).
 /obj/babylon_tutorial/proc/issues()
+	if(issues_version == GLOB.babylon_tutorial_version && world.time < issues_time + 1 SECONDS && issues_cache)
+		return issues_cache
+	issues_cache = find_issues()
+	issues_version = GLOB.babylon_tutorial_version
+	issues_time = world.time
+	return issues_cache
+
+/obj/babylon_tutorial/proc/find_issues()
 	var/list/found = list()
 	var/count = 0
 	for(var/obj/babylon_tutorial/other as anything in GLOB.babylon_tutorial_objects)
@@ -284,8 +348,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist, zone or
 /// effects. options: list(list("value", "label")). filter: categories an id may refer to. when:
 /// list(other key = list(values)) — the field applies only while that setting has one of them.
-/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null)
+/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null)
 	var/list/field = list("key" = key, "label" = label, "type" = type, "default" = default_value, "help" = help)
+	if(is_name)
+		field["name"] = TRUE
+	if(max_tiles)
+		field["max_tiles"] = max_tiles
 	if(options)
 		field["options"] = options
 	if(!isnull(min))
@@ -347,6 +415,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			value = trim(value)
 			if(length_char(value) > limit)
 				return list("error" = "At most [limit] characters.")
+			if(field["name"])
+				// Names end up in chat and on mobs: letters, digits, spaces and simple punctuation.
+				var/clean_name = reject_bad_name(value, TRUE, 42, FALSE, FALSE, FALSE, FALSE)
+				if(!clean_name)
+					return list("error" = "Use a name of letters, digits, spaces and simple punctuation (at most 42 characters).")
+				value = clean_name
 			return list("value" = value)
 		if("number")
 			var/number = isnum(value) ? value : text2num("[value]")
@@ -408,9 +482,20 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			var/x2 = clamp(max(numbers[1], numbers[3]), 1, world.maxx)
 			var/y1 = clamp(min(numbers[2], numbers[4]), 1, world.maxy)
 			var/y2 = clamp(max(numbers[2], numbers[4]), 1, world.maxy)
+			var/tiles = (x2 - x1 + 1) * (y2 - y1 + 1)
+			if(field["max_tiles"] && tiles > field["max_tiles"])
+				return list("error" = "This zone can cover at most [field["max_tiles"]] tiles (that one has [tiles]). Pick smaller corners.")
 			return list("value" = list(x1, y1, x2, y2, z))
 		if("effects")
 			return babylon_tutorial_clean_effects(value)
+		if("target")
+			// A marker's target: "object" (the best thing on its tile), "tile" or a type on the tile.
+			if(value == "object" || value == "tile")
+				return list("value" = value)
+			var/path = text2path("[value]")
+			if(!ispath(path, /obj) && !ispath(path, /mob))
+				return list("error" = "Choose something on the marker's tile.")
+			return list("value" = "[path]")
 	return list("error" = "Unknown setting type.")
 
 /// Type paths a builder may pick for a typepath field.
@@ -419,7 +504,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 		var/obj/item/item_path = path
 		if(initial(item_path.item_flags) & ABSTRACT)
 			return FALSE
-		if(path in typesof(/obj/item/hand_item, /obj/item/antag_spawner, /obj/item/bombcore, /obj/item/disk/nuclear, /obj/item/grenade, /obj/item/transfer_valve, /obj/item/mmi, /obj/item/mob_holder))
+		if(initial(item_path.abstract_type) == path)
+			return FALSE
+		// Kept in step with the Creative panel's spawn blocklist (merged into one check later).
+		var/static/list/blocked = typecacheof(list(/obj/item/hand_item, /obj/item/antag_spawner, /obj/item/bombcore, /obj/item/disk/nuclear, /obj/item/grenade, /obj/item/transfer_valve, /obj/item/mmi, /obj/item/mob_holder, /obj/item/hilbertshotel))
+		if(blocked[path])
 			return FALSE
 		if(findtext("[path]", "lewd") || findtext("[path]", "/erp"))
 			return FALSE
@@ -460,45 +549,65 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 		return "[initial(outfit_path.name)]"
 	return "[path]"
 
-/// Problems with the tutorial as a whole, for the wand's overview.
+/// Problems with the tutorial as a whole, for the wand's overview: list(list(text, ref)), ref
+/// naming the object to open (or null). Every object's own issues are included. Cached until the
+/// tutorial changes, for at most a second.
 /proc/babylon_tutorial_overview_warnings()
+	var/static/list/cached
+	var/static/cached_version = -1
+	var/static/cached_time = -1
+	if(cached && cached_version == GLOB.babylon_tutorial_version && world.time < cached_time + 1 SECONDS)
+		return cached
 	var/list/warnings = list()
 	var/obj/babylon_tutorial/start = babylon_tutorial_find("start")
 	if(!istype(start, /obj/babylon_tutorial/marker))
-		warnings += "There is no marker with the id \"start\": players start at the arrivals instead."
-	var/list/seen = list()
+		warnings += list(list("text" = "There is no marker with the id \"start\": players start at the arrivals instead.", "ref" = null))
 	var/list/enabled_later = list()
 	var/list/used_actions = list()
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
-		if(seen[object.tutorial_id])
-			warnings += "The id \"[object.tutorial_id]\" is used more than once."
-		seen[object.tutorial_id] = TRUE
-		for(var/id in object.references())
-			if(!babylon_tutorial_find(id))
-				warnings += "[object.tutorial_id] refers to \"[id]\", which does not exist."
+		var/list/issues = object.issues()
+		for(var/key in issues)
+			warnings += list(list("text" = "[object.tutorial_id]: [issues[key]]", "ref" = REF(object)))
 		if(istype(object, /obj/babylon_tutorial/action/toggle) && object.setting("mode") == "enable")
 			for(var/id in object.setting("triggers"))
-				enabled_later[id] = TRUE
+				enabled_later[id] = object.tutorial_id
 		if(object.tutorial_category == "trigger")
+			if(object.setting("starts") == "after" && length(object.setting("after")))
+				enabled_later[object.tutorial_id] = enabled_later[object.tutorial_id] || object.setting("after")
 			for(var/id in object.setting("actions"))
 				used_actions[id] = TRUE
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
-		if(object.tutorial_category == "trigger" && !object.setting("enabled_at_start") && !enabled_later[object.tutorial_id])
-			warnings += "Trigger [object.tutorial_id] starts disabled and no action enables it: it can never fire."
+		if(object.tutorial_category == "trigger")
+			var/starts = object.setting("starts")
+			if(starts == "manual" && !enabled_later[object.tutorial_id])
+				warnings += list(list("text" = "Trigger [object.tutorial_id] waits for an Enable action, but none enables it: it can never fire.", "ref" = REF(object)))
+			else if(starts == "start" && enabled_later[object.tutorial_id] && !istype(object, /obj/babylon_tutorial/trigger/start))
+				warnings += list(list("text" = "Trigger [object.tutorial_id] listens from the beginning, but [enabled_later[object.tutorial_id]] also enables it later. Did you mean \"After [enabled_later[object.tutorial_id]] fired\"?", "ref" = REF(object)))
 		if(object.tutorial_category == "action" && !used_actions[object.tutorial_id])
-			warnings += "Action [object.tutorial_id] is not used by any trigger."
+			warnings += list(list("text" = "Action [object.tutorial_id] is not used by any trigger.", "ref" = REF(object)))
 	var/has_complete = FALSE
 	for(var/obj/babylon_tutorial/action/complete/complete in GLOB.babylon_tutorial_objects)
 		has_complete = TRUE
 	if(length(GLOB.babylon_tutorial_objects) && !has_complete)
-		warnings += "No Complete action: players never see the tutorial's end screen."
+		warnings += list(list("text" = "No Complete action: players never see the tutorial's end screen.", "ref" = null))
+	cached = warnings
+	cached_version = GLOB.babylon_tutorial_version
+	cached_time = world.time
 	return warnings
+
+/// The overview warnings as plain text (tests, logs).
+/proc/babylon_tutorial_overview_texts()
+	var/list/texts = list()
+	for(var/list/warning as anything in babylon_tutorial_overview_warnings())
+		texts += warning["text"]
+	return texts
 
 // ---------------------------------------------------------------------------------------------
 // Categories
 
 /obj/babylon_tutorial/trigger
 	tutorial_category = "trigger"
+	id_help = "Other triggers can start listening after this one fires (their \"After\" setting)."
 	/// Fires when its condition becomes true (not on every check while it stays true).
 	var/edge_triggered = TRUE
 
@@ -506,7 +615,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	return own_schema() + list(
 		babylon_tutorial_field("actions", "Actions", "idlist", list(), "The actions to run, in this order, when the trigger fires.", filter = list("action")),
 		babylon_tutorial_field("once", "Fire only once", "bool", 1, "Off: the trigger can fire again (every time its condition becomes true)."),
-		babylon_tutorial_field("enabled_at_start", "Enabled at the start", "bool", 1, "Off: the trigger waits until an Enable/disable action switches it on."),
+		babylon_tutorial_field("starts", "Starts listening", "choice", "start", "When this trigger begins to watch for the player. \"After a trigger fired\" chains steps: one step's trigger starts listening once the step before it fired.", options = babylon_tutorial_options(list("start" = "At the beginning", "after" = "After a trigger fired", "manual" = "When an Enable action switches it on"))),
+		babylon_tutorial_field("after", "After", "id", "", "The trigger whose firing makes this one start listening.", filter = list("trigger"), when = list("starts" = list("after")), required = TRUE),
 		babylon_tutorial_field("cooldown", "Cooldown (seconds)", "number", 0, "Shortest time between two firings.", min = 0, max = 600),
 		babylon_tutorial_field("delay", "Delay (seconds)", "number", 0, "Wait this long after firing before the first action runs.", min = 0, max = 600),
 	)
@@ -515,12 +625,28 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /obj/babylon_tutorial/trigger/proc/own_schema()
 	return list()
 
+/obj/babylon_tutorial/trigger/store_settings(list/values)
+	if(isnull(values["starts"]) && values["enabled_at_start"] == 0)
+		values["starts"] = "manual"
+	return ..()
+
+/obj/babylon_tutorial/trigger/setting(key)
+	// Saves from before "Starts listening": enabled_at_start = 0 meant waiting for an Enable action.
+	if(key == "starts" && isnull(settings()["starts"]) && settings()["enabled_at_start"] == 0)
+		return "manual"
+	return ..()
+
+/// Whether the trigger listens as soon as a run starts.
+/obj/babylon_tutorial/trigger/proc/listens_at_start()
+	return setting("starts") == "start"
+
 /obj/babylon_tutorial/trigger/summary()
 	var/list/actions = setting("actions")
 	return length(actions) ? "runs [jointext(actions, ", ")]" : "runs nothing yet"
 
 /obj/babylon_tutorial/action
 	tutorial_category = "action"
+	id_help = "Triggers list this id to run it."
 
 /obj/babylon_tutorial/action/settings_schema()
 	return own_schema() + list(
@@ -538,14 +664,16 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	tutorial_category = "marker"
 	kind_name = "Marker"
 	kind_desc = "Names a spot or the object on it, so other parts can refer to it. Id \"start\" is where players begin."
+	kind_example = "e.g. \"scanner\" on the table with the health analyzer, so a Point action can point at it."
+	id_help = "A marker named start is where players begin. Actions and triggers refer to this marker by its id."
 	ui_icon = "location-dot"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "x2"
 
 /obj/babylon_tutorial/marker/settings_schema()
 	return list(
-		babylon_tutorial_field("target", "Stands for", "choice", "object", "What actions mean when they use this marker: the object on this tile (a machine, a closet ...) or the tile itself.", options = babylon_tutorial_options(list("object" = "The object on this tile", "tile" = "This tile"))),
-		babylon_tutorial_field("speaker_name", "Speaker name", "text", "Guide", "Name used when this marker speaks and there is no object on its tile."),
+		babylon_tutorial_field("target", "Stands for", "target", "object", "What actions mean when they use this marker: one of the things on its tile, or the tile itself."),
+		babylon_tutorial_field("speaker_name", "Speaker name", "text", "Guide", "Name used when this marker speaks and there is no object on its tile.", is_name = TRUE),
 	)
 
 /obj/babylon_tutorial/marker/Initialize(mapload)
@@ -564,9 +692,26 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 
 /obj/babylon_tutorial/marker/target_atom()
 	var/turf/tile = get_turf(src)
-	if(!tile || setting("target") == "tile")
+	var/target = setting("target")
+	if(!tile || target == "tile")
 		return tile
+	var/path = text2path(target)
+	if(path)
+		for(var/atom/movable/thing as anything in tile)
+			if(thing.type == path && !istype(thing, /obj/babylon_tutorial))
+				return thing
 	return babylon_tutorial_object_on(tile) || tile
+
+/// The things a marker on this tile can stand for, for its settings window.
+/obj/babylon_tutorial/marker/proc/target_choices()
+	var/list/choices = list(list("value" = "object", "label" = "Whatever is on this tile (best match)"), list("value" = "tile", "label" = "This tile"))
+	var/list/seen = list()
+	for(var/atom/movable/thing as anything in get_turf(src))
+		if(istype(thing, /obj/babylon_tutorial) || istype(thing, /obj/effect) || thing.invisibility >= INVISIBILITY_ABSTRACT || seen[thing.type])
+			continue
+		seen[thing.type] = TRUE
+		choices += list(list("value" = "[thing.type]", "label" = "[thing.name]"))
+	return choices
 
 /obj/babylon_tutorial/marker/summary()
 	var/atom/target = target_atom()

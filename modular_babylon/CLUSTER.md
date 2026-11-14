@@ -587,9 +587,12 @@ to open its window and choose what a click does:
 
 Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
 other by id, like airlock ids. A marker with the id **start** is where players begin
-(without one they start at the arrivals). The settings window offers the existing ids
-in drop-downs and points out problems inline (an id nobody has, a duplicate id, a
-trigger where an action is expected). The wand's **Overview** lists every object with
+(without one they start at the arrivals). Renaming an object updates every link to it;
+an id that is already taken is refused. The settings window offers the existing ids in
+searchable drop-downs (with what each object does), opens a linked object with one
+click and points out problems inline (an id nobody has, a trigger where an action is
+expected, a target with nothing on its tile). A trigger's action list can also create
+a new action right there ("+ New Message" ...). The wand's **Overview** lists every object with
 its problems and warns about a missing start marker, triggers that can never fire,
 unused actions and a tutorial without a Complete action; **Go there** jumps to an
 object.
@@ -598,6 +601,7 @@ object.
 
 | Trigger | Fires when |
 | --- | --- |
+| Tutorial starts | the tutorial starts for the player (once) |
 | Zone | the player enters a rectangle (Pick corners, then click two tiles) |
 | Holding | the player holds an item of a type (optionally exactly that type) |
 | Used on | the player uses an item of a type on a marker's object or an NPC |
@@ -606,15 +610,19 @@ object.
 | Say | the player says a phrase (any part, case ignored) |
 | Timer | some seconds after it was enabled |
 
-Every trigger has: **Actions** (ordered ids), **Fire only once**, **Enabled at the
-start**, **Cooldown** and **Delay**. Zone, holding and condition triggers fire when
-their condition *becomes* true.
+Every trigger has: **Actions** (ordered ids), **Fire only once**, **Starts listening**
+(at the beginning, after another trigger fired, or when an Enable action switches it
+on), **Cooldown** and **Delay**. A newly placed trigger listens after the trigger placed
+before it, so steps chain in the order you build them. Zone, holding and condition
+triggers fire when their condition *becomes* true; a gas zone covers at most 1000
+tiles.
 
 | Action | Does |
 | --- | --- |
-| Message | a green "Guide" box in the player's chat, or a speaker (NPC or marked object) says it; `[player]` becomes the player's name; optional screen hint |
+| Message | a green "Guide" box in the player's chat, or a speaker (NPC or marked object) says it to the player (a Guide box with the speaker's name when the player is too far away or the speaker is out cold); `[player]` becomes the player's name; optional **objective** that stays on the player's screen until the next one |
 | Point | a bouncing arrow over the target for the player; optionally a speaker points at it again and again |
-| Highlight | outlines the target for some seconds (only the player sees it) |
+| Highlight | outlines the target (only the player sees it) |
+| Make NPC vulnerable | an NPC that was unhurtable can be hurt from now on |
 | Teleport | moves the player to a marker |
 | Spawn NPC | (re)creates an NPC spawner's NPC |
 | Give item | puts an item in the player's hand |
@@ -622,19 +630,25 @@ their condition *becomes* true.
 | Sound | plays one of a dozen sounds for the player |
 | Complete | the "Tutorial complete!" screen with **Back to lobby** |
 
-Each action can wait (**Delay**) after the ones before it. **Preview** in an action's
-settings runs it for you alone.
+Point and Highlight last until the next step's trigger fires (or some seconds, or a
+chosen trigger). Each action can wait (**Delay**) after the ones before it. **Preview**
+in an action's settings runs it for you alone. Everything a tutorial shows or says goes
+to its player only, so several players in one world never see each other's steps; NPCs
+spawned by an action are shared by everyone in the world.
 
 **NPC spawners** create a human standing still (no AI): name, outfit (common job
 outfits or a search; ids and gear are left out), species, facing, **Spawn at the
-start**, and **effects**, each with a chance from 0 to 100 %: brute/burn damage on a
-body part, toxin and suffocation damage, a wound, a disease, a reagent in the blood,
-unconsciousness for some seconds, bleeding. The spawner is saved, never its NPC; the
+start**, **Unhurtable until made vulnerable**, and **effects**, each with a chance from
+0 to 100 %: brute/burn damage on a body part, toxin and suffocation damage, a wound, a
+disease (never contagious), a reagent in the blood (from a list of medicines, common
+poisons and a few drugs), unconsciousness for some seconds, bleeding. Names allow
+letters, digits, spaces and simple punctuation. The spawner is saved, never its NPC; the
 NPC is created again when the world starts and for every run.
 
 **Test run** (wand window) plays your tutorial for you alone, from the start marker
-or where you stand; other builders can test at the same time without crossing. Stop
-resets the run, not the world. In a tutorial play instance the run starts by itself
+or where you stand, and shows which triggers listen now; other builders can test at
+the same time without crossing. **Reset NPCs** (on by default) creates the NPCs again
+when a test starts. Stop resets the run, not the world. In a tutorial play instance the run starts by itself
 when the player arrives at the start marker.
 
 ## AFK return to the lobby

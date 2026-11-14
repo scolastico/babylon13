@@ -128,9 +128,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			if(!path)
 				report(user, "Choose what to place in the wand's window first.", FALSE)
 				return ITEM_INTERACT_BLOCKING
-			var/obj/babylon_tutorial/object = new path(tile)
+			var/obj/babylon_tutorial/object = babylon_tutorial_place(path, tile)
 			log_game("BABYLON TUTORIAL: [key_name(user)] placed [object.kind_name] [object.tutorial_id] at [AREACOORD(tile)].")
-			report(user, "Placed [lowertext(object.kind_name)] [object.tutorial_id].", TRUE)
+			report(user, "Placed [object.kind_name] \"[object.tutorial_id]\". Its settings are open.", TRUE)
 			open_editor(user, object)
 		if("npc")
 			var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_place_npc(tile, selected_preset)
@@ -138,7 +138,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 				report(user, "Choose an NPC preset in the wand's window first.", FALSE)
 				return ITEM_INTERACT_BLOCKING
 			log_game("BABYLON TUTORIAL: [key_name(user)] placed NPC spawner [spawner.tutorial_id] ([selected_preset]) at [AREACOORD(tile)].")
-			report(user, "Placed NPC [spawner.tutorial_id].", TRUE)
+			report(user, "Placed NPC \"[spawner.tutorial_id]\". Its settings are open.", TRUE)
 			open_editor(user, spawner)
 		if("configure")
 			var/obj/babylon_tutorial/object = choose_object(user, target, "Configure which?")
@@ -176,8 +176,26 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 
 /obj/item/babylon_tutorial_wand/proc/delete_object(mob/living/user, obj/babylon_tutorial/object)
 	log_game("BABYLON TUTORIAL: [key_name(user)] deleted [object.kind_name] [object.tutorial_id] at [AREACOORD(object)].")
-	report(user, "Deleted [lowertext(object.kind_name)] [object.tutorial_id].", TRUE)
+	var/id = object.tutorial_id
 	qdel(object)
+	var/list/still = list()
+	if(!babylon_tutorial_find(id))
+		for(var/obj/babylon_tutorial/other as anything in GLOB.babylon_tutorial_objects)
+			if(other.references()[id])
+				still += other.tutorial_id
+	report(user, length(still) ? "Deleted \"[id]\". [english_list(still)] still refer[length(still) == 1 ? "s" : ""] to it." : "Deleted \"[id]\".", TRUE)
+
+/// Places a tutorial object of a type. A new trigger after the first starts listening after the
+/// most recently placed trigger, so steps chain in placing order (builders can change it).
+/proc/babylon_tutorial_place(path, turf/tile)
+	var/obj/babylon_tutorial/trigger/previous
+	if(ispath(path, /obj/babylon_tutorial/trigger) && !ispath(path, /obj/babylon_tutorial/trigger/start))
+		for(var/obj/babylon_tutorial/trigger/trigger in GLOB.babylon_tutorial_objects)
+			previous = trigger
+	var/obj/babylon_tutorial/object = new path(tile)
+	if(previous)
+		object.store_settings(list("starts" = "after", "after" = previous.tutorial_id))
+	return object
 
 /obj/item/babylon_tutorial_wand/proc/open_editor(mob/living/user, obj/babylon_tutorial/object)
 	focus = WEAKREF(object)
@@ -229,6 +247,12 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	if(user)
 		to_chat(user, ok ? span_notice(text) : span_warning(text))
 	SStgui.update_uis(src)
+
+/proc/babylon_tutorial_ids_of(list/objects)
+	var/list/ids = list()
+	for(var/obj/babylon_tutorial/object as anything in objects)
+		ids += object.tutorial_id
+	return ids
 
 // ---------------------------------------------------------------------------------------------
 // The holder's view
@@ -336,7 +360,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			var/obj/babylon_tutorial/path = babylon_tutorial_kinds()[kind]
 			if(initial(path.tutorial_category) != group["id"])
 				continue
-			entries += list(list("kind" = kind, "name" = initial(path.kind_name), "desc" = initial(path.kind_desc), "icon" = initial(path.ui_icon)))
+			entries += list(list("kind" = kind, "name" = initial(path.kind_name), "desc" = initial(path.kind_desc), "example" = initial(path.kind_example), "icon" = initial(path.ui_icon)))
 		group["entries"] = entries
 	var/list/presets = list()
 	var/list/all_presets = babylon_tutorial_npc_presets()
@@ -367,6 +391,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"x" = tile?.x, "y" = tile?.y, "z" = tile?.z,
 			"refs" = refs,
 			"issues" = messages,
+			"actions" = object.tutorial_category == "trigger" ? object.setting("actions") : null,
+			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
+			"after" = object.tutorial_category == "trigger" && object.setting("starts") == "after" ? object.setting("after") : null,
 		))
 	var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(user)
 	var/list/zone_pick
@@ -382,7 +409,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		"warnings" = babylon_tutorial_overview_warnings(),
 		"picking" = zone_pick,
 		"has_start" = !!babylon_tutorial_marker_turf("start"),
-		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "enabled" = length(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7))) : list("running" = FALSE),
+		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective) : list("running" = FALSE),
 		"notice" = notice,
 	)
 
@@ -439,8 +466,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			if(from_start && !babylon_tutorial_marker_turf("start"))
 				report(user, "There is no \"start\" marker yet: place a marker and give it the id start.", FALSE)
 				return TRUE
-			babylon_tutorial_begin(user, from_start, TRUE)
-			report(user, "Test run started[from_start ? " at the start marker" : " where you stand"]. Your triggers are live now.", TRUE)
+			var/reset = !!params["reset_npcs"]
+			babylon_tutorial_begin(user, from_start, TRUE, reset)
+			report(user, "Test run started[from_start ? " at the start marker" : " where you stand"][reset ? ", NPCs reset" : ""]. Your triggers are live now.", TRUE)
 			return TRUE
 		if("test_stop")
 			if(babylon_tutorial_end(user))
@@ -502,18 +530,27 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	var/list/effect_kinds = babylon_tutorial_effect_kinds()
 	for(var/kind in effect_kinds)
 		kinds += list(list("value" = kind, "label" = effect_kinds[kind]))
+	// "+ New Message" and friends in a trigger's action list.
+	var/list/new_actions = list()
+	for(var/kind in babylon_tutorial_kinds())
+		var/obj/babylon_tutorial/path = babylon_tutorial_kinds()[kind]
+		if(initial(path.tutorial_category) == "action")
+			new_actions += list(list("value" = kind, "label" = initial(path.kind_name)))
 	return list(
 		"kind" = object.tutorial_kind,
 		"kind_name" = object.kind_name,
 		"kind_desc" = object.kind_desc,
 		"category" = object.tutorial_category,
 		"icon" = object.ui_icon,
+		"id_help" = object.id_help,
 		"color" = babylon_tutorial_category_colors()[object.tutorial_category],
 		"schema" = babylon_tutorial_schema(object.type),
 		"effect_kinds" = kinds,
 		"body_zones" = zones,
 		"wounds" = babylon_tutorial_options(babylon_tutorial_wounds()),
 		"diseases" = babylon_tutorial_options(babylon_tutorial_diseases()),
+		"reagents" = babylon_tutorial_options(babylon_tutorial_blood_reagents()),
+		"new_actions" = new_actions,
 	)
 
 /datum/babylon_tutorial_editor/ui_data(mob/user)
@@ -531,7 +568,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	var/list/ids = list()
 	for(var/obj/babylon_tutorial/other as anything in GLOB.babylon_tutorial_objects)
 		if(other != object)
-			ids += list(list("id" = other.tutorial_id, "kind_name" = other.kind_name, "category" = other.tutorial_category))
+			ids += list(list("id" = other.tutorial_id, "kind_name" = other.kind_name, "category" = other.tutorial_category, "summary" = other.summary()))
 	var/turf/tile = get_turf(object)
 	var/obj/item/babylon_tutorial_wand/wand = wand_ref?.resolve()
 	var/list/data = list(
@@ -545,11 +582,19 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		"notice" = notice,
 		"picking" = !!wand && wand.picking_object() == object,
 	)
+	if(istype(object, /obj/babylon_tutorial/marker))
+		var/obj/babylon_tutorial/marker/marker = object
+		var/atom/target = marker.target_atom()
+		data["target_choices"] = marker.target_choices()
+		data["target_now"] = isturf(target) ? "this tile" : "[target]"
 	if(istype(object, /obj/babylon_tutorial/npc_spawner))
 		var/obj/babylon_tutorial/npc_spawner/spawner = object
 		var/mob/living/carbon/human/npc = spawner.current_npc()
-		data["npc"] = npc ? list("name" = npc.real_name, "health" = npc.health, "stat" = npc.stat == DEAD ? "dead" : (babylon_tutorial_awake(npc) ? "awake" : "unconscious")) : null
+		data["npc"] = npc ? list("name" = npc.real_name, "health" = npc.health, "stat" = npc.stat == DEAD ? "dead" : (babylon_tutorial_awake(npc) ? "awake" : "unconscious"), "outdated" = spawner.npc_outdated()) : null
 	return data
+
+/datum/babylon_tutorial_editor/proc/set_notice(text, ok, key = null)
+	notice = list("text" = text, "ok" = ok, "id" = world.time + rand(), "key" = key)
 
 /datum/babylon_tutorial_editor/ui_act(action, list/params, datum/tgui/ui, datum/ui_state/state)
 	. = ..()
@@ -563,22 +608,56 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	switch(action)
 		if("set")
 			var/key = "[params["key"]]"
+			if(key == "id")
+				var/old_id = object.tutorial_id
+				var/error = object.set_tutorial_id(params["value"])
+				if(error)
+					set_notice(error, FALSE, "id")
+				else if(old_id != object.tutorial_id)
+					var/list/links = object.last_rename_links
+					set_notice("Renamed [old_id] → [object.tutorial_id][length(links) ? " (updated [length(links)] link[length(links) == 1 ? "" : "s"]: [jointext(links, ", ")])" : ""].", TRUE)
+					log_game("BABYLON TUTORIAL: [key_name(user)] renamed [old_id] to [object.tutorial_id].")
+				wand.sync_view(TRUE)
+				return TRUE
 			var/error = object.set_setting(key, params["value"])
 			if(error)
-				notice = list("text" = error, "ok" = FALSE, "id" = world.time, "key" = key)
+				set_notice(error, FALSE, key)
 			else
 				notice = null
 				log_game("BABYLON TUTORIAL: [key_name(user)] set [key] of [object.tutorial_id].")
 			wand.sync_view(TRUE)
 			return TRUE
 		if("search")
+			// At most five searches a second per window; results are cached per query.
+			if(world.time < next_search)
+				return FALSE
+			next_search = world.time + 2
 			var/key = "[params["key"]]"
 			var/list/field = babylon_tutorial_schema_field(object.type, key)
-			if(field?["type"] == "typepath" || key == "effect_reagent")
-				if(key == "effect_reagent")
-					field = list("base" = "[/datum/reagent]")
+			if(field?["type"] == "typepath")
 				var/query = copytext_char("[params["query"]]", 1, 64)
-				search = list("key" = key, "query" = query, "results" = babylon_tutorial_search_types(field, query))
+				search = list("key" = key, "query" = query, "results" = babylon_tutorial_cached_search(field, query))
+			return TRUE
+		if("new_linked")
+			// A new action on this trigger's tile, added to its action list, its settings opened.
+			var/key = "[params["key"]]"
+			var/list/field = babylon_tutorial_schema_field(object.type, key)
+			var/path = babylon_tutorial_kinds()["[params["kind"]]"]
+			if(field?["type"] != "idlist" || !ispath(path, /obj/babylon_tutorial/action))
+				return FALSE
+			var/obj/babylon_tutorial/created = new path(get_turf(object))
+			var/list/ids = object.setting(key)
+			ids = islist(ids) ? ids.Copy() : list()
+			ids += created.tutorial_id
+			object.set_setting(key, ids)
+			log_game("BABYLON TUTORIAL: [key_name(user)] placed [created.kind_name] [created.tutorial_id] for [object.tutorial_id].")
+			set_notice("Added [created.kind_name] \"[created.tutorial_id]\" to [object.tutorial_id]. Its settings are open.", TRUE)
+			wand.open_editor(user, created)
+			return TRUE
+		if("open")
+			var/obj/babylon_tutorial/other = babylon_tutorial_find("[params["id"]]")
+			if(other)
+				wand.open_editor(user, other)
 			return TRUE
 		if("pick_zone")
 			var/key = "[params["key"]]"
@@ -599,27 +678,44 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 				var/obj/babylon_tutorial/npc_spawner/spawner = object
 				spawner.spawn_npc()
 				SSbabylon_tutorial.refresh_hooks()
-				notice = list("text" = "NPC created.", "ok" = TRUE, "id" = world.time)
+				log_game("BABYLON TUTORIAL: [key_name(user)] spawned the NPC of [object.tutorial_id].")
+				set_notice("NPC created.", TRUE)
 			return TRUE
 		if("preview")
 			if(istype(object, /obj/babylon_tutorial/action))
 				var/obj/babylon_tutorial/action/previewed = object
-				var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(user)
-				if(!run)
-					// A quiet run that only shows this action; no triggers listen.
-					run = new(user, TRUE)
-					run.enabled.Cut()
-					QDEL_IN(run, 60 SECONDS)
-				run.perform("preview", previewed)
-				notice = list("text" = "Previewed for you only.", "ok" = TRUE, "id" = world.time)
+				// Always a throwaway run: it never touches a test run, and no triggers listen.
+				var/datum/babylon_tutorial_run/run = new(user, TRUE)
+				run.enabled.Cut()
+				run.perform(null, previewed)
+				QDEL_IN(run, 60 SECONDS)
+				set_notice("Previewed for you only.", TRUE)
 			return TRUE
 		if("jump")
 			var/turf/tile = get_turf(object)
 			if(tile)
+				user.buckled?.unbuckle_mob(user, TRUE)
 				user.forceMove(tile)
+				log_game("BABYLON TUTORIAL: [key_name(user)] jumped to [object.tutorial_id] at [AREACOORD(tile)].")
 			return TRUE
 		if("delete")
 			wand.delete_object(user, object)
 			ui.close()
 			return TRUE
 	return FALSE
+
+/datum/babylon_tutorial_editor
+	/// world.time before which another type search is refused.
+	var/next_search = 0
+
+/// Type search results, cached per base and query (the last 50 queries).
+/proc/babylon_tutorial_cached_search(list/field, query)
+	var/static/list/cache = list()
+	var/key = "[field["base"]]|[lowertext(trim(query))]"
+	if(cache[key])
+		return cache[key]
+	var/list/results = babylon_tutorial_search_types(field, query)
+	if(length(cache) >= 50)
+		cache.Cut(1, 2)
+	cache[key] = results
+	return results
