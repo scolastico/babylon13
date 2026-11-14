@@ -45,6 +45,7 @@ RUN DreamMaker -DCBT babylon-test.dme && DreamMaker -DCBT babylon-station-test.d
  && python3 -m unittest discover -s services/supervisor -v \
  && python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v \
  && node tools/babylon/test_lobby_loading.cjs \
+ && node tools/babylon/test_lobby_ui.cjs \
  && node container/test_cleanup.cjs
 
 FROM ubuntu:24.04 AS runtime

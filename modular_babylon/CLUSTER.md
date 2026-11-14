@@ -572,10 +572,18 @@ Running worlds must be saved/stopped first. Deletion revokes memberships,
 tickets and sessions, releases the owner's world quota, and removes that
 world's data directory. Filesystem failures retain a cleanup journal for retry.
 
-The lobby shows a loading panel before slow requests, including deletion,
-checkpoint restoration, settings and membership changes. Shutdown stays on
-that panel until the final save and process exit are confirmed, or an error
-or timeout is reported. Cancelling a dialog returns to the world list.
+Every lobby prompt is an in-page dialog (no BYOND system popups): the
+New world wizard (map cards grouped into Babylon, Creative Plane with an
+S/M/L size choice, and Stations, with a Multi-level badge for multi-z maps;
+then name, description, who can join, password, capacity and the Creative and
+Persistent switches, with the owner's saved/total world counters), world
+settings, members, saved checkpoints, the join password, Discord link/unlink
+and the stop/delete/reset/rollback confirmations. Delete and Reset need the
+world's name typed; confirmations never trigger on Enter. Esc or a click
+beside the dialog cancels; supervisor errors appear inside the dialog, which
+stays open. Status polls never redraw an open dialog, so typing is kept.
+Joining and stopping show the loading panel; shutdown stays on it until the
+final save and process exit are confirmed, or an error or timeout is reported.
 Background status polls update the existing browser document only when its
 content changes; each tab keeps its scroll position. Late poll responses
 cannot overwrite an action's loading state.

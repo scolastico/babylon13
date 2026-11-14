@@ -18,6 +18,7 @@ setInterval(function () {
   document.getElementById('browser-content').style.display = 'none';
   document.getElementById('action-loading').style.display = 'none';
   document.getElementById('connection-lost').style.display = 'block';
+  if (typeof lobbyHideOverlays === 'function') lobbyHideOverlays();
   window.scrollTo(0, 0);
 }, 2000);
 
@@ -30,6 +31,8 @@ function rememberLobbyScroll() {
 function showLobbyLoading(name, stage) {
   rememberLobbyScroll();
   lobbyPending = true;
+  // A full-page loading screen replaces any open dialog (lobby.js).
+  if (typeof lobbyHideOverlays === 'function') lobbyHideOverlays();
   document.getElementById('loading-world').textContent = name || 'Your world';
   document.getElementById('loading-stage').textContent = stage || 'Working...';
   document.getElementById('browser-content').style.display = 'none';
@@ -51,6 +54,9 @@ function renderLobby(encoded) {
   rememberLobbyScroll();
   lobbyRevision = data.revision;
   lobbyView = data.view;
+  // World and map data for the dialogs (lobby.js). An open dialog is not re-rendered, so
+  // what the player is typing survives every poll.
+  if (data.state && typeof lobbyUpdateState === 'function') lobbyUpdateState(data.state);
   var main = document.getElementById('browser-content');
   if (main.innerHTML !== data.html) main.innerHTML = data.html;
   document.getElementById('action-loading').style.display = 'none';
