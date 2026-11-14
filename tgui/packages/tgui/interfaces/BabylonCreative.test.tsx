@@ -2,7 +2,12 @@ import { describe, expect, it } from 'bun:test';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { gameDataAtom, store } from '../events/store';
 
-import { BabylonCreative, type CreativeData } from './BabylonCreative';
+import {
+  BabylonCreative,
+  type CreativeData,
+  formatWait,
+  type TutorialData,
+} from './BabylonCreative';
 
 const wrench = {
   path: '/obj/item/wrench',
@@ -22,6 +27,7 @@ const data: CreativeData = {
     { id: 'events', name: 'Events', icon: 'bolt' },
     { id: 'tools', name: 'Kits', icon: 'toolbox' },
     { id: 'tutorial', name: 'Tutorial', icon: 'graduation-cap' },
+    { id: 'future', name: 'Future', icon: 'question' },
   ],
   categories: [
     {
@@ -142,7 +148,229 @@ describe('BabylonCreative', () => {
   });
 
   it('shows a placeholder for a server tab without a component', () => {
-    openTab('Tutorial');
+    openTab('Future');
     expect(screen.getByText('This tab is not available yet.')).toBeDefined();
+  });
+});
+
+const idle: TutorialData = {
+  mode: 'submit',
+  blocked: null,
+  blocked_text: null,
+  wait_seconds: 0,
+  checking: false,
+  check_error: null,
+  state: 'idle',
+  message: null,
+  title: null,
+  cooldown_hours: 6,
+  pause_seconds: 40,
+  title_max: 60,
+  description_max: 500,
+};
+
+const withTutorial = (tutorial: Partial<TutorialData>) =>
+  store.set(gameDataAtom, {
+    ...data,
+    extensions: { tutorial: { ...idle, ...tutorial } },
+  });
+
+const submitButton = () =>
+  screen.getByText(/^(Submit for review…|Submitting…)$/).closest('.Button');
+
+const isDisabled = (element: Element | null) =>
+  !!element?.className.includes('Button--disabled');
+
+describe('BabylonCreative Tutorial tab', () => {
+  it('idle: warns, shows the limits and enables Submit once titled', () => {
+    withTutorial({});
+    openTab('Tutorial');
+    expect(
+      screen.getByText(/sends this world to the moderators/),
+    ).toBeDefined();
+    expect(screen.getByText('None: you can submit now')).toBeDefined();
+    expect(screen.getByPlaceholderText('1–60 characters')).toBeDefined();
+    expect(screen.getByText('0/500')).toBeDefined();
+    // No title yet: nothing to send.
+    expect(isDisabled(submitButton())).toBe(true);
+    expect(screen.getByText('Enter a title to submit.')).toBeDefined();
+    // The warning names what the player can't undo.
+    expect(screen.getByText(/can't change it afterwards/)).toBeDefined();
+    expect(screen.getByText(/cooldown \(6 h\)/)).toBeDefined();
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
+        target: { value: 'First aid' },
+      });
+    });
+    expect(isDisabled(submitButton())).toBe(false);
+    expect(screen.queryByText('Enter a title to submit.')).toBeNull();
+  });
+
+  it('leaves the cooldown out when the server has none', () => {
+    withTutorial({ cooldown_hours: 0 });
+    openTab('Tutorial');
+    expect(screen.queryByText(/after the cooldown/)).toBeNull();
+    expect(screen.getByText(/can't change it afterwards/)).toBeDefined();
+  });
+
+  it('keeps an open confirm but disables it while nothing can be sent', () => {
+    withTutorial({});
+    let view: ReturnType<typeof render> | undefined;
+    act(() => {
+      view = render(<BabylonCreative />);
+    });
+    act(() => {
+      fireEvent.click(screen.getAllByText('Tutorial')[0]);
+    });
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
+        target: { value: 'First aid' },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Submit for review…'));
+    });
+    // A cooldown arrives while the confirm is open: it stays, but can't be confirmed.
+    withTutorial({ blocked: 'cooldown', blocked_text: 'Cooldown: 4 min.' });
+    act(() => {
+      view?.rerender(<BabylonCreative />);
+    });
+    expect(screen.getByText('Cooldown: 4 min.')).toBeDefined();
+    const yes = screen.getByText('Yes, submit').closest('.Button');
+    expect(isDisabled(yes)).toBe(true);
+  });
+
+  it('confirms a submission before sending it', () => {
+    withTutorial({});
+    openTab('Tutorial');
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
+        target: { value: 'First aid' },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Submit for review…'));
+    });
+    expect(screen.getByText(/Submit "First aid" for review\?/)).toBeDefined();
+    expect(screen.getByText(/waits 6 h/)).toBeDefined();
+    expect(screen.getByText('Yes, submit')).toBeDefined();
+    act(() => {
+      fireEvent.click(screen.getByText('Cancel'));
+    });
+    expect(screen.queryByText('Yes, submit')).toBeNull();
+    expect(screen.getByText('Submit for review…')).toBeDefined();
+  });
+
+  it('cooldown: shows the time left and why Submit is disabled', () => {
+    withTutorial({
+      blocked: 'cooldown',
+      blocked_text: 'Cooldown: you can submit another tutorial in 4 min.',
+      wait_seconds: 240,
+    });
+    openTab('Tutorial');
+    expect(screen.getByText('4 min left')).toBeDefined();
+    expect(
+      screen.getByText('Cooldown: you can submit another tutorial in 4 min.'),
+    ).toBeDefined();
+    expect(isDisabled(submitButton())).toBe(true);
+  });
+
+  it('missing start marker: explains and disables Submit', () => {
+    withTutorial({
+      blocked: 'no_start',
+      blocked_text:
+        'Needs a start marker: place a marker with the id "start" (tutorial wand) where players begin.',
+    });
+    openTab('Tutorial');
+    expect(screen.getByText(/Needs a start marker/)).toBeDefined();
+    expect(isDisabled(submitButton())).toBe(true);
+  });
+
+  it('submitting: shows the pending state and blocks a second click', () => {
+    withTutorial({ state: 'submitting' });
+    openTab('Tutorial');
+    expect(screen.getByText(/^Submitting… the world pauses/)).toBeDefined();
+    expect(screen.getByText('Submitting…')).toBeDefined();
+    expect(isDisabled(submitButton())).toBe(true);
+  });
+
+  it('done: shows the success message', () => {
+    withTutorial({
+      state: 'done',
+      message:
+        'Submitted "First aid". The moderators review it before it is published.',
+    });
+    openTab('Tutorial');
+    expect(screen.getByText(/The moderators review it/)).toBeDefined();
+  });
+
+  it('error: shows the server error', () => {
+    withTutorial({
+      state: 'error',
+      message: 'Not submitted: the server could not be reached.',
+    });
+    openTab('Tutorial');
+    expect(
+      screen.getByText('Not submitted: the server could not be reached.'),
+    ).toBeDefined();
+  });
+
+  it('not a creative station world: explains why nothing can be sent', () => {
+    withTutorial({
+      blocked: 'not_capable',
+      blocked_text:
+        'Tutorials can only be submitted from a Creative world on a station map (a Creative Plane or a station). Babylon worlds can build, but not submit.',
+    });
+    openTab('Tutorial');
+    expect(screen.getByText(/Babylon worlds can build/)).toBeDefined();
+    expect(isDisabled(submitButton())).toBe(true);
+    expect(screen.queryByText('None: you can submit now')).toBeNull();
+    // Nothing can be sent from here: the form is read-only.
+    expect(
+      screen.getByPlaceholderText('1–60 characters').hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
+  it('save back: admins confirm before the pending tutorial is replaced', () => {
+    withTutorial({ mode: 'save_back', title: 'First aid' });
+    openTab('Tutorial');
+    expect(screen.getByText('Editing: First aid')).toBeDefined();
+    expect(screen.queryByText('Submit for review…')).toBeNull();
+    act(() => {
+      fireEvent.click(screen.getByText('Save back to the pending tutorial'));
+    });
+    expect(screen.getByText(/Replace the pending tutorial/)).toBeDefined();
+    expect(screen.getByText('Yes, save back')).toBeDefined();
+    act(() => {
+      fireEvent.click(screen.getByText('Cancel'));
+    });
+    expect(screen.queryByText('Yes, save back')).toBeNull();
+  });
+
+  it('save back: the button says it is running', () => {
+    withTutorial({ mode: 'save_back', state: 'saving_back' });
+    openTab('Tutorial');
+    expect(screen.getByText('Saving back…')).toBeDefined();
+  });
+
+  it('save back: players who are not admins see why it is disabled', () => {
+    withTutorial({
+      mode: 'save_back',
+      blocked: 'not_admin',
+      blocked_text:
+        'Only server administrators can save back to a pending tutorial.',
+    });
+    openTab('Tutorial');
+    expect(screen.getByText(/Only server administrators/)).toBeDefined();
+    const button = screen
+      .getByText('Save back to the pending tutorial')
+      .closest('.Button');
+    expect(isDisabled(button)).toBe(true);
+  });
+
+  it('words the cooldown like the server', () => {
+    expect(formatWait(30)).toBe('30 s');
+    expect(formatWait(240)).toBe('4 min');
+    expect(formatWait(3900)).toBe('1 h 5 min');
   });
 });

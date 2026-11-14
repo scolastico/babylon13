@@ -56,14 +56,14 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	var/list/query = list("action" = "ahelp", "kind" = kind, "ticket" = "[ticket_id]", "ckey" = player_ckey,
 		"key" = player_key, "sender" = sender, "message" = copytext_char("[message]", 1, 2001))
 	// The HTTP call blocks; never hold up the adminhelp itself.
-	INVOKE_ASYNC(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_supervisor_request), query)
+	INVOKE_ASYNC(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_supervisor_request_within), query)
 
 /// A new ticket: relayed, then the player learns how many admins are online on Discord.
 /datum/admin_help/proc/babylon_relay_new_ticket(message)
 	set waitfor = FALSE
 	var/list/response
 	if(world.params["babylon-world"])
-		response = babylon_supervisor_request(list("action" = "ahelp", "kind" = "new", "ticket" = "[id]", "ckey" = initiator_ckey,
+		response = babylon_supervisor_request_within(list("action" = "ahelp", "kind" = "new", "ticket" = "[id]", "ckey" = initiator_ckey,
 			"key" = initiator?.key || initiator_ckey, "message" = copytext_char("[message]", 1, 2001)))
 	if(!initiator)
 		return

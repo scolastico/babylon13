@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 
+from constants import TUTORIAL_SNAPSHOT_MARKER
 from world_storage import TUTORIAL_ID_RE
 
 STATUSES = ("pending", "published")
@@ -57,6 +58,9 @@ def copy_snapshot(source, target):
         destination = target / entry.name
         if is_link(entry):
             raise TutorialError("The save contains a link")
+        if entry.name == TUTORIAL_SNAPSHOT_MARKER:
+            # The world's "not a checkpoint" mark: the copy is a tutorial's save, or a world's first checkpoint.
+            continue
         if entry.is_dir():
             copy_snapshot(entry, destination)
         elif entry.is_file():
@@ -192,15 +196,17 @@ class TutorialStore:
         if source.is_dir() and not target.exists():
             source.rename(target)
 
-    def remove(self, status, tid):
+    def remove(self, status, tid, purge=True):
         """Deletes a tutorial's directory: renamed out of the way first, so a half-deleted tutorial
-        is never found by its id."""
+        is never found by its id. purge=False only renames it into deleted/ (one quick rename under
+        the supervisor's lock); clean_trash() deletes it later, without the lock."""
         source = self.directory(status, tid)
         if not source.exists():
             return
         trash = walk(self.status_root("deleted"), tid + "-" + secrets.token_hex(4))
         source.rename(trash)
-        shutil.rmtree(trash, ignore_errors=True)
+        if purge:
+            shutil.rmtree(trash, ignore_errors=True)
 
     def clean_trash(self):
         trash = self.root / "deleted"
@@ -210,6 +216,41 @@ class TutorialStore:
                     entry.unlink()
                 else:
                     shutil.rmtree(entry, ignore_errors=True)
+
+
+def reconcile_store(store, known_ids):
+    """Startup repair of what an interrupted supervisor left in the tutorial store (the copies run
+    outside its lock): staging copies are deleted, tutorials without a database row (known_ids:
+    every row's id) go to the trash, and an interrupted save-back swap is undone. Returns what it
+    did, as (action, path) pairs for the log."""
+    done = []
+    for status in STATUSES:
+        root = store.root / status
+        if not root.is_dir() or is_link(root):
+            continue
+        for entry in root.iterdir():
+            if is_link(entry):
+                continue
+            if entry.name.startswith(".") and entry.name.endswith(".staging"):
+                shutil.rmtree(entry, ignore_errors=True)
+                done.append(("removed staging copy", entry))
+                continue
+            if not TUTORIAL_ID_RE.fullmatch(entry.name) or not entry.is_dir():
+                continue
+            if entry.name not in known_ids:
+                store.remove(status, entry.name, purge=False)
+                done.append(("moved a tutorial without a database row to the trash", entry))
+                continue
+            save, staging, old = entry / "save", entry / "save.staging", entry / "save.old"
+            if old.is_dir() and not is_link(old) and not save.exists():
+                old.rename(save)
+                done.append(("restored the save of an interrupted save back", entry))
+            for leftover in (staging, old):
+                if leftover.exists() and not is_link(leftover):
+                    shutil.rmtree(leftover, ignore_errors=True)
+                    done.append(("removed " + leftover.name, entry))
+    store.clean_trash()
+    return done
 
 
 def seed_first_save(snapshot, saves):

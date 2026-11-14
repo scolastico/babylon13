@@ -404,15 +404,15 @@
 	/// The last successful save's result (generation, objects, levels, bytes, timings).
 	var/list/last_save_report
 
-/// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced
-/// (a tutorial's save back to its pending copy). for_tutorial: the checkpoint becomes a tutorial
-/// snapshot (a submission or save-back) and keeps no characters or per-player records
-/// (babylon_world_saves_characters()).
+/// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced.
+/// for_tutorial: a tutorial snapshot (a submission or save back, tutorial/submit.dm), forced, that
+/// never becomes the world's checkpoint (no latest.json, no level reuse) and keeps no characters or
+/// per-player records (babylon_world_saves_characters()). The caller deletes it once it was copied.
 /datum/babylon_save/proc/save_world(force = FALSE, for_tutorial = FALSE)
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
-	if(!force && !babylon_world_saves())
+	if(!force && !for_tutorial && !babylon_world_saves())
 		return list("error" = "This world is not saved")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
@@ -436,7 +436,8 @@
 	release_checkpoint()
 	busy = FALSE
 	if(result["ok"])
-		last_save_report = result
+		if(!for_tutorial)
+			last_save_report = result
 		if(!draining)
 			to_chat_immediate(world, span_notice("Saved. Play resumes."))
 	else
@@ -782,6 +783,10 @@
 		if(length(encoded[2]) > 2)
 			turf_parts += copytext(encoded[2], 2, -1)
 	var/bytes = 0
+	if(for_tutorial)
+		// First, so even a half-written snapshot is never taken for a checkpoint (the supervisor's
+		// constants.TUTORIAL_SNAPSHOT_MARKER: never listed or restored, deleted once old).
+		rustg_file_write("1", "[base]/tutorial-snapshot")
 	for(var/z_text in level_maps)
 		bytes += length(level_maps[z_text])
 		rustg_file_write(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")
@@ -838,6 +843,12 @@
 	if(!complete)
 		busy = FALSE
 		return list("error" = "Save files could not be written")
+	if(for_tutorial)
+		// Only the supervisor's copy of it is kept: the world neither resumes nor reuses levels
+		// from it, and the levels it captured count as changed for the next real save.
+		level_save_failed()
+		log_world("Babylon wrote tutorial snapshot [generation]: [objects] objects, [bytes] bytes; capture [checkpoint_capture_ms] ms.")
+		return list("ok" = TRUE, "generation" = generation, "objects" = objects, "bytes" = bytes, "tutorial_snapshot" = TRUE)
 	last_save = generation
 	saved_level_json = level_json
 	saved_level_source = list()

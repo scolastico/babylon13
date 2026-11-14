@@ -1,6 +1,6 @@
 // What this world is, as the supervisor started it. Shared by both game builds.
 // The supervisor passes babylon-build, babylon-persistent, babylon-creative, babylon-kind,
-// babylon-tutorial and babylon-map (services/supervisor/supervisor.py, Driver.start).
+// babylon-tutorial, babylon-tutorial-title and babylon-map (services/supervisor/supervisor.py, Driver.start).
 
 GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 
@@ -17,6 +17,8 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	var/kind = "world"
 	/// The tutorial a tutorial or tutorial_edit world plays, else null.
 	var/tutorial_id
+	/// That tutorial's title (shown when a player completes it), else null.
+	var/tutorial_title
 	/// The map catalog id (_maps/babylon/catalog.json), e.g. "babylon", "metastation".
 	var/map_id
 	/// The world owner's ckey.
@@ -36,6 +38,10 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	var/requested_tutorial = params["babylon-tutorial"]
 	if(kind != "world" && babylon_safe_id(requested_tutorial))
 		tutorial_id = requested_tutorial
+		// The supervisor cleans it (Driver.tutorial_title); kept to one line of at most 60 characters.
+		var/requested_title = params["babylon-tutorial-title"]
+		if(istext(requested_title) && length(requested_title))
+			tutorial_title = copytext_char(replacetext(replacetext(requested_title, "\n", " "), ascii2text(13), " "), 1, 61)
 	var/requested_map = params["babylon-map"]
 	map_id = babylon_safe_id(requested_map) ? requested_map : (build == "babylon" ? "babylon" : null)
 	owner_ckey = ckey(params["babylon-owner"])
@@ -197,10 +203,13 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 var/global/babylon_byond_1686_slot_pad_shared
 #if defined(BABYLON_DRONE) && defined(BABYLON_TESTING)
 // babylon-test.dme
+var/global/babylon_byond_1686_slot_pad_drone_test_1
 #elif defined(BABYLON_DRONE)
 // babylon.dme
 #elif defined(BABYLON_STATION) && defined(BABYLON_TESTING)
 // babylon-station-test.dme
+var/global/babylon_byond_1686_slot_pad_station_test_1
+var/global/babylon_byond_1686_slot_pad_station_test_2
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 #endif

@@ -516,7 +516,8 @@
 		delay = round_end_delay()
 	round_end_at = world.time + delay
 	log_world("Babylon: the round is over; returning players to the lobby in [delay / 10] s, without a save.")
-	if(world.params["babylon-api"] && !babylon_supervisor_request(list("action" = "round_ended"))?["ok"])
+	// Bounded: whatever the supervisor does, the players still go to the lobby and the world exits.
+	if(world.params["babylon-api"] && !babylon_supervisor_request_within(list("action" = "round_ended"))["ok"])
 		log_world("Babylon: the supervisor did not confirm the round's end; it sees the exit as a stop.")
 	// tg already announces "The round has ended." on its own.
 	if(delay > 0)

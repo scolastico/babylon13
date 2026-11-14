@@ -5,6 +5,9 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
+
+from constants import TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_SNAPSHOT_MAX_AGE
 
 
 GENERATION = re.compile(r"save-(\d{8}-\d{6})-(\d+)")
@@ -76,6 +79,8 @@ class Checkpoints:
 
     def snapshot(self, root, generation):
         path = self.path(root, generation)
+        if (path / TUTORIAL_SNAPSHOT_MARKER).exists():
+            raise CheckpointError("This is a tutorial snapshot, not a checkpoint")
         try:
             state = json.loads((path / "state.json").read_text(encoding="utf-8"))
             if state.get("generation") != generation:
@@ -148,8 +153,22 @@ class Checkpoints:
             points.append(point)
         return {"latest": latest, "checkpoints": points}
 
+    def sweep_tutorial_snapshots(self, root, max_age=TUTORIAL_SNAPSHOT_MAX_AGE):
+        """Deletes tutorial snapshots older than max_age seconds that a world left in its saves (its
+        world stopped before it deleted them). They are never checkpoints (snapshot() refuses them)."""
+        now = time.time()
+        for generation in self.directories(root):
+            marker = root / generation / TUTORIAL_SNAPSHOT_MARKER
+            try:
+                stale = marker.is_file() and now - marker.stat().st_mtime > max_age
+            except OSError:
+                continue
+            if stale:
+                self.remove(root, generation)
+
     def retain(self, world, expected=None):
         root = self.root(world)
+        self.sweep_tutorial_snapshots(root)
         if not (root / "rollback-pending.json").exists():
             latest = self.head(root)
             if expected is not None and latest != expected:

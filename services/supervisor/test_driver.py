@@ -289,6 +289,25 @@ class Params(DriverFixture):
         _, params = self.launch(self.world())
         self.assertEqual(params["babylon-autosave-minutes"], ["45"])
 
+    def test_tutorial_worlds_get_the_tutorial_title(self):
+        # BabylonTutorialComplete shows the real title (babylon-tutorial-title), not the id.
+        self.generation(self.data / "tutorials/pending/t1/save", ["z2.dmm", "z3.dmm"], self.station_state())
+        (self.data / "tutorials/pending/t1/meta.json").write_text(json.dumps({"title": "First \u202eaid\n" + "x" * 80}))
+        for kind in ("tutorial", "tutorial_edit"):
+            _, params = self.launch(self.world(creative=1, persistent=0, kind=kind, tutorial="t1"))
+            self.assertEqual(params["babylon-tutorial-title"], [("First aid " + "x" * 80)[:60]])
+        # Ordinary worlds, unreadable meta and a linked meta.json give an empty title.
+        _, params = self.launch(self.world())
+        self.assertEqual(params["babylon-tutorial-title"], [""])
+        (self.data / "tutorials/pending/t1/meta.json").write_text("{broken")
+        _, params = self.launch(self.world(kind="tutorial", tutorial="t1"))
+        self.assertEqual(params["babylon-tutorial-title"], [""])
+        (self.data / "tutorials/pending/t1/meta.json").unlink()
+        (self.data / "elsewhere.json").write_text(json.dumps({"title": "Linked"}))
+        (self.data / "tutorials/pending/t1/meta.json").symlink_to(self.data / "elsewhere.json")
+        _, params = self.launch(self.world(kind="tutorial", tutorial="t1"))
+        self.assertEqual(params["babylon-tutorial-title"], [""])
+
 
 if __name__ == "__main__":
     unittest.main()

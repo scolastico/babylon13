@@ -477,6 +477,51 @@ class Policies(unittest.TestCase):
         token = self.ticket(w, "admin")
         self.assertTrue(self.s.redeem(run["id"], run["secret"], token, "admin")["ok"])
 
+    def test_redeem_is_answered_while_a_world_start_copies_its_files(self):
+        # A world start prepares its files (the template, the saved levels) without the service
+        # lock: logins to running worlds are answered meanwhile.
+        running = self.create("one")
+        run = self.start(running, "one")
+        token = self.ticket(running, "one")
+        copying, release = threading.Event(), threading.Event()
+        real_start = self.driver.start
+
+        def slow_start(world, new_run):
+            copying.set()
+            release.wait(10)
+            return real_start(world, new_run)
+
+        other = self.create("two")
+        self.driver.start = slow_start
+        worker = threading.Thread(target=lambda: self.s.dispatch("two", "join", {"world": other}))
+        worker.start()
+        self.assertTrue(copying.wait(10))
+        self.assertEqual(self.s.row("SELECT state FROM runs WHERE world=?", (other,))["state"], "starting")
+        self.assertTrue(self.s.redeem(run["id"], run["secret"], token, "one", received=time.monotonic(), patience="30")["ok"])
+        release.set()
+        worker.join(10)
+        self.assertEqual(self.s.row("SELECT pid FROM runs WHERE world=?", (other,))["pid"], 123)
+
+    def test_a_failed_launch_removes_its_run(self):
+        w = self.create()
+        self.driver.start = lambda world, run: (_ for _ in ()).throw(OSError("disk full"))
+        with self.assertRaisesRegex(Denied, "Child startup failed"):
+            self.s.dispatch("owner", "join", {"world": w})
+        self.assertFalse(self.s.row("SELECT * FROM runs WHERE world=?", (w,)))
+
+    def test_late_redeem_keeps_the_ticket(self):
+        # The world waits wait_seconds for its redeem; one that only got the lock after that is
+        # refused without spending the ticket or adding a session (the player's retry works).
+        w = self.create()
+        run = self.start(w)
+        token = self.ticket(w, "one")
+        late = time.monotonic() - 40
+        with self.assertRaisesRegex(Denied, "timed out"):
+            self.s.redeem(run["id"], run["secret"], token, "one", received=late, patience="30")
+        self.assertFalse(self.s.row("SELECT * FROM sessions WHERE ckey='one'"))
+        # In time (or without a deadline) the same ticket is admitted.
+        self.assertTrue(self.s.redeem(run["id"], run["secret"], token, "one", received=time.monotonic(), patience="30")["ok"])
+
     def test_settings_validation(self):
         for payload in ({"visibility": "invalid"}, {"visibility": "password"},
                         {"max_players": 999}, {"max_players": 0}, {"name": ""}):

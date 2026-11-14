@@ -112,8 +112,13 @@ var/global/list/lobby_config
 	. = ..()
 	var/rejoin = query["babylon_rejoin"]
 	var/static/regex/world_id = regex(@"^[0-9a-f]{32}$")
+	// A world sent the player back with a reason (only known codes: the text is the lobby's own).
+	var/static/list/world_notices = list("admission_timeout" = "The world took too long to let you in. Press Join to try again.")
+	var/world_notice = world_notices[query["babylon_notice"]]
 	spawn(1)
 		if(src)
+			if(world_notice)
+				mob:notice = world_notice
 			mob:show_browser()
 			if(istext(rejoin) && world_id.Find(rejoin))
 				world.log << "[ckey] returned to rejoin world [rejoin]"
@@ -182,9 +187,56 @@ var/global/list/lobby_config
 	poll_generation++
 	..()
 
+/// Longest the lobby waits for one supervisor answer (deciseconds); a tutorial copy can hold the
+/// supervisor for a while.
+#define LOBBY_API_TIMEOUT 600
+
+/// One supervisor request in the background: world.Export has no timeout of its own.
+/// After this long (deciseconds) a request that never answered no longer blocks new ones.
+#define LOBBY_STALLED_CAP 3000
+
+/datum/lobby_request
+	var/url
+	var/started
+	var/done = FALSE
+	var/list/response
+
+/datum/lobby_request/proc/perform()
+	response = world.Export(url)
+	done = TRUE
+
+/// world.Export(url) in the background: the request, to wait for with lobby_await().
+/proc/lobby_export_start(url)
+	var/datum/lobby_request/request = new
+	request.url = url
+	request.started = world.time
+	spawn(0)
+		request.perform()
+	return request
+
+/// Waits at most `timeout` deciseconds for a request: its response, or null (also when it is still
+/// running; it then finishes in the background and its answer is dropped).
+/proc/lobby_await(datum/lobby_request/request, timeout = LOBBY_API_TIMEOUT)
+	var/deadline = world.time + timeout
+	while(!request.done && world.time < deadline)
+		sleep(1)
+	return request.done ? request.response : null
+
+/mob/lobby
+	/// This player's request that timed out and still runs: until it finishes, no new one is started
+	/// (the 5 s refresh would pile them up while the supervisor is stalled).
+	var/datum/lobby_request/stalled_request
+
 /mob/lobby/proc/api(action, list/payload)
 	var/list/query = list("secret" = lobby_config["secret"], "actor" = ckey, "action" = action, "payload" = json_encode(payload || list()))
-	var/list/response = world.Export("[lobby_config["api"]]/api?[list2params(query)]")
+	var/list/response
+	// A request that never comes back is given up after LOBBY_STALLED_CAP: the lobby asks anew.
+	if(stalled_request && world.time - stalled_request.started > LOBBY_STALLED_CAP)
+		stalled_request = null
+	if(!stalled_request || stalled_request.done)
+		var/datum/lobby_request/request = lobby_export_start("[lobby_config["api"]]/api?[list2params(query)]")
+		response = lobby_await(request)
+		stalled_request = request.done ? null : request
 	if(!response || !response["CONTENT"])
 		world.log << "Supervisor unavailable for [ckey] ([action])"
 		return list("error" = "The world manager isn't responding. Try again in a moment.", "unavailable" = TRUE)

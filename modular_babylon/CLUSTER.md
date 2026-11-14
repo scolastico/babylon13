@@ -744,10 +744,16 @@ committed maps differ from the script's output.
 
 Players build a tutorial in a **Creative** world on a **station map** (a Creative
 Plane or a station; Babylon worlds can build but not submit) and submit it from the
-Creative panel. The world's owner submits it with a title (1-60 characters) and a
-short description (up to 500). The supervisor copies a checkpoint of the world into
-`<data>/tutorials/pending/<id>/` (`meta.json` plus `save/`); the submitted copy can't
-be changed by its author afterwards. Each player can submit once every
+Creative panel's **Tutorial** tab. The world's owner submits it with a title (1-60
+characters) and a short description (up to 500); the tutorial needs a marker with the
+id `start` (where players begin), and the tab says why Submit is disabled (no start
+marker, the cooldown with the time left, not the owner, not a Creative station world).
+Submitting saves the world as it is (the world pauses, as for any save; also in an
+unsaved world) and the supervisor copies that save into
+`<data>/tutorials/pending/<id>/` (`meta.json` plus `save/`). The world keeps no trace
+of it: the submission's save never becomes the world's checkpoint, so turning **Saved**
+on later does not resume from it, and it holds no player characters. The submitted
+copy can't be changed by its author afterwards. Each player can submit once every
 `BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS` hours (default 6, `0` turns the cooldown
 off; supervisor JSON: `tutorial_submit_cooldown_hours`). A submission that fails
 (for example a save that can't be copied) starts no cooldown.
@@ -769,7 +775,8 @@ preview, title, author and description:
 Server administrators also see **Pending tutorials** (the tab shows how many wait):
 **Play** it as a player, **Edit** it (an admin-owned, Creative, unsaved world started
 from the pending copy; there is one per tutorial and other admins join it; **Save back
-to pending tutorial** in the Creative panel's Tutorial tab overwrites the pending copy;
+to the pending tutorial** in the Creative panel's Tutorial tab overwrites the pending
+copy after a confirmation, again without player characters;
 the world is deleted when it stops), **Accept** (moves it to `published/`) or
 **Reject** (deletes it). Published tutorials have a **Delete** button for admins.
 Deleting or accepting a tutorial does not disturb copies that are running: every

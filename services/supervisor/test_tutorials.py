@@ -3,8 +3,10 @@ and copy (lobby actions), and the end of tutorial instances."""
 import json
 import os
 from pathlib import Path
+import threading
 import time
 import unittest
+import unittest.mock
 
 import test_driver
 from supervisor import CHILD_ACTIONS, Denied, Supervisor
@@ -94,9 +96,115 @@ class Submit(TutorialFixture):
         # The world's own checkpoint is untouched.
         self.assertTrue((self.data / "worlds" / world / "data/babylon/saves" / GENERATION / "map.dmm").is_file())
 
+    def test_tutorial_snapshots_are_removed_once_copied(self):
+        # The world marks a submission's snapshot; the supervisor deletes it once copied or refused,
+        # and the copy leaves the mark out (review S1).
+        world, run = self.creative_run()
+        snapshot = self.data / "worlds" / world / "data/babylon/saves" / GENERATION
+        (snapshot / "tutorial-snapshot").write_text("1")
+        tid = self.submit(run)
+        self.assertFalse(snapshot.exists())
+        saved = self.data / "tutorials/pending" / tid / "save"
+        self.assertTrue((saved / "map.dmm").is_file())
+        self.assertFalse((saved / "tutorial-snapshot").exists())
+        # A refused copy removes it too; an unmarked generation (a real checkpoint) is never removed.
+        world2, run2 = self.creative_run("second")
+        marked = self.data / "worlds" / world2 / "data/babylon/saves" / GENERATION
+        (marked / "tutorial-snapshot").write_text("1")
+        with unittest.mock.patch.object(self.s.tutorials, "create_pending", side_effect=OSError("disk full")):
+            with self.assertRaises(Denied):
+                self.submit(run2, "second")
+        self.assertFalse(marked.exists())
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        edit_run = self.s.row("SELECT * FROM runs WHERE world=?", (edit,))
+        back = self.save(edit, "save-20261114-150000-7")
+        (back / "tutorial-snapshot").write_text("1")
+        self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")
+        self.assertFalse(back.exists())
+        self.assertFalse((saved / "tutorial-snapshot").exists())
+
+    def test_redeem_is_answered_while_a_submission_is_copied(self):
+        # The snapshot copy runs outside the service lock: logins to other worlds are not held up
+        # by a long multi-level copy (they would time out after 30 s), and a second submission by
+        # the same author waits for the first.
+        world, run = self.creative_run()
+        other = self.make("player")
+        other_run = self.start(other, "player")
+        token = test_supervisor.Policies.ticket(self, other, "player")
+        copying, release = threading.Event(), threading.Event()
+        real_copy = self.s.tutorials.create_pending
+
+        def slow_copy(*args):
+            copying.set()
+            release.wait(10)
+            return real_copy(*args)
+
+        result = {}
+        with unittest.mock.patch.object(self.s.tutorials, "create_pending", side_effect=slow_copy):
+            worker = threading.Thread(target=lambda: result.update(tid=self.submit(run)))
+            worker.start()
+            self.assertTrue(copying.wait(10))
+            answered = self.s.redeem(other_run["id"], other_run["secret"], token, "player",
+                                     received=time.monotonic(), patience="30")
+            self.assertTrue(answered["ok"])
+            with self.assertRaisesRegex(Denied, "being stored right now"):
+                self.submit(run)
+            release.set()
+            worker.join(10)
+        self.assertEqual(self.tutorial(result["tid"])["status"], "pending")
+        # The reservation is gone; the cooldown now applies.
+        self.assertFalse(self.s.submitting)
+        with self.assertRaisesRegex(Denied, "another tutorial in"):
+            self.submit(run)
+
+    def test_no_start_reads_a_snapshot_during_its_save_back(self):
+        # Save back swaps the pending snapshot outside the lock: play and edit starts are refused
+        # meanwhile (also in the driver), and a save back waits while a start stages the snapshot.
+        world, run = self.creative_run()
+        tid = self.submit(run)
+        self.s.saving_back.add(tid)
+        for action in ("tutorial_play", "tutorial_edit"):
+            with self.assertRaisesRegex(Denied, "saving this tutorial back"):
+                self.s.dispatch("admin", action, {"tutorial": tid})
+        self.assertFalse(self.s.row("SELECT * FROM worlds WHERE tutorial=?", (tid,)))
+        with self.assertRaisesRegex(Denied, "saving this tutorial back"):
+            test_driver_driver(self).restore_source(dict(kind="tutorial", tutorial=tid, id="x"))
+        self.s.saving_back.discard(tid)
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        edit_run = self.s.row("SELECT * FROM runs WHERE world=?", (edit,))
+        self.save(edit, "save-20261114-150000-7")
+        self.s.tutorial_readers[tid] = 1
+        with self.assertRaisesRegex(Denied, "being started"):
+            self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")
+        with self.assertRaisesRegex(Denied, "being started or copied"):
+            self.s.dispatch("admin", "tutorial_reject", {"tutorial": tid, "confirm": 1})
+        self.s.tutorial_readers.clear()
+        self.assertEqual(self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")["ok"], True)
+
+    def test_startup_repairs_the_tutorial_store(self):
+        # An interrupted supervisor leaves staging copies, tutorials without a row and a half-swapped
+        # save back; the next start cleans them up.
+        world, run = self.creative_run()
+        tid = self.submit(run)
+        pending = self.data / "tutorials/pending"
+        (pending / ".abc.staging/save").mkdir(parents=True)
+        orphan = pending / ("f" * 32)
+        (orphan / "save").mkdir(parents=True)
+        (pending / tid / "save").rename(pending / tid / "save.old")
+        (pending / tid / "save.staging").mkdir()
+        restarted = Supervisor(self.s.config, test_supervisor.FakeDriver(), lambda: self.now)
+        self.addCleanup(restarted.db.close)
+        self.assertFalse((pending / ".abc.staging").exists())
+        self.assertFalse(orphan.exists())
+        self.assertFalse(any((self.data / "tutorials/deleted").iterdir()))
+        self.assertTrue((pending / tid / "save/map.dmm").is_file())
+        self.assertFalse((pending / tid / "save.old").exists() or (pending / tid / "save.staging").exists())
+
     def test_submit_check_and_actor_must_own_the_world(self):
         world, run = self.creative_run()
-        self.assertEqual(self.child("tutorial_submit_check", run, actor="owner"), {"ok": True, "wait_seconds": 0})
+        self.assertEqual(self.child("tutorial_submit_check", run, actor="owner"), {"ok": True, "wait_seconds": 0, "cooldown_hours": 6})
         for actor in ("someone", "", "admin"):
             with self.assertRaisesRegex(Denied, "owner"):
                 self.child("tutorial_submit_check", run, actor=actor)
@@ -711,3 +819,11 @@ class SnapshotCopiedAtPrepare(test_driver.DriverFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_driver_driver(case):
+    """A real Driver on the test supervisor's data directory, wired like Supervisor wires it."""
+    from supervisor import Driver
+    driver = Driver(dict(case.s.config), case.s.catalog)
+    driver.busy_tutorials = case.s.saving_back
+    return driver

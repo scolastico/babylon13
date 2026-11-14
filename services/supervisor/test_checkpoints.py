@@ -1,10 +1,13 @@
 import json
+import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from checkpoints import Checkpoints, CheckpointError, atomic_json
+from constants import TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_SNAPSHOT_MAX_AGE
 from supervisor import Supervisor, Driver, Denied, load_config
 from test_supervisor import FakeDriver
 
@@ -131,6 +134,27 @@ class Storage(unittest.TestCase):
             with self.assertRaises(CheckpointError):
                 self.store.rollback(self.world, target, expected)
         self.assertEqual(self.generations(), set(points) | {future})
+
+    def test_tutorial_snapshots_are_never_checkpoints(self):
+        # A submission's snapshot the world could not delete (it stopped while the supervisor copied)
+        # is neither listed, nor a rollback target, and is swept once it is old (arch C2, review S1).
+        first = seed(self.store, self.world, 1)
+        snapshot = seed(self.store, self.world, 2, commit=False)
+        root = self.store.root(self.world)
+        (root / snapshot / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        latest = seed(self.store, self.world, 3)
+        listed = [p["generation"] for p in self.store.list(self.world)["checkpoints"]]
+        self.assertEqual(listed, [latest, first])
+        with self.assertRaises(CheckpointError):
+            self.store.rollback(self.world, snapshot, latest)
+        self.assertEqual(self.store.head(root), latest)
+        # Young snapshots stay (the supervisor may be copying one); old ones go, checkpoints stay.
+        young = seed(self.store, self.world, 4, commit=False)
+        (root / young / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        old = time.time() - TUTORIAL_SNAPSHOT_MAX_AGE - 60
+        os.utime(root / snapshot / TUTORIAL_SNAPSHOT_MARKER, (old, old))
+        self.store.retain(self.world)
+        self.assertEqual(self.generations(), {first, latest, young})
 
     def test_bad_head_does_not_delete_older_saves(self):
         points = [seed(self.store, self.world, n) for n in range(1, 7)]

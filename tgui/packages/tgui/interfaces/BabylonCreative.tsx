@@ -18,6 +18,7 @@ import {
   Section,
   Stack,
   Tabs,
+  TextArea,
 } from 'tgui-core/components';
 import { createSearch } from 'tgui-core/string';
 
@@ -88,7 +89,31 @@ export type CreativeData = {
   can_go_back: boolean;
   respawn_pending: boolean;
   notice: { text: string; ok: boolean; id: number } | null;
-  extensions: Record<string, unknown>;
+  extensions: { tutorial?: TutorialData } & Record<string, unknown>;
+};
+
+/** The Tutorial tab (modular_babylon/code/tutorial/submit.dm, tutorial_data()). */
+export type TutorialData = {
+  /** submit: an ordinary world; save_back: an admin's edit world of a pending tutorial. */
+  mode: 'submit' | 'save_back';
+  /** Why the button is disabled (a code and its text), else null. */
+  blocked: string | null;
+  blocked_text: string | null;
+  /** Seconds left of the owner's cooldown (0: none or not known yet). */
+  wait_seconds: number;
+  checking: boolean;
+  check_error: string | null;
+  state: 'idle' | 'submitting' | 'saving_back' | 'done' | 'error';
+  /** The last submission's or save back's outcome. */
+  message: string | null;
+  /** The edited tutorial's title (edit worlds). */
+  title: string | null;
+  /** Hours between two submissions (the supervisor's setting; null until it was checked, 0: none). */
+  cooldown_hours: number | null;
+  /** About how long a save pauses the world. */
+  pause_seconds: number;
+  title_max: number;
+  description_max: number;
 };
 
 /** Tab id -> component. Tabs the server lists without an entry here show a placeholder. */
@@ -98,6 +123,7 @@ export const CREATIVE_TABS: Record<string, ComponentType> = {
   teleport: TeleportTab,
   events: EventsTab,
   tools: KitsTab,
+  tutorial: TutorialTab,
 };
 
 const plural = (count: number, word: string) =>
@@ -1130,3 +1156,220 @@ function KitsTab() {
     </Scroll>
   );
 }
+
+/** Submit this world as a tutorial, or save an edit world back to its pending tutorial. */
+function TutorialTab() {
+  const { act, data } = useBackend<CreativeData>();
+  const tutorial = data.extensions?.tutorial;
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  // The cooldown comes from the supervisor: ask for it when the tab opens.
+  useEffect(() => {
+    act('tutorial_refresh');
+  }, []);
+  if (!tutorial) {
+    return <NoticeBox info>This tab is not available yet.</NoticeBox>;
+  }
+  const running =
+    tutorial.state === 'submitting' || tutorial.state === 'saving_back';
+  const outcome = running ? (
+    <NoticeBox info>
+      <Icon name="spinner" spin mr={1} />
+      {tutorial.state === 'submitting'
+        ? 'Submitting… the world pauses while it is saved.'
+        : 'Saving back… the world pauses while it is saved.'}
+    </NoticeBox>
+  ) : tutorial.state === 'done' || tutorial.state === 'error' ? (
+    <OutcomeBox ok={tutorial.state === 'done'}>
+      <Stack align="center">
+        <Stack.Item grow>{tutorial.message}</Stack.Item>
+        <Stack.Item>
+          <Button
+            icon="xmark"
+            tooltip="Dismiss"
+            onClick={() => act('tutorial_dismiss')}
+          />
+        </Stack.Item>
+      </Stack>
+    </OutcomeBox>
+  ) : null;
+  const blocked = tutorial.blocked_text && !running && (
+    <Box color="average" mt={1}>
+      <Icon name="circle-info" mr={1} />
+      {tutorial.blocked_text}
+    </Box>
+  );
+
+  if (tutorial.mode === 'save_back') {
+    return (
+      <Scroll>
+        <Section title={`Editing: ${tutorial.title || 'a pending tutorial'}`}>
+          <Box color="label" mb={1}>
+            Saving back replaces the pending tutorial's saved state with this
+            world as it is now. The world pauses while it is saved. Players
+            start where the start marker is.
+          </Box>
+          {confirming && !running ? (
+            <NoticeBox>
+              <Box mb={1}>
+                Replace the pending tutorial with the current state of this
+                world? This cannot be undone.
+              </Box>
+              <Button
+                icon="floppy-disk"
+                color="good"
+                onClick={() => {
+                  setConfirming(false);
+                  act('tutorial_save_back');
+                }}
+              >
+                Yes, save back
+              </Button>
+              <Button icon="xmark" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
+            </NoticeBox>
+          ) : (
+            <Button
+              icon="floppy-disk"
+              disabled={running || !!tutorial.blocked}
+              onClick={() => setConfirming(true)}
+            >
+              {running ? 'Saving back…' : 'Save back to the pending tutorial'}
+            </Button>
+          )}
+          {blocked}
+        </Section>
+        {outcome}
+      </Scroll>
+    );
+  }
+
+  const tooLong =
+    title.length > tutorial.title_max ||
+    description.length > tutorial.description_max;
+  const canSend =
+    !running && !tutorial.blocked && title.trim().length > 0 && !tooLong;
+  // Only the owner of a Creative station world can submit, and has a cooldown to show.
+  const cannotSubmit =
+    tutorial.blocked === 'not_capable' || tutorial.blocked === 'not_owner';
+  const pause = formatWait(Math.max(1, tutorial.pause_seconds));
+  const hours = tutorial.cooldown_hours;
+  // No cooldown clause when the server has none; the number once it is known.
+  const cooldown =
+    hours === 0 ? null : hours ? formatWait(hours * 3600) : 'a few hours';
+  return (
+    <Scroll>
+      <Section title="Submit as a tutorial">
+        <NoticeBox>
+          Submitting sends this world to the moderators for review and saves its
+          current state as the tutorial; players start at the start marker. You
+          can't change it afterwards
+          {cooldown
+            ? `, and you can submit again only after the cooldown (${cooldown})`
+            : ''}
+          . Everyone in the world is paused for about {pause} while it saves.
+        </NoticeBox>
+        <LabeledList>
+          <LabeledList.Item label="Title">
+            <Input
+              fluid
+              value={title}
+              maxLength={tutorial.title_max}
+              placeholder={`1–${tutorial.title_max} characters`}
+              disabled={running || cannotSubmit}
+              onChange={(value: string) => setTitle(value)}
+            />
+          </LabeledList.Item>
+          <LabeledList.Item label="Description">
+            <TextArea
+              fluid
+              height="90px"
+              value={description}
+              maxLength={tutorial.description_max}
+              placeholder="What the tutorial teaches (optional)"
+              disabled={running || cannotSubmit}
+              onChange={(value: string) => setDescription(value)}
+            />
+            <Box color="label" textAlign="right">
+              {description.length}/{tutorial.description_max}
+            </Box>
+          </LabeledList.Item>
+          {!cannotSubmit && (
+            <LabeledList.Item label="Cooldown">
+              {tutorial.checking
+                ? 'Checking…'
+                : tutorial.check_error
+                  ? `Unknown (${tutorial.check_error})`
+                  : tutorial.wait_seconds
+                    ? `${formatWait(tutorial.wait_seconds)} left`
+                    : 'None: you can submit now'}
+            </LabeledList.Item>
+          )}
+        </LabeledList>
+        {confirming && !running ? (
+          <NoticeBox mt={1}>
+            <Box mb={1}>
+              Submit "{title.trim()}" for review? You can't change it afterwards
+              {cooldown ? `, your next submission waits ${cooldown}` : ''}, and
+              the world pauses for about {pause}.
+            </Box>
+            <Button
+              icon="paper-plane"
+              color="good"
+              disabled={!canSend}
+              onClick={() => {
+                setConfirming(false);
+                act('tutorial_submit', { title, description });
+              }}
+            >
+              Yes, submit
+            </Button>
+            <Button icon="xmark" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </NoticeBox>
+        ) : (
+          <Box mt={1}>
+            <Button
+              icon="paper-plane"
+              color="good"
+              disabled={!canSend}
+              onClick={() => setConfirming(true)}
+            >
+              {running ? 'Submitting…' : 'Submit for review…'}
+            </Button>
+          </Box>
+        )}
+        {!running && !tutorial.blocked && !title.trim() && (
+          <Box color="label" mt={1}>
+            Enter a title to submit.
+          </Box>
+        )}
+        {blocked}
+      </Section>
+      {outcome}
+    </Scroll>
+  );
+}
+
+const OutcomeBox = (props: { ok: boolean; children: ReactNode }) =>
+  props.ok ? (
+    <NoticeBox success>{props.children}</NoticeBox>
+  ) : (
+    <NoticeBox danger>{props.children}</NoticeBox>
+  );
+
+/** "4 min", "1 h 5 min", "30 s" (as the server words it). */
+export const formatWait = (seconds: number) => {
+  if (seconds < 60) {
+    return `${Math.round(seconds)} s`;
+  }
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const rest = minutes % 60;
+  return `${Math.floor(minutes / 60)} h${rest ? ` ${rest} min` : ''}`;
+};

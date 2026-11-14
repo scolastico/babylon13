@@ -12,15 +12,11 @@ import test_driver
 import test_supervisor
 import itertools
 
-from constants import WORLD_KINDS, world_policy
+from constants import (SAVES_CHARACTERS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_TITLE_MAX, WORLD_KINDS,
+                       world_policy)
 from supervisor import CHILD_ACTIONS, Denied, Supervisor
 
 DM = Path(__file__).resolve().parents[2] / "modular_babylon/code"
-
-# Child actions the supervisor offers before any world code calls them. The tutorial submit and
-# save-back actions are built and unit-tested on the supervisor side first; the DM side lands in
-# G1b, which removes them from this list.
-NOT_YET_CALLED = {"tutorial_submit_check", "tutorial_submit", "tutorial_save_back"}
 
 # Child parameters a world is given on purpose even though no world code reads them by name.
 # (empty: every parameter the Driver writes is read by the DM code, and vice versa)
@@ -54,12 +50,41 @@ class ChildActions(unittest.TestCase):
         self.assertEqual({a: f for a, f in found.items() if a not in CHILD_ACTIONS}, {})
 
     def test_every_child_action_is_called_by_the_dm_code(self):
-        self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()) - NOT_YET_CALLED, set())
+        self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()), set())
 
-    def test_actions_awaiting_their_dm_side_are_not_called_yet(self):
-        # Once the DM code calls one, it must leave NOT_YET_CALLED (and so be checked above).
-        self.assertTrue(NOT_YET_CALLED <= set(CHILD_ACTIONS))
-        self.assertEqual(NOT_YET_CALLED & set(dm_actions()), set())
+    def test_every_supervisor_request_is_bounded(self):
+        # world.Export blocks with no timeout of its own (arch-review C5): a hung supervisor would
+        # stall logins, the round end or a lobby page. Only the background call datums block;
+        # everything else goes through babylon_supervisor_request_within() / lobby_export_start() + lobby_await().
+        allowed = {"babylon_supervisor_request(": {"/datum/babylon_supervisor_call/proc/perform"},
+                   "world.Export(": {"/proc/babylon_supervisor_request", "/datum/lobby_request/proc/perform"},
+                   # A proc reference starts the blocking call elsewhere (INVOKE_ASYNC, CALLBACK, addtimer).
+                   "babylon_supervisor_request)": set(), "/proc/babylon_supervisor_request,": set()}
+        sources = dict(dm_sources())
+        sources.update({path: path.read_text(encoding="utf-8") for path in sorted((DM.parent / "lobby").glob("*.dm"))})
+        found = {call: set() for call in allowed}
+        for path, text in sources.items():
+            owner = None
+            for line in text.splitlines():
+                if line and not line[0].isspace() and not line.startswith("//"):
+                    owner = re.match(r"[^(]*", line).group(0)
+                code = line.split("//")[0]
+                for call in allowed:
+                    if call in code and not code.lstrip().startswith("/proc/babylon_supervisor_request("):
+                        found[call].add(owner)
+                        self.assertIn(owner, allowed[call], "%s: %s calls %s" % (path.name, owner, call))
+        for call, owners in allowed.items():
+            self.assertEqual(found[call], owners, call)
+
+    def test_no_supervisor_request_from_a_ui_action(self):
+        # world.Export blocks (the tutorial copy takes long): tgui actions start a background proc
+        # instead (arch-review C5). A ui_act, or a panel action it dispatches to, never asks itself.
+        handler = re.compile(r"^/[\w/]+/(?:proc/)?(ui_act|handle_action|extension_action)\(.*?(?=^\S)", re.M | re.S)
+        for path, text in dm_sources().items():
+            for match in handler.finditer(text + "\n/end"):
+                for call in ("babylon_supervisor_request", "babylon_supervisor_request_within", ".request(", "save_world(",
+                             ".check(", ".submit(", ".save_back(", "take_snapshot("):
+                    self.assertNotIn(call, match.group(0), "%s: %s" % (path.name, match.group(1)))
 
     def test_every_child_action_rejects_bad_credentials(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -160,6 +185,37 @@ class WorldPolicy(unittest.TestCase):
         self.assertFalse(world_policy("station", 1, 1, "tutorial_edit", "metastation")["saves_characters"])
         self.assertTrue(world_policy("station", 0, 0, "world", "metastation")["saves_characters"])
 
+    def test_characters_policy_covers_every_kind(self):
+        self.assertEqual(set(SAVES_CHARACTERS), set(WORLD_KINDS))
+        self.assertTrue(SAVES_CHARACTERS["world"])
+        self.assertFalse(SAVES_CHARACTERS["tutorial"] or SAVES_CHARACTERS["tutorial_edit"])
+
+    def test_station_save_asks_whether_it_saves_characters(self):
+        # arch-review M1: the station checkpoint writes "characters" only where the policy allows
+        # (never a tutorial world, never a tutorial snapshot): the snapshot flag reaches both captures.
+        text = (DM / "persistence_levels.dm").read_text(encoding="utf-8")
+        body = re.search(r"^/datum/babylon_save/capture_session_state\(.*?(?=^\S)", text, re.M | re.S).group(0)
+        self.assertIn("capture_players(state, for_tutorial)", body)
+        self.assertIn('state["characters"] = capture_characters(for_tutorial)', body)
+        self.assertIn("capture_session_state(state, for_tutorial)", (DM / "persistence.dm").read_text(encoding="utf-8"))
+        flags = (DM / "world_flags.dm").read_text(encoding="utf-8")
+        self.assertRegex(flags, r"(?m)^/proc/babylon_world_saves_characters\(for_tutorial = FALSE\)\n\treturn !for_tutorial && !!GLOB\.babylon_world\?\.saves_characters\(\)$")
+
+    def test_admission_timeout_code_matches(self):
+        # The world tells a bounced player why by the supervisor's refusal code, not its wording.
+        supervisor = (Path(__file__).parent / "supervisor.py").read_text(encoding="utf-8")
+        self.assertIn('code="admission_timeout"', supervisor)
+        self.assertIn('result["code"] == "admission_timeout"', (DM / "admission.dm").read_text(encoding="utf-8"))
+
+    def test_tutorial_snapshot_marker_matches(self):
+        text = (DM / "persistence.dm").read_text(encoding="utf-8")
+        self.assertIn('rustg_file_write("1", "[base]/%s")' % TUTORIAL_SNAPSHOT_MARKER, text)
+
+    def test_tutorial_text_limits_match(self):
+        text = (DM / "tutorial/submit.dm").read_text(encoding="utf-8")
+        self.assertEqual(int(re.search(r"#define BABYLON_TUTORIAL_TITLE_MAX (\d+)", text).group(1)), TUTORIAL_TITLE_MAX)
+        self.assertEqual(int(re.search(r"#define BABYLON_TUTORIAL_DESCRIPTION_MAX (\d+)", text).group(1)), TUTORIAL_DESCRIPTION_MAX)
+
     def test_no_world_type_decision_outside_the_table(self):
         # Other modules ask the table; they do not test the kind or the map group themselves.
         pattern = re.compile(r'is_tutorial\(\)|is_creative_plane\(\)|\bkind\s*[!=]=\s*"')
@@ -174,7 +230,8 @@ class WorldPolicy(unittest.TestCase):
             if path.name == "world_flags.dm":
                 continue
             for rule in ("babylon_creative_machines_active", "babylon_delam_contained", "babylon_storyteller_inert",
-                         "babylon_world_saves", "babylon_stop_saves", "babylon_tutorial_capable", "babylon_creative_enabled"):
+                         "babylon_world_saves", "babylon_stop_saves", "babylon_tutorial_capable", "babylon_creative_enabled",
+                         "babylon_world_saves_characters"):
                 self.assertNotRegex(text, r"(?m)^/proc/%s\(" % rule, path.name)
             self.assertNotIn("babylon_station_saving_available", text, path.name)
 

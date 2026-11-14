@@ -1,4 +1,7 @@
 // Trusted server-to-server API. Player input never supplies the actor or credential.
+/// Blocks until the supervisor answers (world.Export has no timeout): only
+/// /datum/babylon_supervisor_call calls it. Everything else uses
+/// babylon_supervisor_request_within() (test_contracts.py checks this).
 /proc/babylon_supervisor_request(list/query)
 	var/api = world.params["babylon-api"]
 	if(!api || !findtext(api, "http://127.0.0.1:"))
@@ -13,6 +16,52 @@
 	catch
 		return null
 
+/// One supervisor request run in the background (babylon_supervisor_request_within()).
+/datum/babylon_supervisor_call
+	var/list/query
+	/// Called with the answer (or null) once world.Export returns, however late.
+	var/datum/callback/on_answer
+	var/done = FALSE
+	var/list/answer
+
+/datum/babylon_supervisor_call/New(list/query, datum/callback/on_answer)
+	src.query = query
+	src.on_answer = on_answer
+
+/datum/babylon_supervisor_call/proc/perform()
+	finish(babylon_supervisor_request(query))
+
+/datum/babylon_supervisor_call/proc/finish(list/result)
+	answer = result
+	done = TRUE
+	on_answer?.Invoke(answer)
+
+/// babylon_supervisor_request(), but waits at most `timeout` deciseconds. world.Export has no
+/// timeout of its own: the request goes on in the background, and on_answer is called with its
+/// answer whenever it arrives. Returns the answer, or list("ok" = FALSE, "error" = ..., "timeout" = TRUE).
+/// Sleeps: call it from a background proc (INVOKE_ASYNC), never from a ui_act. call_type: tests
+/// put in a call that answers late.
+/proc/babylon_supervisor_request_within(list/query, timeout = BABYLON_SUPERVISOR_TIMEOUT, datum/callback/on_answer, call_type = /datum/babylon_supervisor_call)
+	var/datum/babylon_supervisor_call/request = new call_type(query, on_answer)
+	INVOKE_ASYNC(request, TYPE_PROC_REF(/datum/babylon_supervisor_call, perform))
+	var/deadline = world.time + timeout
+	while(!request.done && world.time < deadline)
+		sleep(1)
+	if(!request.done)
+		return list("ok" = FALSE, "error" = "The server did not answer in time", "timeout" = TRUE)
+	return request.answer || list("ok" = FALSE, "error" = "The server could not be reached")
+
+/client
+	/// Why babylon_admit() refused this client, for the lobby to tell them (a code it knows), else null.
+	var/babylon_admit_notice
+
+/// The lobby address a refused client is sent back to, with the refusal's notice if there is one.
+/client/proc/babylon_lobby_link()
+	var/lobby = world.params["babylon-lobby"]
+	if(!lobby || !babylon_admit_notice)
+		return lobby
+	return "[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(list("babylon_notice" = babylon_admit_notice))]"
+
 /client/proc/babylon_admit(topic_data)
 	if(!world.params["babylon-world"])
 		return ckey == ckey(world.params["babylon-owner"])
@@ -22,7 +71,12 @@
 	var/ticket = params["babylon_ticket"]
 	if(!istext(ticket) || length(ticket) > 128)
 		return FALSE
-	var/list/result = babylon_supervisor_request(list("action" = "redeem", "ticket" = ticket, "actor" = ckey))
+	// The supervisor refuses a redeem it only reaches after this wait, without spending the ticket
+	// (wait_seconds). Either way the player goes back to the lobby, which says why.
+	var/list/result = babylon_supervisor_request_within(list("action" = "redeem", "ticket" = ticket, "actor" = ckey, "wait_seconds" = BABYLON_SUPERVISOR_TIMEOUT / (1 SECONDS)))
+	if(result["timeout"] || result["code"] == "admission_timeout")
+		babylon_admit_notice = "admission_timeout"
+		log_world("Babylon: admitting [ckey] timed out; sent back to the lobby.")
 	if(!result?["ok"] || result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))
 		return FALSE
 	// The redemption blocks; the world may have begun stopping (a round's end) meanwhile. Refused,

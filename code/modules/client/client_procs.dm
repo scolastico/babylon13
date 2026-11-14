@@ -273,7 +273,7 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 #ifdef BABYLON_BUILDER // BABYLON13: admission precedes client registration/avatar creation.
 	if(!babylon_admit(tdata))
 		if(world.params["babylon-lobby"])
-			src << link(world.params["babylon-lobby"])
+			src << link(babylon_lobby_link())
 		return null
 #endif
 
