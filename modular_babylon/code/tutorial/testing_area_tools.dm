@@ -226,12 +226,28 @@
 			if(seen[object.tutorial_id])
 				collisions++
 			seen[object.tutorial_id] = TRUE
+		// A freed id taken inside the area, on a tile the undo leaves alone (a protected one):
+		// the restored object must not duplicate it.
+		var/turf/kept_tile = locate(x1 + 21, y1 + 5, z)
+		kept_tile.ChangeTurf(/turf/closed/indestructible)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(x1 + 20, y1 + 5, z), "clear_mark", list(), made)
+		session.select(x1 + 19, y1 + 4, z, x1 + 22, y1 + 6, z)
+		session.clear(null)
+		var/cleared_mark = !babylon_tutorial_find("clear_mark")
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, kept_tile, "clear_mark", list(), made)
+		session.undo(null)
+		var/marks = 0
+		for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
+			if(object.tutorial_id == "clear_mark")
+				marks++
+		result["undo_keeps_ids_taken_in_area"] = cleared_mark && marks == 1 && !!babylon_tutorial_find("clear_mark_2")
+		kept_tile.ChangeTurf(/turf/open/floor/plating)
 		result["undo_resuffixes_taken_ids"] = undone["ok"] && !collisions && !!findtext(undone["text"], "suffix") && babylon_tutorial_find("room_enter_2_2")?.setting("actions") ~= list("room_msg_2_2", "room_point_2_2")
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_paste_suffix_rewrites_refs failed: [error] ([error.file]:[error.line])")
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects.Copy())
-		if(findtext(object.tutorial_id, "room_") == 1)
+		if(findtext(object.tutorial_id, "room_") == 1 || findtext(object.tutorial_id, "clear_mark") == 1)
 			made += object
 	babylon_area_test_cleanup(setup, made)
 	return result
@@ -364,6 +380,13 @@
 		var/obj/machinery/atmospherics/pipe/smart/simple/general/visible/outside = new(locate(x1 + 7, y1 + 1, z))
 		made += outside
 		outside.on_construction(null, outside.pipe_color, outside.piping_layer)
+		// A pump on the copy's west edge, and a vent right next to where it lands: two devices
+		// that share a pipenet without any pipe.
+		var/obj/machinery/atmospherics/components/binary/pump/pump = new(locate(x1, y1 + 2, z), TRUE, EAST)
+		made += pump
+		var/obj/machinery/atmospherics/components/unary/vent_pump/vent = new(locate(x1 + 7, y1 + 2, z), TRUE, EAST)
+		made += vent
+		vent.on_construction(null, vent.pipe_color, vent.piping_layer)
 		var/failures_before = GLOB.babylon_area_link_failures
 		session.copy(null)
 		player.forceMove(locate(x1 + 10, y1 + 1, z))
@@ -375,7 +398,7 @@
 		result["paste_cable_in_powernet"] = !!pasted_cable?.powernet
 		// One live pipenet across the paste edge once the air subsystem rebuilt it.
 		for(var/wait in 1 to 100)
-			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent)
+			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent && vent.parents[1])
 				break
 			sleep(1)
 		var/datum/pipeline/net = pasted_pipe?.parent
@@ -392,6 +415,9 @@
 				leaked++
 		result["paste_no_leaked_pipenet"] = !leaked
 		result["paste_edge_no_link_errors"] = GLOB.babylon_area_link_failures == failures_before
+		var/obj/machinery/atmospherics/components/binary/pump/pasted_pump = locate() in locate(x1 + 8, y1 + 2, z)
+		var/datum/pipeline/device_net = vent.parents[1]
+		result["paste_pump_joins_vent"] = !!pasted_pump && !!device_net && !QDELETED(device_net) && (device_net in pasted_pump.parents)
 		var/turf/open/pasted_floor = locate(x1 + 11, y1 + 2, z)
 		result["paste_air_sane"] = istype(pasted_floor) && pasted_floor.return_air().return_pressure() > 50
 		player_tile = get_turf(player)

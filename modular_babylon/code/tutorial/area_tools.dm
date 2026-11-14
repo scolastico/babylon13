@@ -242,6 +242,14 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			for(var/mob/living/body in thing.get_all_contents())
 				if(babylon_area_is_player(body) && babylon_area_move_out(body, rect))
 					counts["moved"]++
+			// No free tile for someone inside: the container (locker, body bag, mech) stays.
+			var/still_inside = FALSE
+			for(var/mob/living/body in thing.get_all_contents())
+				if(babylon_area_is_player(body))
+					still_inside = TRUE
+			if(still_inside)
+				counts["kept"]++
+				continue
 			for(var/obj/inner in thing.get_all_contents())
 				if(inner != thing && babylon_area_protected_object(inner))
 					inner.forceMove(tile)
@@ -314,14 +322,30 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			if((thing.smoothing_flags & SMOOTH_QUEUED) && (thing.flags_1 & INITIALIZED_1))
 				thing.smooth_icon()
 
-/// After a map load: pipes and devices on the edge connect both ways to the pipes outside (the
-/// template setup only connects the loaded side), as when a pipe is built by hand.
-/proc/babylon_area_link_pipes(list/rect)
+/// The pipes and devices of a loaded copy, instead of tg's template setup (which builds the
+/// copy's pipenets at once and then crashes or leaves split nets where they meet existing ones,
+/// especially devices such as a pump next to a vent):
+/// 1. every loaded machine finds its nodes (atmos_init);
+/// 2. on the edge, the pipe or device outside finds the loaded one too, so links go both ways
+///    (a one-way link is dropped: it would break both pipes' deletion later);
+/// 3. the outside machines' pipenets are dropped (a pipeline keeps its gas in its pipes when it is
+///    deleted; a net of devices only is let go by its devices, tg deletes it then);
+/// 4. everything is queued: the air subsystem builds one network across the edge, as when pipes
+///    are built by hand.
+/proc/babylon_area_setup_pipes(list/machines, list/rect)
 	var/list/nets = list()
 	var/list/rebuild = list()
+	for(var/obj/machinery/atmospherics/machine as anything in machines)
+		if(QDELETED(machine))
+			continue
+		try
+			machine.atmos_init()
+		catch(var/exception/init_failure)
+			GLOB.babylon_area_link_failures++
+			log_world("BABYLON AREA: setting up [machine.type] failed: [init_failure] ([init_failure.file]:[init_failure.line])")
+		rebuild |= machine
 	for(var/turf/tile as anything in babylon_area_edge(rect[1], rect[2], rect[3], rect[4], rect[5]))
 		for(var/obj/machinery/atmospherics/machine in tile)
-			var/linked = FALSE
 			for(var/obj/machinery/atmospherics/node in machine.nodes.Copy())
 				var/turf/node_tile = get_turf(node)
 				if(!node_tile || (node_tile.x >= rect[1] && node_tile.x <= rect[3] && node_tile.y >= rect[2] && node_tile.y <= rect[4]))
@@ -331,29 +355,26 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				catch(var/exception/failure)
 					GLOB.babylon_area_link_failures++
 					log_world("BABYLON AREA: connecting [machine.type] to [node.type] failed: [failure] ([failure.file]:[failure.line])")
-				// Only when the outside pipe takes it as a node too (same layer, facing it): both
-				// pipenets are dropped and the rebuild queue builds one network across the edge
-				// (a pipeline keeps its gas in its pipes when it is deleted).
 				if(machine in node.nodes)
-					nets |= machine.return_pipenets()
 					nets |= node.return_pipenets()
 					rebuild |= node
-					linked = TRUE
 				else
-					// A one-way link would break both pipes' deletion later (disconnect() finds nothing).
 					var/index = machine.nodes.Find(node)
 					if(index)
 						machine.nodes[index] = null
 						machine.update_appearance()
-			if(linked)
-				rebuild |= machine
 	for(var/datum/pipeline/net as anything in nets)
 		if(net && !QDELETED(net))
 			try
-				qdel(net)
-			catch(var/exception/failure)
+				if(!length(net.members))
+					for(var/obj/machinery/atmospherics/components/device as anything in net.other_atmos_machines.Copy())
+						device.nullify_pipenet(net)
+						rebuild |= device
+				else
+					qdel(net)
+			catch(var/exception/drop_failure)
 				GLOB.babylon_area_link_failures++
-				log_world("BABYLON AREA: dropping a pipenet on the paste edge failed: [failure] ([failure.file]:[failure.line])")
+				log_world("BABYLON AREA: dropping a pipenet on the paste edge failed: [drop_failure] ([drop_failure.file]:[drop_failure.line])")
 	for(var/obj/machinery/atmospherics/machine as anything in rebuild)
 		if(!QDELETED(machine))
 			SSair.add_to_rebuild_queue(machine)
@@ -668,6 +689,41 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	// The copy replaces the turfs it covers.
 	should_place_on_top = FALSE
 
+/// As tg's, except that pipes and devices are set up by babylon_area_setup_pipes(), which joins
+/// them to the pipes around the paste properly.
+/datum/map_template/babylon_clipboard/initTemplateBounds(list/bounds)
+	if(!bounds)
+		stack_trace("[name] template failed to initialize correctly!")
+		return
+	var/list/obj/machinery/atmospherics/atmos_machines = list()
+	var/list/obj/structure/cable/cables = list()
+	var/list/atom/movable/movables = list()
+	var/list/area/areas = list()
+	var/list/turfs = block(bounds[MAP_MINX], bounds[MAP_MINY], bounds[MAP_MINZ], bounds[MAP_MAXX], bounds[MAP_MAXY], bounds[MAP_MAXZ])
+	for(var/turf/current_turf as anything in turfs)
+		areas |= current_turf.loc
+		if(!SSatoms.initialized)
+			continue
+		for(var/movable_in_turf in current_turf)
+			if(istype(movable_in_turf, /obj/docking_port/mobile))
+				continue
+			movables += movable_in_turf
+			if(istype(movable_in_turf, /obj/structure/cable))
+				cables += movable_in_turf
+				continue
+			if(istype(movable_in_turf, /obj/machinery/atmospherics))
+				atmos_machines += movable_in_turf
+	SSmapping.reg_in_areas_in_z(areas)
+	if(!SSatoms.initialized)
+		return
+	SSatoms.InitializeAtoms(areas + turfs + movables, returns_created_atoms ? created_atoms : null)
+	SSlighting.setup_static_lighting_if_needed(turfs)
+	SSmachines.setup_template_powernets(cables)
+	babylon_area_setup_pipes(atmos_machines, list(bounds[MAP_MINX], bounds[MAP_MINY], bounds[MAP_MAXX], bounds[MAP_MAXY], bounds[MAP_MINZ]))
+	for(var/turf/affected_turf as anything in block(bounds[MAP_MINX] - 1, bounds[MAP_MINY] - 1, bounds[MAP_MINZ], bounds[MAP_MAXX] + 1, bounds[MAP_MAXY] + 1, bounds[MAP_MAXZ]))
+		affected_turf.air_update_turf(TRUE, TRUE)
+		affected_turf.levelupdate()
+
 /// Old tutorial id => new id for pasting a clip. mode: "auto" (the first free "_2", "_3" ...),
 /// "custom" (suffix) or "keep". ignore: objects about to be removed (their ids are free).
 /// Returns list("map" = ids, "suffix" = text) or list("error" = why).
@@ -817,12 +873,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			catch(var/exception/load_failure)
 				log_world("BABYLON AREA: restoring the contents of [thing.type] failed: [load_failure] ([load_failure.file]:[load_failure.line])")
 	babylon_area_resmooth(rect)
-	babylon_area_link_pipes(rect)
 	// Nothing pauses from here on: the ids are checked and the objects made in one go.
 	counts["moved"] += babylon_area_rescue(rect)
-	var/list/id_result = babylon_area_id_map(clip, id_mode, suffix, babylon_area_tutorial_in(rect))
+	// Nothing is ignored: what the clear removed is gone already, and every tutorial object still
+	// here (placed during the pauses, or on tiles the paste left alone) keeps its id.
+	var/list/id_result = babylon_area_id_map(clip, id_mode, suffix, list())
 	if(id_result["error"])
-		var/list/fallback = babylon_area_id_map(clip, "auto", null, babylon_area_tutorial_in(rect))
+		var/list/fallback = babylon_area_id_map(clip, "auto", null, list())
 		if(fallback["error"])
 			return fallback["error"]
 		counts["id_note"] = "Some tutorial ids were taken meanwhile, so these got the suffix [fallback["suffix"]] instead."
