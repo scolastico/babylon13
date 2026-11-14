@@ -35,13 +35,14 @@ RUN . ./dependencies.sh \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates icons \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates modular_zubbers/icons \
  && python3 tools/build_bt.py
-RUN DreamMaker -DCBT babylon.dme && DreamMaker -DCBT babylon-station.dme && DreamMaker -DCBT babylon-lobby.dme
+# build_dme.py runs DreamMaker and explains the BYOND 516.1686 slot quirk when it shows up.
+RUN python3 tools/babylon/build_dme.py babylon.dme babylon-station.dme babylon-lobby.dme
 RUN python3 container/stage-runtime.py /src /opt/babylon
 
 # PRs and default-branch pushes build this target: the test game builds (Babylon and station), the
 # standalone lobby, upstream compatibility, Python tests and browser UX tests.
 FROM build AS check
-RUN DreamMaker -DCBT babylon-test.dme && DreamMaker -DCBT babylon-station-test.dme && DreamMaker -DCBT tgstation.dme \
+RUN python3 tools/babylon/build_dme.py babylon-test.dme babylon-station-test.dme tgstation.dme \
  && python3 -m unittest discover -s services/supervisor -v \
  && python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v \
  && node tools/babylon/test_lobby_loading.cjs \

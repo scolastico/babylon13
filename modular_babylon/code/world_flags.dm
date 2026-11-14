@@ -160,3 +160,20 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 #else
 	return !!session?.ready
 #endif
+
+// ---------------------------------------------------------------------------------------------
+// BYOND 516.1686 slot quirk (modular_babylon/UPSTREAM_HOOKS.md, "BYOND 516.1686 slot quirk"):
+// DreamMaker mishandles whichever variable lands on one particular slot ("<static>: invalid
+// variable", or a used local reported as "unused_var"). These padding globals do nothing; they only
+// move that slot. If a build shows the quirk, add or remove one pad in that build's block below and
+// compile all four builds again. Remove the block once a BYOND build fixes the quirk.
+var/global/babylon_byond_1686_slot_pad_shared
+#if defined(BABYLON_DRONE) && defined(BABYLON_TESTING)
+// babylon-test.dme
+#elif defined(BABYLON_DRONE)
+// babylon.dme
+#elif defined(BABYLON_TESTING)
+// babylon-station-test.dme
+#else
+// babylon-station.dme
+#endif

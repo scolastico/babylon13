@@ -197,6 +197,25 @@ atmosian armor added their items to `GLOB.security_vest_allowed`, so to every ar
 to `GLOB.mining_suit_allowed`). `tools/babylon/test_shared_list_aliases.py` fails when the
 pattern comes back; the cases it allows are listed there with their reason.
 
+## BYOND 516.1686 slot quirk
+
+DreamMaker 516.1686 (`.tgs.yml`) sometimes mishandles whichever variable lands on one
+particular internal slot. It has shown up as a proc's static list that is "invalid"
+(`code/modules/antagonists/cult/cult_structure_altar.dm:41: error: altar_items:
+invalid variable`, `archive_items` in `cult_structure_archives.dm`) and as a local that is
+plainly used but reported as `warning (unused_var)` (`suspect_gloves` in
+`forensics_helpers.dm`, `loser_controller` in `cat_bt.dm`, `plant_smudge` in
+`plant_genes.dm`). The reported file is never the cause: any change that adds or removes
+a variable anywhere in the build moves the slot onto another variable, so the same
+change can break one build and not the other three.
+
+Recipe: add or remove one padding global (`var/global/babylon_byond_1686_slot_pad_<n>`)
+in the block for the affected build at the end of `modular_babylon/code/world_flags.dm`,
+then compile all four builds again (repeat until all are clean). The pads do nothing
+else; remove the block once a BYOND build fixes the quirk (check newer 516 builds when
+bumping `.tgs.yml`). `tools/babylon/build_dme.py`, which the Dockerfile uses for every
+DreamMaker run, prints this recipe when a build log shows the quirk's signature.
+
 ## Updating upstream
 
 ```sh
