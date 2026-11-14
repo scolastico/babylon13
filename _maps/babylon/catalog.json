@@ -52,7 +52,7 @@
       "size": null,
       "build": "station",
       "map_json": "boxstation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/boxstation.png",
       "multiz": false
     },
     {
@@ -63,7 +63,7 @@
       "size": null,
       "build": "station",
       "map_json": "metastation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/metastation.png",
       "multiz": false
     },
     {
@@ -74,29 +74,29 @@
       "size": null,
       "build": "station",
       "map_json": "deltastation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/deltastation.png",
       "multiz": false
     },
     {
       "id": "icebox",
       "name": "IceBox Station",
-      "description": "A multi-level station on an ice moon.",
+      "description": "A station on a frozen ice moon.",
       "group": "station",
       "size": null,
       "build": "station",
       "map_json": "icebox.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/icebox.png",
       "multiz": true
     },
     {
       "id": "tramstation",
       "name": "Tramstation",
-      "description": "A multi-level station with a central tram.",
+      "description": "A station built around a central tram line.",
       "group": "station",
       "size": null,
       "build": "station",
       "map_json": "tramstation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/tramstation.png",
       "multiz": true
     },
     {
@@ -107,18 +107,18 @@
       "size": null,
       "build": "station",
       "map_json": "kilostation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/kilostation.png",
       "multiz": false
     },
     {
       "id": "northstar",
       "name": "North Star",
-      "description": "A four-level station.",
+      "description": "A large station spread over four decks.",
       "group": "station",
       "size": null,
       "build": "station",
       "map_json": "northstar.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/northstar.png",
       "multiz": true
     },
     {
@@ -129,7 +129,7 @@
       "size": null,
       "build": "station",
       "map_json": "pubbystation.json",
-      "preview": null,
+      "preview": "_maps/babylon/previews/pubbystation.png",
       "multiz": false
     }
   ]

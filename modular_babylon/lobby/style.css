@@ -191,7 +191,8 @@ fieldset.choice-group { border: 0; margin: 0 0 16px; padding: 0; }
 .map-pick:focus { outline: none; }
 .map-pick:focus:after { content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 2; border: 2px dashed #a4d9ff; border-radius: 9px 9px 0 0; }
 .map-preview { position: relative; display: block; height: 112px; background-color: #1f3a48; overflow: hidden; }
-.map-preview img { display: block; width: 100%; height: 112px; object-fit: cover; }
+.map-preview img { display: block; width: 100%; height: 112px; object-fit: contain; padding: 4px; }
+.map-preview.photo { background: radial-gradient(circle at 50% 45%, #18283f, #0b121d 75%); }
 .map-art { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
 .map-art.grid:after {
   content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0;

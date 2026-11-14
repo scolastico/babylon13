@@ -177,7 +177,7 @@ function lobbyInitials(name) {
 function lobbyPreviewHtml(card) {
   var map = card.maps[0];
   if (map && map.preview_url) {
-    return '<span class="map-preview"><img src="' + lobbyEsc(map.preview_url) + '" alt=""><span class="map-check" aria-hidden="true">&#10003;</span></span>';
+    return '<span class="map-preview photo"><img src="' + lobbyEsc(map.preview_url) + '" alt=""><span class="map-check" aria-hidden="true">&#10003;</span></span>';
   }
   var colors = LOBBY_PLACEHOLDERS[map && map.id] || LOBBY_PLACEHOLDERS[card.group] || LOBBY_PLACEHOLDERS.station;
   var art = card.group === 'creative_plane' ? ' grid' : (card.group === 'babylon' ? ' rings' : '');

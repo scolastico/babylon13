@@ -102,6 +102,9 @@ def main():
     for ext in ('dmb', 'rsc'):
         shutil.copy2(ROOT / ('babylon-lobby.' + ext), directory / ('babylon-lobby.' + ext))
     shutil.copytree(ROOT / 'modular_babylon/lobby', directory / 'modular_babylon/lobby', dirs_exist_ok=True)
+    # Map previews for the lobby's map picker (catalog "preview" paths are relative to the root).
+    if (ROOT / '_maps/babylon/previews').is_dir():
+        shutil.copytree(ROOT / '_maps/babylon/previews', directory / '_maps/babylon/previews', dirs_exist_ok=True)
     params = urlencode({'lobby-config': str(RUNTIME / 'lobby.json')})
     menu = subprocess.Popen([config['dreamdaemon'], 'babylon-lobby.dmb', str(lobby['port']),
                              '-ip', '0.0.0.0', '-trusted', '-close', '-params', params], cwd=directory,
