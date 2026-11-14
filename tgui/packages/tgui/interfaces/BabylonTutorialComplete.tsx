@@ -25,6 +25,13 @@ export const BabylonTutorialComplete = () => {
                 Tutorial complete!
               </Box>
             </Stack.Item>
+            {data.title && (
+              <Stack.Item>
+                <Box color="label" textAlign="center">
+                  {data.title}
+                </Box>
+              </Stack.Item>
+            )}
             <Stack.Item>
               <Box textAlign="center" style={{ whiteSpace: 'pre-wrap' }}>
                 {data.text}
