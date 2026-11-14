@@ -487,6 +487,38 @@ connected to the lobby address and its Reconnect button brings them back once th
 up again. The whole shutdown has to fit Docker's
 `stop_grace_period`.
 
+## Rounds in station worlds
+
+Worlds on station maps run normal tg rounds, with Babylon's round control:
+
+- **Start round.** The round never starts by itself: there is no lobby countdown. The
+  title screen menu (Babylon colours) and the Status tab show "Waiting for <owner> to
+  start the round". The world's owner and server administrators get a **Start round**
+  button at the top of the menu (and a `Start round` verb in the Babylon tab); the
+  server checks the permission, so nobody else can start it. The round then starts
+  normally: roundstart jobs for players who are ready, the storyteller's roundstart
+  events and antagonists. Creative Plane worlds hold for their owner too.
+- **Round end.** When the round ends (shuttle at CentCom, nuke, an admin's end round)
+  the normal round-end report opens. Players keep it for the normal restart delay
+  (`ROUND_END_COUNTDOWN`), at most 60 seconds, then everyone is sent back to the
+  lobby and the world stops **without** a save. The supervisor records this as an
+  ordinary stop (the world reports `round_ended`; the lobby shows the world as
+  stopping and admits nobody in the meantime). The next start resumes the latest
+  autosave from before the round ended; to start over, reset or roll back the world.
+  An administrator's Reboot World ends the world the same way (a reboot would restart
+  the run behind the supervisor's back).
+- **Resumed rounds.** A world whose save contains a started round resumes it at once,
+  without roundstart job assignment or antagonist rolls. Returning players get their
+  saved character back; others use the normal late-join menu.
+- **Tutorials** (play instances and admin edits) start their round at once. The joining
+  player spawns as their preferences character, job Assistant, without antagonists, at
+  the tutorial's start.
+- **Late-join.** SPLURT's late-joiners arrive on the Interlink (its own z-level with the
+  arrivals shuttle and all late-join landmarks), which station worlds do not load; the
+  station maps' arrivals docks have no landmarks of their own. Station worlds therefore
+  seat late-joiners in the station's arrivals hallway (its chairs and benches, else its
+  floor, else the observer start).
+
 ## AFK return to the lobby
 
 Worlds send inactive players back to the lobby after 900 seconds (15 minutes) by default.

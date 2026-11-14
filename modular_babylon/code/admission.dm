@@ -43,6 +43,9 @@
 
 /datum/babylon_save/proc/managed_stop()
 	if(draining)
+		// A world whose round ended is already on its way out, without a save.
+		if(round_ending)
+			return list("ok" = TRUE, "saved" = FALSE)
 		return list("error" = "Already stopping")
 	draining = TRUE
 	var/list/result

@@ -7,8 +7,11 @@ station build's tests and stops it again. No player world is touched.
     python3 services/supervisor/smoke_station.py --dreamdaemon /opt/byond/bin/DreamDaemon \
         --config-directory config --data-directory /tmp/smoke-station [--maps metastation boxstation]
 
-The first map gets the full checks; further maps (used to vet the map catalog) are only booted
-to the ready state, checked for the right map and stopped.
+The first map gets the full checks, including round control: the round waits for its owner,
+starts on the owner's Start round and, once it ends, the world returns everyone to the lobby and
+exits without a save (the supervisor records an ordinary stop). Further maps (used to vet the map
+catalog) are only booted to the ready state, checked for the right map and late-join points, and
+stopped. Finally a tutorial-kind world on the first map checks that its round starts by itself.
 """
 import argparse
 import json
@@ -67,6 +70,12 @@ def main():
                 shutil.copy2(root / f"babylon-station-test.{ext}", prepared / f"babylon-station.{ext}")
             return prepared
 
+        def restore_source(self, world):
+            # Tutorial snapshots come with the tutorial pipeline; the round test needs none.
+            if self.field(world, "kind", "world") != "world":
+                return None
+            return super().restore_source(world)
+
     driver = TestDriver(config)
     service = Supervisor(config, driver)
     threading.Thread(target=serve, args=(config, service), daemon=True).start()
@@ -118,6 +127,39 @@ def main():
             process.wait(timeout=30)
             assert process.poll() is not None, "DreamDaemon is still running"
 
+    def ticker_state(run):
+        info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        return {e["entry"]: e["value"] for e in info["entries"]}["ticker_state"]
+
+    def wait_round_running(run, timeout=180):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if ticker_state(run) == 3:  # GAME_STATE_PLAYING
+                return
+            time.sleep(2)
+        raise TimeoutError("The round did not start")
+
+    def wait_round_end_stop(world):
+        """The world stops itself after its round ends: never an error state, no save."""
+        process = driver.processes.get(current()["id"])
+        states = set()
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            run = current()
+            if not run:
+                break
+            states.add(run["state"])
+            time.sleep(.5)
+        assert not current(), "The world did not exit after its round ended"
+        assert "error" not in states, states
+        assert "stopping" in states, states
+        if process:
+            process.wait(timeout=30)
+        with service.lock:
+            ended = service.row("SELECT * FROM audit WHERE action='round_ended' AND world=?", (world,))
+        assert ended, "The supervisor was not told about the round's end"
+        return sorted(states)
+
     catalog = {entry["id"]: entry for entry in json.loads((root / "_maps/babylon/catalog.json").read_text())["maps"]}
 
     def run_map(index, map_id):
@@ -133,6 +175,7 @@ def main():
         expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
         assert entry["info"]["map_name"] == expected, (entry["info"], expected)
         entry["world_flags"] = checks(run, "test_station_world_flags")
+        entry["test_station_latejoin"] = checks(run, "test_station_latejoin")
         if index == 0:
             assert topic(run["port"], run["secret"], "announce", {"message": "Smoke notice"}).get("ok"), "announce failed"
             entry["storyteller"] = checks(run, "test_station_storyteller")
@@ -150,7 +193,15 @@ def main():
             exported = debug(run, "call", dict(target="session", proc="test_supervisor_export", args=[json.dumps(query)]))["result"]
             assert not any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), "Ticket replay accepted"
             entry["ticket_redemption"] = True
-        stop(world)
+            # Round control: hold, the owner's start, the round's end back to the lobby.
+            entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
+            wait_round_running(run)
+            status = topic(run["port"], run["secret"], "status")
+            assert status["ready"] and not status["draining"], status
+            entry["test_round_end_no_save"] = checks(run, "test_round_end_no_save")
+            entry["round_end_states"] = wait_round_end_stop(world)
+        else:
+            stop(world)
         saves = data / "worlds" / world / "data/babylon/saves"
         assert not (saves / "latest.json").exists(), "a station world saved"
         entry["stopped_without_save"] = True
@@ -182,6 +233,16 @@ def main():
                 discard_child()
             report["maps"][map_id] = entry
             print(json.dumps({map_id: entry}), flush=True)
+        # A tutorial-kind world starts its round by itself (no owner hold).
+        world = api("create", dict(name="Station smoke tutorial", visibility="private", map=args.maps[0]))["id"]
+        with service.lock, service.db:
+            service.db.execute("UPDATE worlds SET kind='tutorial', tutorial='smoke_tutorial' WHERE id=?", (world,))
+        run = wait_ready(world)
+        tutorial = dict(test_tutorial_round=checks(run, "test_tutorial_round"),
+                        world_flags=checks(run, "test_station_world_flags"))
+        stop(world)
+        report["tutorial"] = tutorial
+        print(json.dumps({"tutorial": tutorial}), flush=True)
         report["passed"] = not any("failed" in entry for entry in report["maps"].values())
         (data / "result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))

@@ -56,4 +56,92 @@
 	result["arrivals_shuttle"] = !!SSshuttle.arrivals
 	result["latejoin_spawns"] = length(SSjob.latejoin_trackers)
 	result["respawn_turf"] = !!respawn_turf
+	result["latejoin_source"] = latejoin_source
+	result["round_mode"] = round_mode
+	result["round_started_by"] = round_started_by
+	return result
+
+/// Late-joiners arrive on the station (station_round.dm), not in tg's last-resort spawn.
+/datum/babylon_save/proc/test_station_latejoin()
+	var/list/result = list()
+	result["latejoin_points"] = length(SSjob.latejoin_trackers) || length(SSjob.latejoin_override_trackers)
+	result["source_known"] = latejoin_source in list("map", "arrivals chairs", "arrivals floor", "observer start")
+	var/datum/job/assistant = SSjob.get_job_type(/datum/job/assistant)
+	var/atom/arrival = assistant.get_latejoin_spawn_point()
+	var/turf/arrival_turf = get_turf(arrival)
+	result["assistant_arrives_on_station"] = !!arrival_turf && is_station_level(arrival_turf.z)
+	result["not_the_error_room"] = !!arrival_turf && !istype(get_area(arrival_turf), /area/misc/testroom)
+	var/turf/tutorial_start = babylon_tutorial_start_turf()
+	result["tutorial_start_fallback"] = isturf(tutorial_start) && is_station_level(tutorial_start.z)
+	return result
+
+/// Ordinary worlds hold the round for their owner: no countdown, Start round only for the owner
+/// and administrators. Ends by starting the round as the owner would (the smoke waits for it).
+/datum/babylon_save/proc/test_round_hold_and_owner_start()
+	var/list/result = list()
+	var/owner = GLOB.babylon_world.owner_ckey
+	result["mode_hold"] = round_mode == "hold"
+	result["pre_round"] = SSticker.current_state == GAME_STATE_PREGAME
+	result["no_countdown"] = SSticker.GetTimeLeft() < 0 && SSticker.start_at < 0 && !SSticker.start_immediately
+	result["on_hold"] = babylon_round_on_hold()
+	result["status_names_owner"] = findtext(babylon_round_status_text(), "Waiting for [owner] to start the round") == 1
+	var/menu = babylon_title_additions(null, "menuref")
+	result["menu_shows_waiting"] = !!findtext(menu, "Waiting for") && !!findtext(menu, "BABYLON13")
+	result["menu_hides_button_from_others"] = !findtext(menu, "babylon_start_round")
+	result["owner_may_start"] = babylon_round_starter_allowed(owner, "owner", FALSE, FALSE)
+	result["admin_may_start"] = babylon_round_starter_allowed("someadmin", "admin", FALSE, FALSE) && babylon_round_starter_allowed("serveradmin", "guest", TRUE, FALSE)
+	result["member_may_not"] = !babylon_round_starter_allowed("somemember", "member", FALSE, FALSE)
+	result["guest_may_not"] = !babylon_round_starter_allowed("someguest", "guest", FALSE, FALSE)
+	result["visitor_may_not"] = !babylon_round_starter_allowed(owner, "owner", FALSE, TRUE)
+	result["nobody_may_not"] = !babylon_round_starter_allowed(null, "admin", TRUE, FALSE)
+	result["clientless_start_refused"] = !babylon_start_round(null) && babylon_round_on_hold()
+	// Tutorials start at once, resumed rounds too; Creative Plane worlds keep the owner's hold.
+	result["tutorial_starts_at_once"] = babylon_choose_round_mode("tutorial", FALSE) == "auto" && babylon_choose_round_mode("tutorial_edit", FALSE) == "auto"
+	result["world_kind_holds"] = babylon_choose_round_mode("world", FALSE) == "hold"
+	result["saved_round_resumes"] = babylon_choose_round_mode("world", TRUE) == "resume" && babylon_choose_round_mode("tutorial", TRUE) == "resume"
+	result["saved_round_flag_read_defensively"] = babylon_state_round_started(list("round" = list("started" = TRUE))) \
+		&& !babylon_state_round_started(null) && !babylon_state_round_started(list()) \
+		&& !babylon_state_round_started(list("round" = "yes")) && !babylon_state_round_started(list("round" = list("started" = FALSE))) \
+		&& !babylon_state_round_started(list("round" = list()))
+	result["fresh_world_not_resumed"] = !babylon_state_round_started(saved_state())
+	result["assignment_kept_when_held"] = !babylon_skip_roundstart_assignment()
+	round_mode = "resume"
+	result["resume_skips_assignment"] = babylon_skip_roundstart_assignment()
+	round_mode = "auto"
+	result["tutorial_skips_assignment"] = babylon_skip_roundstart_assignment()
+	round_mode = "hold"
+	result["no_saved_character_yet"] = reattach_saved_character(null) == FALSE
+	result["owner_start"] = begin_round("Babylon smoke") && SSticker.start_immediately && round_started_by == "Babylon smoke"
+	result["no_second_start"] = !begin_round("Babylon smoke again") && !babylon_round_on_hold()
+	return result
+
+/// The round has started; ending it returns everyone to the lobby and stops the world without
+/// a save. Triggers the end (a short report delay); the smoke asserts the exit and the stop.
+/datum/babylon_save/proc/test_round_end_no_save()
+	var/list/result = list()
+	result["round_running"] = SSticker.current_state == GAME_STATE_PLAYING && SSticker.HasRoundStarted()
+	result["started_by_owner_button"] = round_started_by == "Babylon smoke"
+	result["no_roundstart_job_without_players"] = !length(GLOB.joined_player_list)
+	result["report_delay_capped"] = round_end_delay() > 0 && round_end_delay() <= 60 SECONDS
+	result["not_ending_yet"] = !round_ending && !draining
+	round_ending = TRUE
+	result["no_save_after_the_end"] = !!findtext(save_world()["error"], "round is over")
+	round_ending = FALSE
+	round_end_delay_override = 5 SECONDS
+	SSticker.force_ending = ADMIN_FORCE_END_ROUND
+	result["end_requested"] = TRUE
+	return result
+
+/// Tutorial worlds start their round without the owner and without roundstart assignment.
+/datum/babylon_save/proc/test_tutorial_round()
+	var/list/result = list()
+	result["tutorial_kind"] = GLOB.babylon_world.is_tutorial()
+	result["mode_auto"] = round_mode == "auto"
+	result["started_without_owner"] = SSticker.current_state == GAME_STATE_PLAYING && !round_started_by
+	result["not_on_hold"] = !babylon_round_on_hold()
+	result["no_start_button"] = !findtext(babylon_title_additions(null, "menuref"), "babylon_start_round")
+	result["skips_roundstart_assignment"] = babylon_skip_roundstart_assignment()
+	result["inert_storyteller"] = babylon_storyteller_inert() && SSgamemode.storyteller?.type == /datum/storyteller/babylon
+	var/turf/start = babylon_tutorial_start_turf()
+	result["start_turf"] = isturf(start)
 	return result

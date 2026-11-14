@@ -292,6 +292,36 @@ class Policies(unittest.TestCase):
         self.s.tick()
         self.assertIsNone(self.s.row("SELECT * FROM runs"))
 
+    def test_round_end_stops_the_run_cleanly_without_a_save(self):
+        w = self.create()
+        run = self.start(w)
+        token = self.ticket(w)
+        with self.assertRaises(Denied):
+            self.s.round_ended(run["id"], "wrong")
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "running")
+        self.assertEqual(self.s.round_ended(run["id"], run["secret"]), {"ok": True})
+        self.assertEqual(self.s.round_ended(run["id"], run["secret"]), {"ok": True})
+        current = self.s.row("SELECT * FROM runs")
+        self.assertEqual((current["state"], current["error"]), ("stopping", None))
+        # Nobody is admitted into a world whose round is over.
+        with self.assertRaises(Denied):
+            self.s.redeem(run["id"], run["secret"], token, "owner")
+        with self.assertRaises(Denied):
+            self.s.dispatch("owner", "join", {"world": w})
+        self.assertIsNotNone(self.s.row("SELECT * FROM audit WHERE action='round_ended' AND world=?", (w,)))
+        # Still answering while players read the round-end report: it stays stopping.
+        self.now += 500
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "stopping")
+        # The world exits on its own: an ordinary stop, never an error, and no save was asked for.
+        del self.driver.runs[run["id"]]
+        self.s.tick()
+        self.assertIsNone(self.s.row("SELECT * FROM runs"))
+        self.assertIsNone(self.s.row("SELECT * FROM sessions"))
+        self.assertIsNone(self.s.last_save(w))
+        # The world can be started again (it resumes its latest save).
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+
     def test_summary_counts_players_across_running_worlds_without_actor(self):
         self.assertEqual(self.s.dispatch("", "summary", {}), {"ok": True, "running_worlds": 0, "admin_worlds": 0, "players": 0})
         one, two = self.start(self.create("one"), "one"), self.start(self.create("two"), "two")

@@ -269,6 +269,9 @@
 	return length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
 
 /datum/babylon_save/proc/save_world()
+	// After a round's end nothing is saved: the next start resumes the last save from before it.
+	if(round_ending)
+		return list("error" = "The round is over; this world is not saved again")
 	// The engine saves one Babylon level; station maps (multi-z) cannot be saved yet.
 	if(babylon_is_station_build())
 		return list("error" = "This world cannot be saved yet")

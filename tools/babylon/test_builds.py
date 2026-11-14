@@ -14,7 +14,7 @@ SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", 
           "music_loops", "play_time", "testing_common"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
-STATION_ONLY = {"station_session", "testing_station"}
+STATION_ONLY = {"station_session", "station_round", "testing_station"}
 
 
 def modules(dme):

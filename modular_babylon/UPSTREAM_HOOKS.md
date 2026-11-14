@@ -50,6 +50,20 @@ Plane maps and tutorial worlds are inert like Babylon. After an upstream merge,
 re-check `SSgamemode`'s `set_storyteller`/`init_storyteller`, the storyteller
 vote and `SSevents.spawnEvent` against it; the native smoke test asserts it.
 
+Round control in station worlds (`modular_babylon/code/station_round.dm`,
+station build only) needs no upstream edits either; it overrides procs:
+`SSticker` `setup`, `standard_reboot` and `fire` (the reboot HUD text), `/world/Reboot`,
+`SSgamemode` `handle_pre_setup_roundstart_events`/`handle_post_setup_roundstart_events`,
+`SSdynamic.on_latejoin`, and on the title screen (Skyrat's
+`modular_skyrat/modules/title_screen`) `/mob/dead/new_player` `get_title_html`
+(it inserts Babylon's colours/font, the round status and the owner's Start round
+button after the menu's `<div class="container_nav">`), `Topic` and `Login`, plus
+`/mob/dead/get_status_tab_items` and the tg lobby HUD's `time_remaining_str`.
+The round is held with `SSticker.SetTimeLeft(-1)` and started with
+`start_immediately`. After an upstream merge, re-check the title screen markup
+(`container_nav`), `declare_completion` → `standard_reboot`, the ticker's
+pre-game countdown and `setup()`, and the storyteller's roundstart event procs.
+
 `modular_babylon/code/moderation.dm` grants lobby admins (`BABYLON_ADMINS`) full
 game-admin rights on admission, removes mentors (no mentor is loaded, admins
 are not made mentors, Mentorhelp and Mentorwho are gone) and relays adminhelps

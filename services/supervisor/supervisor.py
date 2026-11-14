@@ -1018,6 +1018,20 @@ class Supervisor:
                 mode = "player"
             return {"ok": True, "world": world["id"], "run": run_id, "role": role, "mode": mode}
 
+    def round_ended(self, run_id, secret):
+        """A station world whose round is over stops itself without a save (it returns its players
+        to the lobby and exits once the round-end report has been read). The run is marked as
+        stopping, so no one is admitted any more and its process exit is an ordinary stop."""
+        with self.lock, self.db:
+            run = self.child(run_id, secret)
+            if run["state"] == "stopping":
+                return {"ok": True}
+            self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
+            self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
+            # Logged as "world: round_ended <world>"; its process exit is then logged as stopped.
+            self.audit("world", "round_ended", run["world"])
+            return {"ok": True}
+
     def begin_stop(self, run):
         if run["id"] in self.stop_workers:
             return
@@ -1070,7 +1084,10 @@ class Supervisor:
                             self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
                         log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
                     continue
-                log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
+                if run["state"] == "stopping":
+                    log("%s stopped (port %s)" % (self.describe(run["world"]), run["port"]))
+                else:
+                    log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
                 with self.lock, self.db:
                     self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
                     self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
@@ -1173,6 +1190,8 @@ def serve(config, service=None):
                     result = service.relay_ahelp(data.get("run"), data.get("secret", ""), data)
                 elif data.get("action") == "world_manage":
                     result = service.manage_world(data.get("run"), data.get("secret", ""), data)
+                elif data.get("action") == "round_ended":
+                    result = service.round_ended(data.get("run"), data.get("secret", ""))
                 else:
                     if not hmac.compare_digest(str(data.get("secret", "")), config["lobby_secret"]):
                         raise Denied("Invalid lobby credentials")

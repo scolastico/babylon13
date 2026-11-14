@@ -23,6 +23,8 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	// Owner uses this datum for legacy saves; other players have independent sessions.
 	var/list/player_sessions = list()
 	var/draining = FALSE
+	/// The round is over (station worlds, station_round.dm): the world stops without saving again.
+	var/round_ending = FALSE
 	var/afk_timeout = 15 MINUTES
 	var/list/restored_atoms = list()
 	var/list/resume_data

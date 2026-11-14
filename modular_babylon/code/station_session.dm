@@ -23,6 +23,8 @@ SUBSYSTEM_DEF(babylon_station)
 	session.station_z = SSmapping.levels_by_trait(ZTRAIT_STATION)[1]
 	// Before the world reports ready: an admitted visitor or spectator appears here at once.
 	session.respawn_turf = session.station_spawn_turf()
+	// Hold the round for its owner, or start it at once (tutorials, resumed rounds).
+	session.setup_round_control()
 	// No vote: the round starts with the world's fixed storyteller (storyteller.dm).
 	SSgamemode.voted_storyteller = babylon_world_storyteller()
 	// Nothing to restore yet; the master controller may start the simulation.

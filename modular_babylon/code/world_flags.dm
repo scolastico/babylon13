@@ -80,11 +80,12 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has
 /// initialized everything, the visitor/spectator spawn point is set and the ticker reached the
-/// pre-round lobby (or a later state).
+/// pre-round lobby (or a later state); worlds whose round starts at once (tutorials, resumed
+/// rounds: station_round.dm) are ready once it runs, so nobody arrives during its setup.
 /proc/babylon_world_ready()
 	var/datum/babylon_save/session = GLOB.babylon_save
 #ifdef BABYLON_STATION
-	return session && !session.boot_error && session.prepared && session.respawn_turf && Master.init_stage_completed >= INITSTAGE_MAX && SSticker.current_state >= GAME_STATE_PREGAME
+	return session && !session.boot_error && session.prepared && session.respawn_turf && Master.init_stage_completed >= INITSTAGE_MAX && SSticker.current_state >= (session.round_mode == "hold" ? GAME_STATE_PREGAME : GAME_STATE_PLAYING)
 #else
 	return !!session?.ready
 #endif

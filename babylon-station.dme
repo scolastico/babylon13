@@ -14,6 +14,7 @@
 #include "modular_babylon/code/state.dm"
 #include "modular_babylon/code/persistence.dm"
 #include "modular_babylon/code/station_session.dm"
+#include "modular_babylon/code/station_round.dm"
 #include "modular_babylon/code/afk.dm"
 #include "modular_babylon/code/control.dm"
 #include "modular_babylon/code/admission.dm"
