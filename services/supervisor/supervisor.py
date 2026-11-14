@@ -96,6 +96,25 @@ def world_flag(value, name):
 DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "_maps/babylon/catalog.json"
 
 
+def merge_missing(source, target):
+    """Move files from source into target, never replacing a file target already has."""
+    target.mkdir(parents=True, exist_ok=True)
+    for entry in source.iterdir():
+        destination = target / entry.name
+        if entry.is_dir() and not entry.is_symlink() and (destination.is_dir() or not destination.exists()):
+            merge_missing(entry, destination)
+        elif not destination.exists():
+            shutil.move(str(entry), str(destination))
+
+
+def catalog_path(config):
+    if config.get("map_catalog"):
+        return Path(config["map_catalog"])
+    if config.get("template_directory"):
+        return Path(config["template_directory"]) / "_maps/babylon/catalog.json"
+    return DEFAULT_CATALOG
+
+
 class Driver:
     def __init__(self, config):
         self.config = config
@@ -108,9 +127,113 @@ class Driver:
             return {"babylon-music": str(Path(music).resolve())}
         return {}
 
+    @staticmethod
+    def field(world, key, default=None):
+        """A world column from a dict or sqlite row; older callers may not pass every column."""
+        try:
+            value = world[key]
+        except (KeyError, IndexError):
+            return default
+        return default if value is None else value
+
+    def catalog_entry(self, map_id):
+        if getattr(self, "catalog", None) is None:
+            self.catalog = load_catalog(catalog_path(self.config))
+        entry = self.catalog.get(map_id)
+        if not entry:
+            raise Denied("Unknown map " + str(map_id))
+        return entry
+
+    def build_of(self, world):
+        map_id = self.field(world, "map", "babylon")
+        return "babylon" if map_id == "babylon" else self.catalog_entry(map_id)["build"]
+
+    def data_root(self):
+        return Path(self.config["data_directory"]).resolve()
+
+    def restore_source(self, world):
+        """The generation or tutorial snapshot directory a world starts from, or None for a fresh map."""
+        kind = self.field(world, "kind", "world")
+        tutorial = self.field(world, "tutorial", "")
+        data = self.data_root()
+        if kind in ("tutorial", "tutorial_edit"):
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(tutorial)):
+                raise Denied("Invalid tutorial id")
+            # The Driver has no database; the status directories are authoritative (published first).
+            statuses = ("published", "pending")
+            for status in statuses:
+                snapshot = data / "tutorials" / status / str(tutorial) / "save"
+                if snapshot.is_dir():
+                    return snapshot
+            raise Denied("The tutorial snapshot is missing")
+        if not self.field(world, "persistent", 1):
+            return None
+        latest = data / "worlds" / world["id"] / "data/babylon/saves/latest.json"
+        if not latest.exists():
+            return None
+        generation = json.loads(latest.read_text())["generation"]
+        if not re.fullmatch(r"save-\d{8}-\d{6}-\d+", generation):
+            raise Denied("Invalid checkpoint generation")
+        return latest.parent / generation
+
+    def link_player_saves(self, root):
+        central = self.data_root() / "player_saves"
+        central.mkdir(parents=True, exist_ok=True)
+        link = root / "data/player_saves"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink():
+            if link.resolve() == central:
+                return
+            link.unlink()
+        elif link.is_dir():
+            merge_missing(link, central)
+            shutil.rmtree(link)
+        elif link.exists():
+            link.unlink()
+        if os.name == "nt":
+            log("player_saves symlink skipped on Windows; characters are not shared")
+            link.mkdir(exist_ok=True)
+            return
+        link.symlink_to(central, target_is_directory=True)
+
+    def prepare_station(self, world, root, entry, source):
+        data = root / "data"
+        saved = root / "_maps/babylon/saved"
+        shutil.rmtree(saved, ignore_errors=True)
+        resume = data / "babylon/resume-state.json"
+        next_map = data / "next_map.json"
+        next_map.parent.mkdir(parents=True, exist_ok=True)
+        if source is None:
+            map_json = root / "_maps" / entry["map_json"]
+            if not map_json.is_file():
+                raise Denied("The map file %s is missing; generate it first" % entry["map_json"])
+            next_map.write_text(map_json.read_text(encoding="utf-8"), encoding="utf-8")
+            resume.unlink(missing_ok=True)
+            return
+        state = json.loads((source / "state.json").read_text())
+        levels = state.get("levels")
+        config = state.get("map_config")
+        if not isinstance(levels, list) or not levels or not isinstance(config, dict):
+            raise Denied("The saved state has no level list")
+        saved.mkdir(parents=True)
+        files, traits = [], []
+        for level in levels:
+            name = level.get("file") if isinstance(level, dict) else None
+            if not isinstance(name, str) or not re.fullmatch(r"z\d+\.dmm", name) or not (source / name).is_file():
+                raise Denied("The saved state lists an invalid level file")
+            level_traits = level.get("traits", [])
+            if not isinstance(level_traits, list):
+                raise Denied("The saved state lists invalid level traits")
+            shutil.copy2(source / name, saved / name)
+            files.append(name)
+            traits.append(level_traits)
+        next_map.write_text(json.dumps(dict(config, map_path="babylon/saved", map_file=files, traits=traits)))
+        resume.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "state.json", resume)
+
     def prepare(self, world, run):
         template = Path(self.config["template_directory"]).resolve()
-        root = Path(self.config["data_directory"]).resolve() / "worlds" / world["id"]
+        root = self.data_root() / "worlds" / world["id"]
         root.mkdir(parents=True, exist_ok=True)
         # Separate mutable assets/config per world. Do not copy source saves, logs or credentials.
         for name in ("_maps", "strings", "icons", "sound", "html", "tgui/public", "build/behavior_trees",
@@ -119,11 +242,16 @@ class Driver:
             if source.exists():
                 shutil.copytree(source, root / name, dirs_exist_ok=True,
                                 ignore=shutil.ignore_patterns("active.dmm", "*.lk", "*.dm", "node_modules"))
-        for name in ("babylon.dmb", "babylon.rsc", "rust_g.dll", "auxlua.dll", "dreamluau.dll",
-                     "librust_g.so", "libauxlua.so", "libdreamluau.so"):
+        for name in ("babylon.dmb", "babylon.rsc", "babylon-station.dmb", "babylon-station.rsc", "rust_g.dll",
+                     "auxlua.dll", "dreamluau.dll", "librust_g.so", "libauxlua.so", "libdreamluau.so"):
             if (template / name).exists():
                 shutil.copy2(template / name, root / name)
-        if not (root / "babylon.dmb").is_file():
+        build = self.build_of(world)
+        if build == "station":
+            if not (root / "babylon-station.dmb").is_file():
+                raise Denied("Compile babylon-station.dme before starting this map")
+            entry = self.catalog_entry(self.field(world, "map", "babylon"))
+        elif not (root / "babylon.dmb").is_file():
             raise Denied("Compile babylon.dme before starting worlds")
         config_dir = root / "babylon-config"
         shutil.copytree(self.config["config_directory"], config_dir, dirs_exist_ok=True)
@@ -131,18 +259,18 @@ class Driver:
         (config_dir / "comms.txt").write_text("COMMS_KEY " + run["secret"] + "\n")
         saves = root / "data/babylon"
         saves.mkdir(parents=True, exist_ok=True)
+        self.link_player_saves(root)
+        source = self.restore_source(world)
+        resume = saves / "resume-state.json"
+        if build == "station":
+            self.prepare_station(world, root, entry, source)
+            return root
         active = root / "_maps/babylon/active.dmm"
         active.parent.mkdir(parents=True, exist_ok=True)
-        latest = saves / "saves/latest.json"
-        resume = saves / "resume-state.json"
-        if latest.exists():
-            generation = json.loads(latest.read_text())["generation"]
-            if not re.fullmatch(r"save-\d{8}-\d{6}-\d+", generation):
-                raise Denied("Invalid checkpoint generation")
-            checkpoint = latest.parent / generation
-            json.loads((checkpoint / "state.json").read_text())
-            shutil.copy2(checkpoint / "map.dmm", active)
-            shutil.copy2(checkpoint / "state.json", resume)
+        if source is not None:
+            json.loads((source / "state.json").read_text())
+            shutil.copy2(source / "map.dmm", active)
+            shutil.copy2(source / "state.json", resume)
         else:
             prepare_fresh_map(template, active)
             resume.unlink(missing_ok=True)
@@ -151,16 +279,24 @@ class Driver:
     def start(self, world, run):
         root = self.prepare(world, run)
         from urllib.parse import urlencode
+        build = self.build_of(world)
         params = urlencode({"config-directory": str(root / "babylon-config"),
                             "babylon-owner": world["owner"], "babylon-world": world["id"], "babylon-name": world["name"],
                             "babylon-run": run["id"], "babylon-secret": run["secret"],
                             "babylon-api": f"http://127.0.0.1:{self.config['listen_port']}",
                             "babylon-lobby": self.config["lobby_address"],
                             "babylon-afk-timeout": self.config.get("afk_timeout_seconds", 900),
+                            "babylon-build": build,
+                            "babylon-persistent": 1 if self.field(world, "persistent", 1) else 0,
+                            "babylon-creative": 1 if self.field(world, "creative", 0) else 0,
+                            "babylon-kind": self.field(world, "kind", "world"),
+                            "babylon-tutorial": self.field(world, "tutorial", ""),
+                            "babylon-map": self.field(world, "map", "babylon"),
                             **self.music_param()})
+        dmb = "babylon-station.dmb" if build == "station" else "babylon.dmb"
         log = open(root / "daemon.log", "ab", buffering=0)
         try:
-            process = subprocess.Popen([self.config["dreamdaemon"], "babylon.dmb", str(run["port"]),
+            process = subprocess.Popen([self.config["dreamdaemon"], dmb, str(run["port"]),
                                         "-ip", self.config.get("bind_address", "127.0.0.1"),
                                         # Worlds only admit lobby tickets: never list them on the BYOND hub.
                                         "-trusted", "-close", "-invisible", "-params", params], cwd=root,
@@ -200,7 +336,7 @@ class Driver:
             # PIDs can be reused after a container restart. A live unrelated
             # process must not keep an old world stuck in the running table.
             command = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
-            return "babylon.dmb" in command and run["id"] in command and run["world"] in command
+            return ("babylon.dmb" in command or "babylon-station.dmb" in command) and run["id"] in command and run["world"] in command
         except (ProcessLookupError, FileNotFoundError):
             return False
 
@@ -230,13 +366,7 @@ class Supervisor:
         self.driver = driver or Driver(config)
         self.admins = {ckey(k) for k in config.get("admins", [])}
         # A malformed catalog is a clear error at supervisor start.
-        if config.get("map_catalog"):
-            catalog_path = Path(config["map_catalog"])
-        elif config.get("template_directory"):
-            catalog_path = Path(config["template_directory"]) / "_maps/babylon/catalog.json"
-        else:
-            catalog_path = DEFAULT_CATALOG
-        self.catalog = load_catalog(catalog_path)
+        self.catalog = load_catalog(catalog_path(config))
         Path(config["data_directory"]).mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(Path(config["data_directory"]) / "supervisor.sqlite3", check_same_thread=False)
         self.db.row_factory = sqlite3.Row
