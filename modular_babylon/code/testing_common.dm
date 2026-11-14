@@ -684,6 +684,14 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 			alarm.update_appearance()
 			markers += list(list("kind" = "alarm", "x" = alarm.x, "y" = alarm.y, "z" = alarm.z, "type" = "[alarm_type]", "expect" = 1))
 			break
+	// Nobody plays in the smoke, so the station build's save would reuse these levels' last
+	// capture: mark them changed, as a player's presence would.
+	if(hascall(src, "mark_level_changed"))
+		var/list/changed_levels = list()
+		for(var/list/marker as anything in markers)
+			changed_levels |= marker["z"]
+		for(var/changed_z in changed_levels)
+			call(src, "mark_level_changed")(changed_z, null)
 	var/list/planes = babylon_plane_mismatches(z)
 	result["planes_turfs_fresh"] = planes[1] == 0
 	result["state"] = json_encode(list("markers" = markers, "counts" = saved_state_counts(), "plane_objects" = planes[2], "z" = z))
