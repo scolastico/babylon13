@@ -22,7 +22,7 @@ SCHEMA = """
     CREATE TABLE IF NOT EXISTS tutorials (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, author TEXT NOT NULL,
       status TEXT NOT NULL, map TEXT NOT NULL, build TEXT NOT NULL, created REAL NOT NULL,
-      updated REAL NOT NULL, reviewed_by TEXT, source_world TEXT);
+      updated REAL NOT NULL, reviewed_by TEXT, source_world TEXT, based_on TEXT);
     CREATE TABLE IF NOT EXISTS tutorial_cooldowns (author TEXT PRIMARY KEY, submitted REAL NOT NULL);
 """
 
@@ -124,6 +124,9 @@ class TutorialStore:
         if not directory.is_dir():
             raise TutorialError("The pending tutorial's files are missing")
         save, staging, old = (walk(directory, name) for name in ("save", "save.staging", "save.old"))
+        # A swap interrupted between its two renames left the previous snapshot only in save.old.
+        if old.is_dir() and not save.exists():
+            old.rename(save)
         shutil.rmtree(staging, ignore_errors=True)
         shutil.rmtree(old, ignore_errors=True)
         try:
@@ -156,6 +159,13 @@ class TutorialStore:
         if target.exists():
             raise TutorialError("A published tutorial with this id exists")
         source.rename(target)
+
+    def unpublish(self, tid):
+        """Undoes publish() (its database update failed): published/<tid> back to pending/<tid>."""
+        source = self.directory("published", tid)
+        target = self.directory("pending", tid)
+        if source.is_dir() and not target.exists():
+            source.rename(target)
 
     def remove(self, status, tid):
         """Deletes a tutorial's directory: renamed out of the way first, so a half-deleted tutorial

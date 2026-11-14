@@ -454,6 +454,109 @@ class Instances(TutorialFixture):
                 self.s.dispatch("admin", action, {"tutorial": tid})
 
 
+class Robustness(TutorialFixture):
+    def pending(self):
+        world, run = self.creative_run()
+        return world, run, self.submit(run)
+
+    def test_interrupted_save_back_swap_is_recovered(self):
+        world, run, tid = self.pending()
+        folder = self.data / "tutorials/pending" / tid
+        # A crash between "save -> save.old" and "save.staging -> save".
+        (folder / "save").rename(folder / "save.old")
+        broken = self.save(world, "save-20261114-160000-8")
+        (broken / "state.json").write_text("not json")
+        from tutorials import TutorialError
+        with self.assertRaises(TutorialError):
+            self.s.tutorials.replace_save(tid, broken)
+        self.assertEqual((folder / "save/map.dmm").read_text(), "map of " + world, "the old snapshot is back")
+        self.assertFalse((folder / "save.old").exists())
+        good = self.save(world, "save-20261114-170000-9")
+        (good / "map.dmm").write_text("newer")
+        self.s.tutorials.replace_save(tid, good)
+        self.assertEqual((folder / "save/map.dmm").read_text(), "newer")
+
+    def test_accept_puts_the_files_back_when_the_database_fails(self):
+        world, run, tid = self.pending()
+        real = self.s.db
+
+        class FailingUpdate:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def execute(self, sql, *args):
+                if sql.startswith("UPDATE tutorials SET status='published'"):
+                    raise RuntimeError("disk full")
+                return real.execute(sql, *args)
+
+            def __enter__(self):
+                return real.__enter__()
+
+            def __exit__(self, *exc):
+                return real.__exit__(*exc)
+        self.s.db = FailingUpdate()
+        try:
+            with self.assertRaises(RuntimeError):
+                self.s.dispatch("admin", "tutorial_accept", {"tutorial": tid})
+        finally:
+            self.s.db = real
+        self.assertEqual(self.tutorial(tid)["status"], "pending")
+        self.assertTrue((self.data / "tutorials/pending" / tid / "save/map.dmm").is_file())
+        self.assertFalse((self.data / "tutorials/published" / tid).exists())
+        self.s.dispatch("admin", "tutorial_accept", {"tutorial": tid})
+        self.assertEqual(self.tutorial(tid)["status"], "published")
+
+    def test_failed_copy_leaves_no_world_files(self):
+        tid = self.published()
+        real = self.s.db
+        worlds = set((self.data / "worlds").iterdir())
+
+        class FailingInsert:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def execute(self, sql, *args):
+                if sql.startswith("INSERT INTO worlds"):
+                    raise RuntimeError("disk full")
+                return real.execute(sql, *args)
+
+            def __enter__(self):
+                return real.__enter__()
+
+            def __exit__(self, *exc):
+                return real.__exit__(*exc)
+        self.s.db = FailingInsert()
+        try:
+            with self.assertRaises(RuntimeError):
+                self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        finally:
+            self.s.db = real
+        self.assertEqual(set((self.data / "worlds").iterdir()), worlds)
+        self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE owner='player'"))
+
+    def test_a_broken_play_instance_is_explained(self):
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.s.db.execute("UPDATE runs SET state='error' WHERE world=?", (world,))
+        self.s.db.commit()
+        with self.assertRaisesRegex(Denied, "Stop it under My worlds"):
+            self.s.dispatch("player", "tutorial_play", {"tutorial": tid})
+
+    def test_copies_credit_the_original_when_submitted(self):
+        original = self.published()
+        copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": original})["id"]
+        row = self.s.row("SELECT copied_from FROM worlds WHERE id=?", (copied,))
+        self.assertEqual(json.loads(row["copied_from"]), {"id": original, "title": "Fix the power", "author": "owner"})
+        run = self.start(copied, "player")  # its seeded first checkpoint is submitted again
+        tid = self.submit(run, actor="player", title="Fix the power, extended")
+        based_on = {"id": original, "title": "Fix the power", "author": "owner"}
+        self.assertEqual(json.loads((self.data / "tutorials/pending" / tid / "meta.json").read_text())["based_on"], based_on)
+        items = {i["id"]: i for i in self.s.dispatch("admin", "tutorials", {})["tutorials"]}
+        self.assertEqual(items[tid]["based_on"], based_on)
+        self.assertIsNone(items[original]["based_on"])
+        self.assertNotIn("based_on", self.s.dispatch("player", "tutorials", {})["tutorials"][0])
+
+
 class SnapshotCopiedAtPrepare(test_driver.DriverFixture):
     def test_instance_is_prepared_from_a_copy(self):
         """A tutorial deleted (or accepted) while its instances run does not affect them: prepare

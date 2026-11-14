@@ -440,9 +440,13 @@ class Supervisor:
             self.db.execute("ALTER TABLE worlds ADD COLUMN last_used REAL")
         for column, definition in (("map", "TEXT NOT NULL DEFAULT 'babylon'"), ("creative", "INTEGER NOT NULL DEFAULT 0"),
                                    ("persistent", "INTEGER NOT NULL DEFAULT 1"), ("kind", "TEXT NOT NULL DEFAULT 'world'"),
-                                   ("tutorial", "TEXT")):
+                                   ("tutorial", "TEXT"), ("copied_from", "TEXT")):
             if column not in columns:
                 self.db.execute("ALTER TABLE worlds ADD COLUMN %s %s" % (column, definition))
+        # A world copied from a tutorial remembers it (JSON: id, title, author); submitting such a
+        # world again credits the original as based_on.
+        if "based_on" not in {row[1] for row in self.db.execute("PRAGMA table_info(tutorials)")}:
+            self.db.execute("ALTER TABLE tutorials ADD COLUMN based_on TEXT")
         # Admin tickets may ask to spectate (an observer instead of a drone).
         if "spectate" not in {row[1] for row in self.db.execute("PRAGMA table_info(tickets)")}:
             self.db.execute("ALTER TABLE tickets ADD COLUMN spectate INTEGER DEFAULT 0")
@@ -1082,16 +1086,17 @@ class Supervisor:
             now = self.clock()
             tutorial = dict(id=tid, title=title, description=description, author=actor, status="pending",
                             map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
-                            reviewed_by=None, source_world=world["id"])
+                            reviewed_by=None, source_world=world["id"], based_on=world.get("copied_from"))
             try:
-                self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"]))
+                self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"],
+                                                                based_on=self.based_on(tutorial)))
             except (OSError, TutorialError) as error:
                 log("Storing the tutorial from %s failed: %s" % (self.describe(world["id"]), error))
                 raise Denied("The tutorial could not be stored: %s" % (
                     error if isinstance(error, TutorialError) else "the save could not be copied")) from None
             try:
-                self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world)"
-                                " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world)",
+                self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world,based_on)"
+                                " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world,:based_on)",
                                 tutorial)
                 self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, now))
                 self.audit(actor, "tutorial_submit:" + tid, world["id"])
@@ -1100,6 +1105,17 @@ class Supervisor:
                 raise
         self.notify_tutorial(tutorial)
         return {"ok": True, "tutorial": tid}
+
+    @staticmethod
+    def based_on(row):
+        """The tutorial a world (copied_from) or tutorial (based_on) was copied from: {id, title, author} or None."""
+        try:
+            value = json.loads(row.get("based_on") or row.get("copied_from") or "null")
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(value, dict) or not all(isinstance(value.get(k), str) for k in ("id", "title", "author")):
+            return None
+        return {k: value[k] for k in ("id", "title", "author")}
 
     def notify_tutorial(self, tutorial):
         log("Tutorial submitted for review: %s by %s (%s)" % (tutorial["title"], tutorial["author"], tutorial["id"]))
@@ -1136,20 +1152,22 @@ class Supervisor:
 
     def tutorial_list(self, actor):
         admin = actor in self.admins
+        # The player's own play instances and every edit world, with their run states, in one query.
+        playing, editing = {}, {}
+        for run in self.db.execute("SELECT w.kind, w.owner, w.tutorial, r.state FROM worlds w JOIN runs r ON r.world=w.id "
+                                   "WHERE w.kind='tutorial_edit' OR (w.kind='tutorial' AND w.owner=?)", (actor,)):
+            (editing if run["kind"] == "tutorial_edit" else playing)[run["tutorial"]] = run["state"]
         items = []
         for row in self.db.execute("SELECT * FROM tutorials ORDER BY created DESC").fetchall():
             if row["status"] != "published" and not admin:
                 continue
             item = {key: row[key] for key in ("id", "title", "description", "author", "map", "status", "created", "updated")}
             item["map_name"] = self.catalog.get(row["map"], {}).get("name", row["map"])
-            # The player's own play instance of it (state), so the lobby can say "Rejoin".
-            mine = self.row("SELECT r.state FROM worlds w JOIN runs r ON r.world=w.id WHERE w.kind='tutorial' "
-                            "AND w.owner=? AND w.tutorial=?", (actor, row["id"]))
-            item["playing"] = mine["state"] if mine else None
+            # The state of the player's own copy of it, so the lobby can say "Rejoin".
+            item["playing"] = playing.get(row["id"])
             if admin:
-                editing = self.row("SELECT r.state FROM worlds w JOIN runs r ON r.world=w.id WHERE w.kind='tutorial_edit' "
-                                   "AND w.tutorial=?", (row["id"],))
-                item["editing"] = editing["state"] if editing else None
+                item["editing"] = editing.get(row["id"])
+                item["based_on"] = self.based_on(dict(row))
             items.append(item)
         return items
 
@@ -1190,8 +1208,13 @@ class Supervisor:
                     except (OSError, TutorialError) as error:
                         log("Publishing tutorial %s failed: %s" % (tutorial["id"], error))
                         raise Denied("The tutorial could not be published") from None
-                    self.db.execute("UPDATE tutorials SET status='published',reviewed_by=?,updated=? WHERE id=?",
-                                    (actor, self.clock(), tutorial["id"]))
+                    try:
+                        self.db.execute("UPDATE tutorials SET status='published',reviewed_by=?,updated=? WHERE id=?",
+                                        (actor, self.clock(), tutorial["id"]))
+                    except Exception:
+                        # The row stays pending (rolled back), so its files go back to pending too.
+                        self.tutorials.unpublish(tutorial["id"])
+                        raise
                 elif action == "tutorial_reject" and not pending:
                     raise Denied("Only pending tutorials can be rejected; delete a published one instead")
                 else:
@@ -1246,6 +1269,9 @@ class Supervisor:
             run = self.row("SELECT state FROM runs WHERE world=?", (world["id"],))
             if not run:
                 self.stale_instance(world, cleanup)
+            elif run["state"] == "error":
+                raise Denied("Your tutorial \"%s\" ran into a problem. Stop it under My worlds, then press Play again."
+                             % world["name"])
             elif world["tutorial"] != tutorial["id"]:
                 raise Denied("Finish or leave your current tutorial first")
             elif run["state"] in ("starting", "running"):
@@ -1297,11 +1323,17 @@ class Supervisor:
             shutil.rmtree(root, ignore_errors=True)
             raise Denied("The tutorial could not be copied") from None
         name = clean_text(tutorial["title"])[:60] or "Tutorial copy"
-        self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,creative,persistent)"
-                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
-                         self.clock(), self.clock(), tutorial["map"], 1, 1))
-        self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
+        copied_from = json.dumps({k: tutorial[k] for k in ("id", "title", "author")})
+        try:
+            self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,"
+                            "creative,persistent,copied_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
+                             self.clock(), self.clock(), tutorial["map"], 1, 1, copied_from))
+            self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
+        except Exception:
+            # The row is rolled back; its seeded files must not stay behind without it.
+            shutil.rmtree(root, ignore_errors=True)
+            raise
         return {"ok": True, "id": world_id, "name": name}
 
     def check_world_limits(self, owner, persistent, ignore=None):
