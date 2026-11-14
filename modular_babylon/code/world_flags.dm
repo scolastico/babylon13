@@ -1,6 +1,6 @@
 // What this world is, as the supervisor started it. Shared by both game builds.
 // The supervisor passes babylon-build, babylon-persistent, babylon-creative, babylon-kind,
-// babylon-tutorial and babylon-map (services/supervisor/supervisor.py, Driver.start).
+// babylon-tutorial, babylon-tutorial-title and babylon-map (services/supervisor/supervisor.py, Driver.start).
 
 GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 
@@ -17,6 +17,8 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	var/kind = "world"
 	/// The tutorial a tutorial or tutorial_edit world plays, else null.
 	var/tutorial_id
+	/// That tutorial's title (shown when a player completes it), else null.
+	var/tutorial_title
 	/// The map catalog id (_maps/babylon/catalog.json), e.g. "babylon", "metastation".
 	var/map_id
 	/// The world owner's ckey.
@@ -36,6 +38,10 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	var/requested_tutorial = params["babylon-tutorial"]
 	if(kind != "world" && babylon_safe_id(requested_tutorial))
 		tutorial_id = requested_tutorial
+		// The supervisor cleans it (Driver.tutorial_title); kept to one line of at most 60 characters.
+		var/requested_title = params["babylon-tutorial-title"]
+		if(istext(requested_title) && length(requested_title))
+			tutorial_title = copytext_char(replacetext(replacetext(requested_title, "\n", " "), ascii2text(13), " "), 1, 61)
 	var/requested_map = params["babylon-map"]
 	map_id = babylon_safe_id(requested_map) ? requested_map : (build == "babylon" ? "babylon" : null)
 	owner_ckey = ckey(params["babylon-owner"])
@@ -118,6 +124,12 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /datum/babylon_world/proc/saves()
 	return persistent && !is_tutorial()
 
+/// A checkpoint carries the players' characters (state.json "characters", Task D2): every world
+/// but tutorial instances, whose snapshot other players start from (arch-review M1). A tutorial
+/// snapshot taken elsewhere (a submission) leaves them out too: babylon_world_saves_characters().
+/datum/babylon_world/proc/saves_characters()
+	return !is_tutorial()
+
 /// A managed stop saves first: exactly the worlds that save.
 /datum/babylon_world/proc/stop_saves()
 	return saves()
@@ -161,6 +173,11 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 
 /proc/babylon_stop_saves()
 	return !!GLOB.babylon_world?.stop_saves()
+
+/// The checkpoint being written now carries the players' characters: the policy table says so and
+/// it is not a tutorial snapshot (a submission or a save back, tutorial/submit.dm).
+/proc/babylon_world_saves_characters()
+	return !!GLOB.babylon_world?.saves_characters() && !GLOB.babylon_save?.taking_tutorial_snapshot
 
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has

@@ -16,8 +16,9 @@ checked for the right map and late-join points, and stopped, which saves them. T
 Plane map (--creative-planes, default S, M and L) boots as a Creative world (S without Creative mode,
 M and L with it): its floor, landmarks, inert storyteller, refused shuttles and, a few seconds into
 its round, power and the atmos loop are checked; the owner's Start round must start its round, and
-its stop saves it. The --restore-plane map (M) also gets a tutorial NPC and a changed canister
-setting before that save, starts again from it and checks that the canisters are back on their
+its stop saves it. The --restore-plane map (M) also submits itself as a tutorial through the DM
+path (a forced snapshot without characters that the supervisor copies to pending/ and that never
+becomes the world's checkpoint), gets a tutorial NPC and a changed canister setting before that save, starts again from it and checks that the canisters are back on their
 ports with their settings and that the NPC was not saved but made again by its spawner. A
 tutorial-kind world on the first map checks that its round starts by itself and stops without a
 save. Finally the multi-z map (icebox) starts its round, places markers on the station level and on
@@ -405,6 +406,7 @@ def main():
             # creative canister setting go into the save; the restore must bring back the right ones.
             setup = checks(run, "test_creative_plane_save_setup")
             entry["test_creative_plane_save_setup"] = setup
+            entry["tutorial_submit"] = check_tutorial_submit(run, world)
         stop(world)
         # An ordinary stop of a persistent world saves it.
         generation = latest(world)
@@ -425,6 +427,28 @@ def main():
             entry["test_creative_plane_restored"] = restored
             stop(world)
         return entry
+
+    def check_tutorial_submit(run, world):
+        """A Creative world submits itself as a tutorial through the DM path and the real supervisor:
+        a forced snapshot without characters, copied to pending/, never the world's checkpoint."""
+        result = dict(test_tutorial_snapshot=checks(run, "test_tutorial_snapshot"))
+        live = checks(run, "test_tutorial_submit_live", ["smokeowner"])
+        result["test_tutorial_submit_live"] = live
+        stored = data / "tutorials" / "pending" / live["tutorial"]
+        meta = json.loads((stored / "meta.json").read_text())
+        assert meta["title"] == "Smoke tutorial" and meta["author"] == "smokeowner" and meta["source_world"] == world, meta
+        assert meta["generation"] == live["generation"], meta
+        state = json.loads((stored / "save" / "state.json").read_text())
+        assert state["generation"] == live["generation"] and state.get("characters") == {}, state.get("characters")
+        assert all((stored / "save" / level["file"]).is_file() for level in state["levels"]), state["levels"]
+        saves = data / "worlds" / world / "data/babylon/saves"
+        assert not (saves / live["generation"]).exists(), "the tutorial snapshot was left in the world"
+        assert not (saves / "latest.json").exists(), "the tutorial snapshot became the world's checkpoint"
+        with service.lock:
+            row = service.row("SELECT * FROM tutorials WHERE id=?", (live["tutorial"],))
+        assert row and row["status"] == "pending" and row["title"] == "Smoke tutorial", row
+        result["stored"] = dict(levels=len(state["levels"]), objects=len(state.get("records", [])))
+        return result
 
     def discard_child():
         """Kills a failed child so the next map can start (max_running_worlds is 1)."""
@@ -470,7 +494,7 @@ def main():
                             world_flags=checks(run, "test_station_world_flags"))
             # Tutorial objects, triggers, actions and NPCs in a running tutorial round.
             # Every test reports before any failure is raised, so one run shows all problems.
-            for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
+            for proc in ("test_tutorial_submit_refusals", "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
                          "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
                          "test_area_tools_copy_settings"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]

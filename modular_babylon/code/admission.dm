@@ -13,6 +13,37 @@
 	catch
 		return null
 
+/// One supervisor request run in the background (babylon_supervisor_request_within()).
+/datum/babylon_supervisor_call
+	var/list/query
+	/// Called with the answer (or null) once world.Export returns, however late.
+	var/datum/callback/on_answer
+	var/done = FALSE
+	var/list/answer
+
+/datum/babylon_supervisor_call/New(list/query, datum/callback/on_answer)
+	src.query = query
+	src.on_answer = on_answer
+
+/datum/babylon_supervisor_call/proc/perform()
+	answer = babylon_supervisor_request(query)
+	done = TRUE
+	on_answer?.Invoke(answer)
+
+/// babylon_supervisor_request(), but waits at most `timeout` deciseconds. world.Export has no
+/// timeout of its own: the request goes on in the background, and on_answer is called with its
+/// answer whenever it arrives. Returns the answer, or list("ok" = FALSE, "error" = ..., "timeout" = TRUE).
+/// Sleeps: call it from a background proc (INVOKE_ASYNC), never from a ui_act.
+/proc/babylon_supervisor_request_within(list/query, timeout, datum/callback/on_answer)
+	var/datum/babylon_supervisor_call/request = new(query, on_answer)
+	INVOKE_ASYNC(request, TYPE_PROC_REF(/datum/babylon_supervisor_call, perform))
+	var/deadline = world.time + timeout
+	while(!request.done && world.time < deadline)
+		sleep(1)
+	if(!request.done)
+		return list("ok" = FALSE, "error" = "The server did not answer in time", "timeout" = TRUE)
+	return request.answer || list("ok" = FALSE, "error" = "The server could not be reached")
+
 /client/proc/babylon_admit(topic_data)
 	if(!world.params["babylon-world"])
 		return ckey == ckey(world.params["babylon-owner"])

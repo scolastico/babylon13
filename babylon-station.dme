@@ -47,6 +47,7 @@
 #include "modular_babylon/code/tutorial/runtime.dm"
 #include "modular_babylon/code/tutorial/area_tools.dm"
 #include "modular_babylon/code/tutorial/wand.dm"
+#include "modular_babylon/code/tutorial/submit.dm"
 #ifdef BABYLON_TESTING
 #include "modular_babylon/code/testing_common.dm"
 #include "modular_babylon/code/creative/testing_machines.dm"
@@ -55,4 +56,5 @@
 #include "modular_babylon/code/creative/testing_plane.dm"
 #include "modular_babylon/code/tutorial/testing_tutorial.dm"
 #include "modular_babylon/code/tutorial/testing_area_tools.dm"
+#include "modular_babylon/code/tutorial/testing_submit.dm"
 #endif

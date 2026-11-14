@@ -402,14 +402,18 @@
 	var/list/turf_metadata_cache = list()
 	/// The last successful save's result (generation, objects, levels, bytes, timings).
 	var/list/last_save_report
+	/// TRUE while a tutorial snapshot is written (save_world(tutorial_snapshot = TRUE)).
+	var/taking_tutorial_snapshot = FALSE
 
-/// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced
-/// (a tutorial's save back to its pending copy).
-/datum/babylon_save/proc/save_world(force = FALSE)
+/// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced.
+/// tutorial_snapshot (a tutorial submission or save back, tutorial/submit.dm) is forced and writes
+/// a generation that never becomes the world's checkpoint: no latest.json, no level reuse, no
+/// characters (babylon_world_saves_characters()). The caller deletes it once it was copied.
+/datum/babylon_save/proc/save_world(force = FALSE, tutorial_snapshot = FALSE)
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
-	if(!force && !babylon_world_saves())
+	if(!force && !tutorial_snapshot && !babylon_world_saves())
 		return list("error" = "This world is not saved")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
@@ -423,17 +427,20 @@
 	checkpoint_hold(TRUE)
 	sleep(1 TICKS)
 	var/list/result
+	taking_tutorial_snapshot = !!tutorial_snapshot
 	try
 		result = save_world_impl()
 	catch(var/exception/error)
 		result = list("error" = "Checkpoint failed: [error]")
 		log_world("BABYLON SAVE ERROR: [error]")
+	taking_tutorial_snapshot = FALSE
 	if(!result["ok"] && draining)
 		draining = FALSE
 	release_checkpoint()
 	busy = FALSE
 	if(result["ok"])
-		last_save_report = result
+		if(!tutorial_snapshot)
+			last_save_report = result
 		if(!draining)
 			to_chat_immediate(world, span_notice("Saved. Play resumes."))
 	else
@@ -825,6 +832,12 @@
 	if(!complete)
 		busy = FALSE
 		return list("error" = "Save files could not be written")
+	if(taking_tutorial_snapshot)
+		// Only the supervisor's copy of it is kept: the world neither resumes nor reuses levels
+		// from it, and the levels it captured count as changed for the next real save.
+		level_save_failed()
+		log_world("Babylon wrote tutorial snapshot [generation]: [objects] objects, [bytes] bytes; capture [checkpoint_capture_ms] ms.")
+		return list("ok" = TRUE, "generation" = generation, "objects" = objects, "bytes" = bytes, "tutorial_snapshot" = TRUE)
 	last_save = generation
 	saved_level_json = level_json
 	saved_level_source = list()

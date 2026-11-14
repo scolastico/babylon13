@@ -417,7 +417,7 @@
 	return list(
 		"text" = text,
 		"test_run" = !!test_run,
-		"title" = GLOB.babylon_world?.tutorial_id,
+		"title" = GLOB.babylon_world?.tutorial_title,
 	)
 
 /datum/babylon_tutorial_complete/ui_act(action, list/params, datum/tgui/ui, datum/ui_state/state)

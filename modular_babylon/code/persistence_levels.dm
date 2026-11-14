@@ -233,8 +233,13 @@
 	state["map_config"] = saved_map_config()
 	var/started = SSticker.HasRoundStarted()
 	state["round"] = list("started" = started ? TRUE : FALSE, "station_time" = started ? STATION_TIME_PASSED() : 0)
-	// Task D2 saves the players' characters here.
-	state["characters"] = list()
+	// The players' characters: Task D2 fills capture_characters(). Never in a tutorial world's
+	// save or a tutorial snapshot (arch-review M1; test_contracts.py checks this line).
+	state["characters"] = babylon_world_saves_characters() ? capture_characters() : list()
+
+/// The players' characters for state.json "characters" (Task D2). None yet.
+/datum/babylon_save/proc/capture_characters()
+	return list()
 
 /// The map's tg map json as this world was first started from it (a restored world keeps the
 /// one its save had; data/next_map.json then names the saved levels instead).

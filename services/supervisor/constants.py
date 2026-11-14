@@ -6,7 +6,14 @@ WORLD_KINDS = ("world", "tutorial", "tutorial_edit")
 WORLD_KIND = WORLD_KINDS[0]
 # Kinds whose world starts from a tutorial snapshot instead of a player save.
 TUTORIAL_KINDS = ("tutorial", "tutorial_edit")
-
+# Kinds whose checkpoints carry the players' characters (state.json "characters"): never a tutorial
+# instance, whose snapshot other players start from. A tutorial snapshot taken in an ordinary world
+# (a submission) leaves them out as well (world_flags.dm, babylon_world_saves_characters()).
+SAVES_CHARACTERS = {"world": True, "tutorial": False, "tutorial_edit": False}
+# Longest tutorial title and description (characters after cleaning); the DM side has the same limits
+# (modular_babylon/code/tutorial/submit.dm, checked by test_contracts.py).
+TUTORIAL_TITLE_MAX = 60
+TUTORIAL_DESCRIPTION_MAX = 500
 
 
 def world_policy(build, persistent, creative, kind, map_id):
@@ -27,6 +34,7 @@ def world_policy(build, persistent, creative, kind, map_id):
         "delam_contained": creative or tutorial or plane,
         "storyteller_inert": build == "babylon" or tutorial or plane,
         "saves": saves,
+        "saves_characters": SAVES_CHARACTERS[kind],
         "stop_saves": saves,
         "round_starts_at_once": tutorial,
         "plays_tutorial_on_join": kind == "tutorial",

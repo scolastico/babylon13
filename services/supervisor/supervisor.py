@@ -27,7 +27,7 @@ from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
-from constants import DEFAULTS, TUTORIAL_KINDS, WORLD_KIND, world_policy
+from constants import DEFAULTS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_KINDS, TUTORIAL_TITLE_MAX, WORLD_KIND, world_policy
 from tutorials import SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, seed_first_save, walk
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
@@ -205,6 +205,23 @@ class Driver:
             raise Denied("Invalid checkpoint generation")
         return latest.parent / generation
 
+    def tutorial_title(self, world):
+        """The title of the tutorial a tutorial-kind world plays or edits (its meta.json), else ""."""
+        if self.field(world, "kind", WORLD_KIND) not in TUTORIAL_KINDS:
+            return ""
+        try:
+            snapshot = tutorial_snapshot_dir(self.data_root(), self.field(world, "tutorial", ""))
+        except ValueError:
+            return ""
+        meta = snapshot.parent / "meta.json" if snapshot else None
+        if not meta or meta.is_symlink() or not meta.is_file():
+            return ""
+        try:
+            title = json.loads(meta.read_text(encoding="utf-8")).get("title")
+        except (OSError, ValueError, AttributeError):
+            return ""
+        return clean_text(title)[:TUTORIAL_TITLE_MAX] if isinstance(title, str) else ""
+
     def link_player_saves(self, root):
         central = self.data_root() / "player_saves"
         central.mkdir(parents=True, exist_ok=True)
@@ -344,6 +361,7 @@ class Driver:
                             "babylon-creative": 1 if self.field(world, "creative", 0) else 0,
                             "babylon-kind": self.field(world, "kind", WORLD_KIND),
                             "babylon-tutorial": self.field(world, "tutorial", ""),
+                            "babylon-tutorial-title": self.tutorial_title(world),
                             "babylon-map": self.field(world, "map", "babylon"),
                             **self.music_param(), **self.autosave_param(build)})
         dmb = "babylon-station.dmb" if build == "station" else "babylon.dmb"
@@ -1122,8 +1140,9 @@ class Supervisor:
             world, actor = self.submitter(run_id, secret, data)
             title = clean_text(str(data.get("title", "")))
             description = clean_text(str(data.get("description", "")), multiline=True)
-            if not 1 <= len(title) <= 60 or len(description) > 500:
-                raise Denied("Use a title of 1–60 characters and a description up to 500 characters")
+            if not 1 <= len(title) <= TUTORIAL_TITLE_MAX or len(description) > TUTORIAL_DESCRIPTION_MAX:
+                raise Denied("Use a title of 1–%d characters and a description up to %d characters"
+                             % (TUTORIAL_TITLE_MAX, TUTORIAL_DESCRIPTION_MAX))
             wait = self.submit_wait(actor)
             if wait:
                 raise Denied("You can submit another tutorial in %s" % self.duration(wait))
