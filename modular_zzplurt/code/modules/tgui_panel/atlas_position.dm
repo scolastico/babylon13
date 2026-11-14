@@ -18,13 +18,31 @@
 	var/list/station_levels = SSmapping.levels_by_trait(ZTRAIT_STATION)
 	return station_levels.Find(z) || null
 
+/// The current map's atlas URL (maps.txt webmap_url), or null when it has none.
+/proc/atlas_map_url()
+	return SSmapping.current_map?.mapping_url
+
+/**
+ * The stat panel's map link to a tile: the map's atlas URL with "t=x,y,z" (z within the station)
+ * in its fragment, or the plain URL off the station. A URL without a "#" fragment (an older
+ * webmap_url such as ".../metastation/") gets one. Null when the map has no atlas URL.
+ */
+/proc/atlas_map_link(turf/location)
+	var/url = atlas_map_url()
+	if(!url)
+		return null
+	var/station_z = location && atlas_station_z(location.z)
+	if(!station_z)
+		return url
+	return "[url][findtext(url, "#") ? "&" : "#"]t=[location.x],[location.y],[station_z]"
+
 /**
  * The atlas's key of the current map: the "m" parameter of its webmap_url fragment
  * (maps.txt, e.g. ".../splurt-atlas/#m=metastation" gives "metastation"), the same key the
  * stat panel's map link opens. Null when the map has no such URL.
  */
 /proc/atlas_map_key()
-	var/url = SSmapping.current_map?.mapping_url
+	var/url = atlas_map_url()
 	var/hash = url ? findtext(url, "#") : 0
 	if(!hash)
 		return null
@@ -56,11 +74,16 @@
 	stop_position_updates()
 	return ..()
 
+/// Position updates run: they are not switched off (interval 0) and the map is one the atlas has
+/// (a webmap_url in maps.txt). Other maps report nothing.
+/proc/atlas_positions_enabled()
+	return CONFIG_GET(number/atlas_position_interval) > 0 && !!atlas_map_url()
+
 /datum/tgui_panel/proc/start_position_updates()
 	stop_position_updates()
-	var/interval = CONFIG_GET(number/atlas_position_interval)
-	if(interval <= 0)
+	if(!atlas_positions_enabled())
 		return
+	var/interval = CONFIG_GET(number/atlas_position_interval)
 	position_timer_id = addtimer(CALLBACK(src, PROC_REF(send_position)), interval SECONDS, TIMER_LOOP | TIMER_STOPPABLE)
 
 /datum/tgui_panel/proc/stop_position_updates()
@@ -78,7 +101,7 @@
 	if(!client)
 		stop_position_updates()
 		return
-	if(!is_ready())
+	if(!is_ready() || !atlas_positions_enabled())
 		return
 	var/turf/location = get_turf(client.mob)
 	if(!location)

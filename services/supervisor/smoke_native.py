@@ -158,6 +158,9 @@ def main():
         creative = call(run, "session", "test_creative_panel_actions")
         creative = {entry["entry"]: entry["value"] for entry in creative["entries"]}
         assert creative and all(creative.values()), creative
+        atlas = call(run, "session", "test_atlas_frames")
+        atlas = {entry["entry"]: entry["value"] for entry in atlas["entries"]}
+        assert atlas and all(atlas.values()), atlas
         wrap = call(run, "session", "test_space_wrap")
         wrap = {entry["entry"]: entry["value"] for entry in wrap["entries"]}
         assert wrap and all(wrap.values()), wrap

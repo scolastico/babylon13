@@ -542,3 +542,36 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	qdel(marked)
 	qdel(crate)
 	return result
+
+/// The atlas helpers (SPLURT PRs #1395/#1396, modular_zzplurt/.../atlas_position.dm): positions and
+/// the stat panel's map link share one z frame and map key, and nothing is sent or linked for a
+/// map without an atlas URL (every Babylon world).
+/datum/babylon_save/proc/test_atlas_frames()
+	var/list/result = list()
+	var/list/station_levels = SSmapping.levels_by_trait(ZTRAIT_STATION)
+	var/list/centcom_levels = SSmapping.levels_by_trait(ZTRAIT_CENTCOM)
+	result["station_z_counted_within_the_station"] = length(station_levels) && atlas_station_z(station_levels[1]) == 1 \
+		&& atlas_station_z(station_levels[length(station_levels)]) == length(station_levels)
+	result["off_station_is_null"] = !length(centcom_levels) || isnull(atlas_station_z(centcom_levels[1]))
+	if(!length(station_levels))
+		return result
+	var/datum/map_config/current = SSmapping.current_map
+	var/real_url = current.mapping_url
+	var/turf/tile = locate(10, 20, station_levels[1])
+	current.mapping_url = null
+	result["no_url_no_link_no_key"] = isnull(atlas_map_link(tile)) && isnull(atlas_map_key()) && !atlas_map_url()
+	current.mapping_url = "https://atlas.example/#m=metastation&layer=pipes"
+	result["link_and_key_share_the_map"] = atlas_map_link(tile) == "https://atlas.example/#m=metastation&layer=pipes&t=10,20,1" && atlas_map_key() == "metastation"
+	current.mapping_url = "https://webmap.example/metastation/"
+	result["url_without_fragment"] = atlas_map_link(tile) == "https://webmap.example/metastation/#t=10,20,1" && isnull(atlas_map_key())
+	if(length(centcom_levels))
+		result["off_station_link_is_the_plain_url"] = atlas_map_link(locate(10, 20, centcom_levels[1])) == "https://webmap.example/metastation/"
+	current.mapping_url = real_url
+	// Positions run only for maps the atlas has.
+	current.mapping_url = null
+	var/without_url = atlas_positions_enabled()
+	current.mapping_url = "https://atlas.example/#m=metastation"
+	var/with_url = atlas_positions_enabled() == (CONFIG_GET(number/atlas_position_interval) > 0)
+	current.mapping_url = real_url
+	result["positions_only_with_url"] = !without_url && with_url
+	return result

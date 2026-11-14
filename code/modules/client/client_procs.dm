@@ -155,14 +155,10 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 		if("openLink")
 			src << link(href_list["link"])
 		if("openWebMap")
-			if(!SSmapping.current_map.mapping_url)
-				return
 			// The atlas addresses a tile as t=x,y,z with z counted within the station map, not the world.
-			var/station_z = atlas_station_z(mob.z)
-			if(station_z)
-				src << link("[SSmapping.current_map.mapping_url]&t=[mob.x],[mob.y],[station_z]")
-			else
-				src << link("[SSmapping.current_map.mapping_url]")
+			var/map_link = atlas_map_link(get_turf(mob))
+			if(map_link)
+				src << link(map_link)
 	if (hsrc)
 		var/datum/real_src = hsrc
 		if(QDELETED(real_src))
