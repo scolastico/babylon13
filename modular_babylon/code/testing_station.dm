@@ -58,7 +58,8 @@
 	var/list/levels = persisted_levels()
 	result["station_levels_persisted"] = length(levels) && (station_z in levels)
 	result["station_format"] = save_format_version() == BABYLON_STATION_STATE_VERSION && level_file(station_z) == "z[station_z].dmm"
-	// The test must not change the live world: ids handed out here are taken back afterwards.
+	// The test must not change the live world: ids handed out here are taken back afterwards
+	// (cleared again; the counter keeps going).
 	var/first_new_id = next_id
 	var/list/level = save_level(station_z)
 	result["map_text"] = findtext(level["map_text"], "//[DMM2TGM_MESSAGE]") == 1
@@ -84,7 +85,9 @@
 				thing.babylon_save_id = null
 				cleared++
 		CHECK_TICK
-	next_id = first_new_id
+	// next_id is not wound back: an atom outside the level's contents (a part kept in nullspace)
+	// may hold one of the ids, and handing that id out again gave two atoms the same one, so a
+	// restored machine's reference pointed at the wrong object.
 	result["ids_taken_back"] = length(handed_out) && cleared >= length(handed_out)
 	return result
 
@@ -150,7 +153,8 @@
 	result["member_status_owner_online"] = babylon_round_status_for(FALSE, TRUE, "Owner Key") == "Waiting for Owner Key to start the round. Tick READY to get a job when it starts."
 	result["member_status_owner_offline"] = babylon_round_status_for(FALSE, FALSE, "Owner Key") == "Owner Key is offline. Only they or an admin can start this round; you can OBSERVE or return to the lobby."
 	result["owner_key_not_empty"] = !!babylon_world_owner_name()
-	result["next_start_text_follows_saving"] = babylon_next_start_text() == babylon_next_start_message(babylon_world_saves(), FALSE) && babylon_next_start_text(TRUE) == babylon_next_start_message(babylon_world_saves(), TRUE)
+	var/resumes = babylon_world_saves() && !!last_save
+	result["next_start_text_follows_saving"] = babylon_next_start_text() == babylon_next_start_message(resumes, FALSE) && babylon_next_start_text(TRUE) == babylon_next_start_message(resumes, TRUE)
 	result["next_start_fresh_when_not_persistent"] = babylon_next_start_message(FALSE, FALSE) == "Next time this world starts, it begins a fresh round."
 	result["next_start_resume_for_owner_only"] = !babylon_next_start_message(TRUE, FALSE) && !!findtext(babylon_next_start_message(TRUE, TRUE), "picks up from its last autosave before the round ended. To begin fresh, reset or roll back the world in the lobby.")
 	result["owner_may_start"] = babylon_round_starter_allowed(owner, "owner", FALSE, FALSE)
@@ -293,8 +297,18 @@
 	// It stays put and alive until the save (the ice moon's caves are cold and full of plasma).
 	QDEL_NULL(cow.ai_controller)
 	ADD_TRAIT(cow, TRAIT_GODMODE, "babylon_test")
+	// A planetary tile with plasma blown onto it: the save keeps the planet's own air for it.
+	var/turf/open/planet
+	for(var/turf/open/tile in block(1, 1, other_level, world.maxx, world.maxy, other_level))
+		if(tile.planetary_atmos && !isopenspaceturf(tile) && !tile.is_blocked_turf(TRUE) && !islava(tile) && !ischasm(tile))
+			planet = tile
+			break
+	result["planet_tile_found"] = !!planet
+	planet?.atmos_spawn_air("plasma=200;TEMP=293")
+	result["planet_coords"] = planet ? json_encode(list(planet.x, planet.y, planet.z)) : "[ascii2text(91)][ascii2text(93)]"
 	var/list/saved = save_world()
 	result["saved"] = !!saved["ok"]
+	result["first_save_captures_everything"] = saved["reused_levels"] == 0
 	result["several_levels_written"] = saved["levels"] == length(levels)
 	var/base = "data/babylon/saves/[saved["generation"]]"
 	var/state_text = file2text("[base]/state.json")
@@ -333,12 +347,18 @@
 	result["animal_saved"] = animal_saved
 	result["markers"] = json_encode(markers)
 	result["station_time"] = max(1, round(SSticker.HasRoundStarted() ? STATION_TIME_PASSED() : 1))
+	// Nobody connected and nothing moved: a second save reuses every level and still contains
+	// the markers (checked after the restart, which loads the stop's save).
+	var/list/again = save_world()
+	result["unchanged_levels_reused"] = again["ok"] && again["reused_levels"] == length(levels)
+	result["reused_save_is_fast"] = again["ok"] && again["capture_ms"] < saved["capture_ms"]
+	result["reuse_report"] = "full [saved["capture_ms"]] ms, reused [again["capture_ms"]] ms"
 	return result
 
 /// Multi-z save, second half: after a stop (saved) and a start from that save, the same levels
 /// are back with their traits, the markers lie where they were, the emptied locker is still
 /// empty, the animal is back and a started round resumed with its clock.
-/datum/babylon_save/proc/test_multiz_restored(encoded_markers, saved_station_time, round_was_started)
+/datum/babylon_save/proc/test_multiz_restored(encoded_markers, saved_station_time, round_was_started, encoded_planet)
 	var/list/result = list()
 	var/list/state = load_resume_data()
 	result["restored_from_save"] = islist(state) && babylon_restoring_saved_levels() && last_save == state["generation"]
@@ -385,6 +405,10 @@
 		for(var/mob/living/basic/cow/cow in GLOB.mob_living_list)
 			names += "[cow.name]@[cow.x],[cow.y],[cow.z]"
 		result["cows_found"] = "cows: [names.Join("; ")]"
+	var/list/planet_coords = json_decode("[encoded_planet]")
+	var/turf/open/planet = length(planet_coords) == 3 ? locate(planet_coords[1], planet_coords[2], planet_coords[3]) : null
+	var/datum/gas_mixture/planet_air = planet?.return_air()
+	result["planet_keeps_its_air"] = istype(planet) && planet.planetary_atmos && planet.initial_gas_mix == initial(planet.initial_gas_mix) && (planet_air.moles[/datum/gas/plasma] || 0) < 1
 	if(text2num("[round_was_started]"))
 		result["round_resumed"] = round_mode == "resume" && SSticker.HasRoundStarted()
 		result["station_time_continues"] = STATION_TIME_PASSED() >= text2num("[saved_station_time]")
@@ -406,3 +430,56 @@
 		if(entry["self"] > 0.2)
 			top += list(list("name" = entry["name"], "self" = entry["self"], "total" = entry["total"], "calls" = entry["calls"]))
 	return json_encode(list("ms" = elapsed, "records" = length(level["records"]), "procs" = top))
+
+/// The owner's Save world is refused for 5 minutes after a save, telling how long a save pauses.
+/datum/babylon_save/proc/test_manual_save_cooldown()
+	var/list/result = list()
+	var/real_next = next_manual_save_at
+	next_manual_save_at = world.time + 3 MINUTES
+	var/list/refused = request_manual_save(null)
+	result["refused_while_cooling_down"] = !!findtext(refused["error"], "You can save again in about") && !!findtext(refused["error"], "pauses the world")
+	next_manual_save_at = real_next
+	return result
+
+/// After a restart from a save: one APC per area, every lift call button finds its lift, and
+/// (for comparison with the run before) the transports and their ids as JSON.
+/datum/babylon_save/proc/test_station_links()
+	var/list/result = list()
+	var/list/levels = persisted_levels()
+	var/list/apc_areas = list()
+	var/duplicates = 0
+	var/list/duplicate_names = list()
+	for(var/obj/machinery/power/apc/apc as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/power/apc))
+		if(!(apc.z in levels) || !apc.area)
+			continue
+		var/key = REF(apc.area)
+		if(apc_areas[key])
+			duplicates++
+			duplicate_names += "[apc.area.type] ([apc.x],[apc.y],[apc.z])"
+		apc_areas[key] = TRUE
+	result["one_apc_per_area"] = duplicates == 0
+	if(duplicates)
+		result["duplicate_apcs"] = "[duplicate_names.Join("; ")]"
+	var/buttons = 0
+	var/linked = 0
+	for(var/obj/item/assembly/control/elevator/button in world)
+		var/turf/button_turf = get_turf(button)
+		if(!button_turf || !(button_turf.z in levels))
+			continue
+		buttons++
+		if(button.lift_weakref?.resolve())
+			linked++
+	result["lift_buttons_linked"] = buttons == linked
+	if(buttons != linked)
+		result["unlinked_lift_buttons"] = "[buttons - linked] of [buttons]"
+	var/list/transports = list()
+	var/trams_have_ids = TRUE
+	for(var/transport_type in SStransport.transports_by_type)
+		for(var/datum/transport_controller/linear/controller as anything in SStransport.transports_by_type[transport_type])
+			transports += "[transport_type]:[controller.specific_transport_id]:[length(controller.transport_modules)]"
+			if(transport_type == TRANSPORT_TYPE_TRAM && !controller.specific_transport_id)
+				trams_have_ids = FALSE
+	result["trams_have_ids"] = trams_have_ids
+	result["transports"] = json_encode(sort_list(transports))
+	result["lift_buttons"] = "[buttons]"
+	return result

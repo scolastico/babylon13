@@ -18,6 +18,7 @@ SUBSYSTEM_DEF(babylon_station)
 	babylon_apply_world_name()
 	if(!session.read_afk_timeout())
 		return SS_INIT_FAILURE
+	session.read_autosave_interval()
 	// Babylon owns this policy, including ghosts and administrators.
 	CONFIG_SET(flag/kick_inactive, FALSE)
 	session.station_z = SSmapping.levels_by_trait(ZTRAIT_STATION)[1]
@@ -116,9 +117,27 @@ SUBSYSTEM_DEF(babylon_station)
 	set category = "Babylon"
 	if(ckey != GLOB.babylon_world.owner_ckey)
 		return
-	var/list/result = GLOB.babylon_save.save_world()
-	if(result["error"])
-		to_chat(src, span_warning(result["error"]))
+	GLOB.babylon_save.request_manual_save(src)
+
+/datum/babylon_save
+	/// world.time from which the owner may save by hand again.
+	var/next_manual_save_at = 0
+
+/// The owner's Save world: at most once every 5 minutes, as a save pauses everyone's game.
+/// Returns the save's result, or list("error") when refused.
+/datum/babylon_save/proc/request_manual_save(client/requester)
+	if(world.time < next_manual_save_at)
+		var/wait = round((next_manual_save_at - world.time) / (1 MINUTES), 1) || 1
+		var/refusal = "You can save again in about [wait] minute\s. Each save pauses the world for about [estimated_pause_seconds()] seconds."
+		to_chat(requester, span_warning(refusal))
+		return list("error" = refusal)
+	to_chat(requester, span_notice("Saving the world pauses it for everyone for about [estimated_pause_seconds()] seconds."))
+	var/list/result = save_world()
+	if(result["ok"])
+		next_manual_save_at = world.time + 5 MINUTES
+	else
+		to_chat(requester, span_warning(result["error"]))
+	return result
 
 /client/proc/babylon_save_stop_world_verb()
 	set name = "Save and stop world"

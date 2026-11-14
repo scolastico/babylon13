@@ -139,9 +139,12 @@ including `comms.txt`. The supervisor generates each child's control key.
 `BABYLON_DATA_DIRECTORY` defaults to `/data` and should remain on a volume.
 
 SIGTERM closes the lobby, saves/stops worlds, and waits for confirmed child
-exits. Compose grants ten minutes by default. If changing timeouts, allow more
-than startup plus final-save time with `BABYLON_STOP_GRACE_PERIOD`. For plain
-Docker use `docker stop --time 600`; Docker's default short timeout can kill a
+exits for up to `BABYLON_SHUTDOWN_TIMEOUT_SECONDS` (default 600: a station
+world's final save takes about a minute). Docker's stop grace period must be at
+least the restart warning + that shutdown timeout + the lobby handoff, about
+12 minutes with the defaults: Compose grants `BABYLON_STOP_GRACE_PERIOD`
+(default 12m). Deployments that set `stop_grace_period` themselves must raise it
+accordingly. For plain Docker use `docker stop --time 720`; Docker's default short timeout can kill a
 world during its save. On save failure the process stays alive and retries;
 Docker can still force-kill it when its grace period expires.
 
@@ -539,10 +542,14 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 
 ## Saving station worlds
 
-Station worlds are saved like Babylon worlds: an autosave every 15 minutes while
-players are connected (with the same 30/10/5/1 second countdown), a final save when the
-world is stopped from the lobby, and the owner's **Save world** and **Save and stop
-world** verbs in the Babylon tab. A save writes every level a round can change as
+Station worlds are saved like Babylon worlds: an autosave while players are connected
+(every `BABYLON_STATION_AUTOSAVE_MINUTES`, default 30; Babylon worlds keep 15), a final
+save when the world is stopped from the lobby, and the owner's **Save world** (at most
+once every 5 minutes) and **Save and stop world** verbs in the Babylon tab. The
+30/10/5/1 second countdown says how long the world will pause (the last save's time),
+"Saving... the world is paused for about N seconds" appears when it starts and "Saved.
+Play resumes." when it is done. A stop while an autosave runs waits for it (up to two
+minutes) and then saves again. A save writes every level a round can change as
 `z<N>.dmm` in the checkpoint: the station's levels, the map's own extra levels (the
 ice moon's wilderness, mining levels), lavaland and the space levels with their ruins.
 CentCom, transit levels and the Interlink are rebuilt on every start and never saved.
@@ -556,21 +563,29 @@ are not generated again, and no new mice, trash or weakpoints appear.
 What a save keeps and what it does not:
 
 - Kept: turfs and their floor decals, objects, machines and items with their settings
-  and contents (an emptied locker stays empty), room air, landmarks (job starts, the
-  observer start, event spawns), and living things without a player (animals, monsters,
-  bots, NPC humans) by type, name, health and whether they are dead. Scenery (plants,
+  and contents (an emptied locker stays empty), room air (planet tiles keep their
+  planet's air), the ids and areas objects link up by (APCs, doors, shutters, cameras,
+  lifts, the tram), every landmark and ghost-role spawner, and living things without a player (animals, monsters,
+  bots, monkeys) by type, name, health and whether they are dead. NPC humans (ruin
+  corpses) are not kept yet. Scenery (plants,
   rocks, decals, dirt) keeps only its place, look and colour.
 - Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
   (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,
-  idle; whatever was aboard is lost. Antagonists, ongoing events, the crew manifest
+  idle; whatever was aboard is lost. Shuttles players built themselves are saved where
+  they are. Antagonists, ongoing events, the crew manifest
   beyond names and jobs, and bank balances are not saved either.
 - Players' characters are not saved yet (a later update adds them): after a restart
   everyone uses the normal late-join menu.
 
 A save pauses the world's simulation while it is captured; the time is logged as
 `Babylon saved <generation>: ... capture <ms> ms, total <ms> ms` in the world's log.
-Large maps with many levels take longer than a Babylon world (see the station smoke
-test's report for measured times and sizes).
+Large maps with many levels take longer than a Babylon world (a full metastation save
+about 35 seconds). Levels nothing changed since the last save in this run are not
+captured again: their map file and records are copied from that save. A level counts as
+changed while a player's body is on it, when a shuttle arrives on or leaves it, and the
+station's own levels whenever the round runs with anyone connected. The first save
+after a start captures every level. (Changes on a level nobody visited, such as monsters
+wandering on lavaland, are not kept until a player goes there.)
 
 Worlds with **Persistent** off, and tutorial worlds, are never saved: no autosave and no
 countdown, no save verbs, and stopping them ends at once without a save (and never

@@ -386,7 +386,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	for(var/datum/babylon_tick_listener/listener as anything in tick_listeners)
 		if(listener.step && (COMSIG_BABYLON_WORLD_TICK in listener._signal_procs?[src]))
 			listening++
-	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 2 : 1)
+	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 3 : 1)
 	// A failing listener does not keep the listeners after it from their step.
 	var/datum/tick_source = new
 	var/datum/babylon_tick_listener/failing = new(tick_source, CALLBACK(src, PROC_REF(test_tick_listener_fails)))
@@ -458,4 +458,46 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		add_verb(drone, save_verbs)
 		result["drone_save_verbs_back"] = (save_verbs[1] in drone.verbs)
 #endif
+	return result
+
+/obj/item/babylon_test_unsaved
+	name = "unsaved test prop"
+
+/obj/item/babylon_test_unsaved/babylon_skip_save()
+	return TRUE
+
+/// Save controls shared by both builds: a stop waits for a save in progress, the pause is
+/// announced with an estimate, the autosave interval, and atoms marked babylon_skip_save().
+/datum/babylon_save/proc/test_save_controls()
+	var/list/result = list()
+	var/real_busy = busy
+	busy = TRUE
+	spawn(2 SECONDS)
+		busy = FALSE
+	var/started = world.time
+	result["stop_waits_for_a_running_save"] = await_save_idle(30 SECONDS) && world.time - started >= 2 SECONDS
+	busy = TRUE
+	result["wait_is_bounded"] = !await_save_idle(1 SECONDS)
+	busy = real_busy
+	result["pause_estimate"] = estimated_pause_seconds() >= 1
+#ifdef BABYLON_STATION
+	var/minutes = text2num(world.params["babylon-autosave-minutes"])
+	result["station_autosave_interval"] = autosave_interval == ((isnum(minutes) && minutes >= 1) ? round(minutes) MINUTES : 30 MINUTES)
+#else
+	result["babylon_autosave_every_15_minutes"] = autosave_interval == 15 MINUTES
+#endif
+	var/obj/structure/closet/crate/crate = new(respawn_turf)
+	var/obj/item/babylon_test_unsaved/prop = new(crate)
+	var/obj/item/screwdriver/kept = new(crate)
+	var/list/records = list()
+	capture(crate, records, null)
+	var/prop_saved = FALSE
+	var/kept_saved = FALSE
+	for(var/list/record as anything in records)
+		if(record["type"] == "[prop.type]")
+			prop_saved = TRUE
+		if(record["type"] == "[kept.type]")
+			kept_saved = TRUE
+	result["skip_hook_respected"] = !prop_saved && kept_saved
+	qdel(crate)
 	return result

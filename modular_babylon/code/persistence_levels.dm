@@ -14,7 +14,7 @@
 //
 // Shuttles are not saved: their tiles are written as what lies beneath them and every shuttle
 // loads again at its roundstart dock, idle. Players' own bodies are not saved yet (Task D2);
-// other living things (animals, monsters, bots, NPC humans) are saved by type and core fields.
+// other living things (animals, monsters, bots, monkeys; not NPC humans yet) are saved by type and core fields.
 
 /// _maps/<path> of the levels the supervisor stages from a save (Driver.prepare_station).
 #define BABYLON_SAVED_MAP_PATH "babylon/saved"
@@ -51,10 +51,12 @@
 /datum/babylon_save/type_metadata_fields(atom/thing)
 	if(istype(thing, /obj/docking_port/stationary) && !istype(thing, /obj/docking_port/stationary/transit))
 		return list("shuttle_id", "width", "height", "dwidth", "dheight", "roundstart_template", "json_key", "area_type", "hidden", "override_can_dock_checks")
+	// A shuttle players built has no template to come back from: it is saved with its port.
+	if(istype(thing, /obj/docking_port/mobile))
+		return list("shuttle_id", "width", "height", "dwidth", "dheight", "area_type", "port_direction", "preferred_direction")
 	if(is_scenery(thing))
 		return list("color")
-	// Lifts, their buttons and panels find each other by these ids while they initialize.
-	return list("id", "transport_id", "linked_elevator_id")
+	return list()
 
 /// Plants, rocks and decals: nothing about them but their map entry needs saving.
 /datum/babylon_save/proc/is_scenery(atom/thing)
@@ -68,19 +70,27 @@
 /datum/babylon_save/saves_effect(obj/effect/effect)
 	if(..())
 		return TRUE
-	var/static/list/kept_landmarks = typecacheof(list(
-		/obj/effect/landmark/start,
-		/obj/effect/landmark/observer_start,
-		/obj/effect/landmark/carpspawn,
-		/obj/effect/landmark/blobstart,
-		/obj/effect/landmark/secequipment,
-		/obj/effect/landmark/prisonwarp,
-		/obj/effect/landmark/event_spawn,
-		/obj/effect/landmark/generic_maintenance_landmark,
-		/obj/effect/landmark/navigate_destination,
-		/obj/effect/landmark/latejoin_override,
+	// Effects that are only a moment's visual, a fired spawner or a helper that did its work
+	// when the map first loaded. Everything else stays: every landmark (job starts, transport
+	// ids, tram beacons, ruins ...), ghost-role spawners, lift music zones, step triggers.
+	var/static/list/passing_effects = typecacheof(list(
+		/obj/effect/temp_visual,
+		/obj/effect/overlay,
+		/obj/effect/particle_effect,
+		/obj/effect/hotspot,
+		/obj/effect/projectile,
+		/obj/effect/ebeam,
+		/obj/effect/beam,
+		/obj/effect/spawner,
+		/obj/effect/mapping_helpers,
+		/obj/effect/forcefield,
+		/obj/effect/anomaly,
+		/obj/effect/light_emitter,
+		/obj/effect/landmark/latejoin,
 	))
-	return is_type_in_typecache(effect, kept_landmarks)
+	if(istype(effect, /obj/effect/abstract))
+		return istype(effect, /obj/effect/abstract/elevator_music_zone)
+	return !is_type_in_typecache(effect, passing_effects)
 
 /// Planetary air resets itself and the map's initial_gas_mix holds every tile's air: only
 /// station-like air and walls that are warmer or colder than they start get a turf record.
@@ -98,6 +108,9 @@
 	for(var/obj/docking_port/mobile/shuttle as anything in SSshuttle.mobile_docking_ports)
 		if(QDELETED(shuttle) || !(shuttle.z in levels))
 			continue
+		// Built by players: no roundstart dock brings it back, so it is saved like the station.
+		if(istype(shuttle, /obj/docking_port/mobile/custom))
+			continue
 		var/obj/docking_port/stationary/dock = shuttle.get_docked()
 		var/beneath_area = dock?.area_type || SHUTTLE_DEFAULT_UNDERLYING_AREA
 		for(var/turf/tile as anything in shuttle.return_ordered_turfs(shuttle.x, shuttle.y, shuttle.z, shuttle.dir))
@@ -105,6 +118,25 @@
 				continue
 			skipped[tile] = list(beneath_turf_type(tile), beneath_area)
 	return skipped
+
+/// A lift's or tram's id comes from a transport_id landmark on its platform, which the
+/// controller deletes once read: one is written back on a platform of every identified transport.
+/datum/babylon_save/checkpoint_tile_extras()
+	var/list/extras = list()
+	var/list/levels = persisted_levels()
+	for(var/transport_type in SStransport.transports_by_type)
+		for(var/datum/transport_controller/linear/controller as anything in SStransport.transports_by_type[transport_type])
+			if(!controller.specific_transport_id || !length(controller.transport_modules))
+				continue
+			var/obj/structure/transport/linear/platform = controller.transport_modules[1]
+			var/turf/tile = platform?.loc
+			if(!isturf(tile) || !(tile.z in levels))
+				continue
+			if(!extras[tile])
+				extras[tile] = list()
+			var/list/entries = extras[tile]
+			entries += "/obj/effect/landmark/transport/transport_id{\n\tspecific_transport_id = [tgm_encode(controller.specific_transport_id)]\n\t}"
+	return extras
 
 /// The turf a shuttle tile leaves behind when the shuttle flies off.
 /datum/babylon_save/proc/beneath_turf_type(turf/tile)
@@ -120,7 +152,7 @@
 			beneath = text2path(beneath) || /turf/open/space
 	return beneath
 
-/// Living things without a player, on their tile: animals, monsters, bots, NPC humans. Players'
+/// Living things without a player, on their tile: animals, monsters, bots, monkeys. Players'
 /// bodies (a ckey or a mind with a key) are Task D2's; silicons carry laws and links, and
 /// holograms vanish with their projector.
 /datum/babylon_save/checkpoint_mobs()
@@ -129,7 +161,10 @@
 	for(var/mob/living/creature as anything in GLOB.mob_living_list)
 		if(QDELETED(creature) || !isturf(creature.loc) || !(creature.z in levels))
 			continue
-		if(creature.ckey || creature.mind?.key || issilicon(creature) || (creature.flags_1 & HOLOGRAM_1))
+		// NPC humans (ruin corpses) are left out: a human rebuilt from the map has no DNA yet when
+		// the level loads (runtimes in gravity checks), and without its outfit it is only a naked
+		// "Unknown". Characters come with Task D2.
+		if(creature.ckey || creature.mind?.key || issilicon(creature) || ishuman(creature) || (creature.flags_1 & HOLOGRAM_1) || creature.babylon_skip_save())
 			continue
 		var/turf/tile = creature.loc
 		if(!mobs_by_turf[tile])
@@ -221,7 +256,8 @@
 		var/saved_stat = (islist(fields) && ("stat" in fields)) ? fields["stat"] : null
 		creature.stat = STABLE
 		if(saved_stat == DEAD)
-			creature.death()
+			// Dead already: no death again (no loot drops, death sounds or messages).
+			creature.set_stat(DEAD)
 		else
 			creature.updatehealth()
 		CHECK_TICK
@@ -254,12 +290,20 @@
 	if(length(levels))
 		var/list/traits = list()
 		for(var/list/level as anything in levels)
+			// One trait object per z; a file holding several z has a list of them (as the
+			// supervisor accepts).
 			var/list/saved_traits = level["traits"]
-			var/list/level_traits = islist(saved_traits) ? saved_traits.Copy() : list()
-			var/baseturf = level_traits[ZTRAIT_BASETURF]
-			if(istext(baseturf))
-				level_traits[ZTRAIT_BASETURF] = text2path(baseturf) || baseturf
-			traits += list(level_traits)
+			var/list/trait_sets = list()
+			if(islist(saved_traits) && length(saved_traits) && islist(saved_traits[1]))
+				trait_sets = saved_traits
+			else
+				trait_sets += list(saved_traits)
+			for(var/list/one_level as anything in trait_sets)
+				var/list/level_traits = islist(one_level) ? one_level.Copy() : list()
+				var/baseturf = level_traits[ZTRAIT_BASETURF]
+				if(istext(baseturf))
+					level_traits[ZTRAIT_BASETURF] = text2path(baseturf) || baseturf
+				traits += list(level_traits)
 		config.traits = traits
 	config.height_autosetup = FALSE
 	config.space_ruin_levels = 0
@@ -302,3 +346,67 @@
 	return ..()
 
 #undef BABYLON_SAVED_MAP_PATH
+
+// Unchanged levels. A level counts as changed while a player's body is on it, when a shuttle
+// arrives on or leaves it, and (station levels) whenever the round runs with anyone connected:
+// events, machines and the crew's work reach the station from anywhere. A save captures only
+// changed levels; the others reuse the last save's map file and records (save_world_impl()).
+// The first save after a start captures everything.
+
+/datum/babylon_save
+	/// z (as text) -> TRUE: changed since the last save.
+	var/list/dirty_levels = list()
+	/// REF(mobile port) -> its last "x,y,z".
+	var/list/shuttle_positions = list()
+
+/datum/babylon_save/New()
+	. = ..()
+	tick_listeners += new /datum/babylon_tick_listener(src, CALLBACK(src, PROC_REF(track_dirty_levels)))
+
+/datum/babylon_save/proc/track_dirty_levels()
+	var/someone_connected = FALSE
+	for(var/client/player in GLOB.clients)
+		var/mob/body = player.mob
+		if(!body || isdead(body))
+			continue
+		someone_connected = TRUE
+		var/turf/tile = get_turf(body)
+		if(tile)
+			dirty_levels["[tile.z]"] = TRUE
+	if(length(GLOB.clients))
+		someone_connected = TRUE
+	if(someone_connected && SSticker.HasRoundStarted())
+		for(var/z in SSmapping.levels_by_trait(ZTRAIT_STATION))
+			dirty_levels["[z]"] = TRUE
+	for(var/obj/docking_port/mobile/shuttle as anything in SSshuttle.mobile_docking_ports)
+		if(QDELETED(shuttle))
+			continue
+		var/key = REF(shuttle)
+		var/where = "[shuttle.x],[shuttle.y],[shuttle.z]"
+		var/was = shuttle_positions[key]
+		if(was == where)
+			continue
+		if(was)
+			var/list/old_coords = splittext(was, ",")
+			dirty_levels["[old_coords[3]]"] = TRUE
+		dirty_levels["[shuttle.z]"] = TRUE
+		shuttle_positions[key] = where
+
+/datum/babylon_save/reusable_level(z)
+	var/source = saved_level_source["[z]"]
+	if(!source || dirty_levels["[z]"] || !islist(saved_level_json["[z]"]))
+		return null
+	if(!fexists("data/babylon/saves/[source]/[level_file(z)]"))
+		return null
+	return source
+
+/datum/babylon_save/level_saved()
+	dirty_levels = list()
+	// Whoever is on a level now keeps changing it.
+	track_dirty_levels()
+
+/// Station worlds autosave every babylon-autosave-minutes (the supervisor's
+/// station_autosave_minutes, default 30): a save pauses them far longer than a Babylon world.
+/datum/babylon_save/proc/read_autosave_interval()
+	var/minutes = text2num(world.params["babylon-autosave-minutes"])
+	autosave_interval = (isnum(minutes) && minutes >= 1) ? round(minutes) MINUTES : 30 MINUTES

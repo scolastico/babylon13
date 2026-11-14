@@ -60,11 +60,13 @@
 /proc/babylon_stop_message(saves)
 	if(saves)
 		return "This world is stopping. Saving progress and returning players to the lobby."
-	if(babylon_is_station_build() && GLOB.babylon_world?.is_tutorial())
+	if(GLOB.babylon_world?.is_tutorial())
 		return "This tutorial is stopping; tutorial worlds are not saved. Returning you to the lobby."
-	if(babylon_is_station_build() && !babylon_station_saving_available())
-		return "This world is stopping. Station worlds are not saved yet, so this round ends here. Returning you to the lobby."
 	return "This world is stopping without a save (saving is off for this world). Returning you to the lobby."
+
+/datum/babylon_save
+	/// A managed stop is waiting for a save in progress to finish.
+	var/stop_pending = FALSE
 
 /datum/babylon_save/proc/managed_stop()
 	if(draining)
@@ -72,6 +74,14 @@
 		if(round_ending)
 			return list("ok" = TRUE, "saved" = FALSE)
 		return list("error" = "Already stopping")
+	if(stop_pending)
+		return list("error" = "Already stopping")
+	// An autosave in progress finishes first (it releases the world as usual); then the final save.
+	stop_pending = TRUE
+	var/idle = await_save_idle(120 SECONDS)
+	stop_pending = FALSE
+	if(!idle)
+		return list("error" = "A save is still running; try stopping again in a moment")
 	draining = TRUE
 	var/list/result
 	var/saves = babylon_stop_saves()
