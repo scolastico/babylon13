@@ -131,7 +131,7 @@ def main():
 
     def compare_links(before, after):
         """After a restart from a save: links are at least as complete as before it."""
-        for key in ("one_apc_per_area", "lift_buttons_linked", "trams_have_ids"):
+        for key in ("one_apc_per_area", "lift_buttons_linked", "trams_have_ids", "trams_positioned"):
             assert after[key] or not before[key], (key, before, after)
         assert after["transports"] == before["transports"], (before["transports"], after["transports"])
         assert after["lift_buttons"] == before["lift_buttons"], (before, after)
@@ -297,7 +297,8 @@ def main():
         entry["restored_ready_seconds"] = round(time.time() - restarted)
         entry["restored_info"] = info(run)
         entry["test_multiz_restored"] = checks(run, "test_multiz_restored",
-                                               [first["markers"], first["station_time"], 1, first["planet_coords"]])
+                                               [first["markers"], first["station_time"], 1, first["planet_coords"],
+                                                first["traveller"]])
         links_after = values(run, "test_station_links")
         entry["links"] = dict(before=links_before, after=links_after)
         compare_links(links_before, links_after)
@@ -315,7 +316,11 @@ def main():
         run = wait_ready(world)
         after = values(run, "test_station_links")
         compare_links(before, after)
-        assert after["trams_have_ids"] and after["lift_buttons_linked"], after
+        assert after["trams_have_ids"] and after["trams_positioned"] and after["lift_buttons_linked"], after
+        # The tram found its platform and nav beacon when it loaded (no CRASH in the world's logs).
+        for log_file in (data / "worlds" / world).rglob("*.log"):
+            text = log_file.read_text(errors="replace")
+            assert "initialized without the required landmarks" not in text, log_file
         stop(world)
         return dict(before=before, after=after)
 

@@ -136,7 +136,33 @@
 				extras[tile] = list()
 			var/list/entries = extras[tile]
 			entries += "/obj/effect/landmark/transport/transport_id{\n\tspecific_transport_id = [tgm_encode(controller.specific_transport_id)]\n\t}"
+			if(controller.create_modular_set)
+				add_merged_module_entries(controller, extras, levels)
 	return extras
+
+/// A tram merges its one-tile modules into one multi-tile module per level when it loads (the
+/// others become its overlays). That module is saved once, on its corner tile; every other tile
+/// it covers gets a module entry again, with the look it had, so the next load merges it anew.
+/datum/babylon_save/proc/add_merged_module_entries(datum/transport_controller/linear/controller, list/extras, list/levels)
+	for(var/obj/structure/transport/linear/module as anything in controller.transport_modules)
+		var/turf/corner = module.loc
+		if(!isturf(corner) || !(corner.z in levels) || length(module.locs) < 2)
+			continue
+		// The absorbed modules' looks, by their offset from the corner.
+		var/list/states = list()
+		for(var/image/part as anything in module.overlays)
+			states["[round(part.pixel_x / ICON_SIZE_X)],[round(part.pixel_y / ICON_SIZE_Y)]"] = part.icon_state
+		for(var/turf/tile as anything in module.locs)
+			if(tile == corner)
+				continue
+			var/state = states["[tile.x - corner.x],[tile.y - corner.y]"]
+			var/list/vars_text = list("transport_id = [tgm_encode(module.transport_id)]")
+			if(istext(state))
+				vars_text += "icon_state = [tgm_encode(state)]"
+			if(!extras[tile])
+				extras[tile] = list()
+			var/list/entries = extras[tile]
+			entries += "[module.type]{\n\t[vars_text.Join(";\n\t")]\n\t}"
 
 /// The turf a shuttle tile leaves behind when the shuttle flies off.
 /datum/babylon_save/proc/beneath_turf_type(turf/tile)
@@ -356,6 +382,11 @@
 /datum/babylon_save
 	/// z (as text) -> TRUE: changed since the last save.
 	var/list/dirty_levels = list()
+	/// The changed levels the save in progress went by (taken when its capture began).
+	var/list/capturing_dirty
+	/// z (as text) -> what first changed it since the last save (test diagnostics).
+	var/list/dirty_causes = list()
+	var/list/last_dirty_causes = list()
 	/// REF(mobile port) -> its last "x,y,z".
 	var/list/shuttle_positions = list()
 
@@ -372,12 +403,12 @@
 		someone_connected = TRUE
 		var/turf/tile = get_turf(body)
 		if(tile)
-			dirty_levels["[tile.z]"] = TRUE
+			mark_level_changed(tile.z, body)
 	if(length(GLOB.clients))
 		someone_connected = TRUE
 	if(someone_connected && SSticker.HasRoundStarted())
 		for(var/z in SSmapping.levels_by_trait(ZTRAIT_STATION))
-			dirty_levels["[z]"] = TRUE
+			mark_level_changed(z, null)
 	for(var/obj/docking_port/mobile/shuttle as anything in SSshuttle.mobile_docking_ports)
 		if(QDELETED(shuttle))
 			continue
@@ -388,22 +419,69 @@
 			continue
 		if(was)
 			var/list/old_coords = splittext(was, ",")
-			dirty_levels["[old_coords[3]]"] = TRUE
-		dirty_levels["[shuttle.z]"] = TRUE
+			mark_level_changed(text2num(old_coords[3]), shuttle)
+		mark_level_changed(shuttle.z, shuttle)
 		shuttle_positions[key] = where
 
 /datum/babylon_save/reusable_level(z)
 	var/source = saved_level_source["[z]"]
-	if(!source || dirty_levels["[z]"] || !islist(saved_level_json["[z]"]))
+	// During a capture the decision uses the set taken when it began; otherwise (the pause
+	// estimate) the changes so far.
+	var/list/changed = capturing_dirty || dirty_levels
+	if(!source || changed["[z]"] || !islist(saved_level_json["[z]"]))
 		return null
 	if(!fexists("data/babylon/saves/[source]/[level_file(z)]"))
 		return null
 	return source
 
-/datum/babylon_save/level_saved()
+/datum/babylon_save/begin_level_capture()
+	capturing_dirty = dirty_levels
 	dirty_levels = list()
+	last_dirty_causes = dirty_causes
+	dirty_causes = list()
 	// Whoever is on a level now keeps changing it.
 	track_dirty_levels()
+
+/datum/babylon_save/level_saved()
+	capturing_dirty = null
+
+/datum/babylon_save/level_save_failed()
+	if(capturing_dirty)
+		dirty_levels |= capturing_dirty
+	capturing_dirty = null
+
+/// Anything that changes level marks both levels as changed: drifting through space, falling
+/// through open space, teleports and launchpads, a monster walking from one level to another.
+/// Without it, an object moved off a level nobody stood on was lost, or kept twice.
+/atom/movable/on_changed_z_level(turf/old_turf, turf/new_turf, same_z_layer, notify_contents = TRUE)
+	var/datum/babylon_save/session = GLOB.babylon_save
+	// Only what a save keeps: objects and living things (not effects, ghosts, eyes or other
+	// abstract movables, which hop levels all the time).
+	if(session && old_turf && new_turf && old_turf.z != new_turf.z && ((isobj(src) && !iseffect(src)) || isliving(src)))
+		session.mark_level_changed(old_turf.z, src)
+		session.mark_level_changed(new_turf.z, src)
+	return ..()
+
+/// Marks level z as changed; remembers the first thing that did (diagnostics for the tests).
+/datum/babylon_save/proc/mark_level_changed(z, atom/cause)
+	if(!dirty_levels["[z]"])
+		dirty_causes["[z]"] = "[cause?.type]"
+	dirty_levels["[z]"] = TRUE
+
+/// A tram saved between stations has no platform under it and cannot start after a restore:
+/// a save waits up to 60 seconds for moving trams to arrive. (A tram stopped on the line, by an
+/// emergency stop or damage, is saved where it is; test_station_links reports it.)
+/datum/babylon_save/before_checkpoint()
+	var/waited = 0
+	while(waited < 60 SECONDS && babylon_tram_travelling())
+		sleep(1 SECONDS)
+		waited += 1 SECONDS
+
+/proc/babylon_tram_travelling()
+	for(var/datum/transport_controller/linear/tram/tram as anything in SStransport.transports_by_type[TRANSPORT_TYPE_TRAM])
+		if(tram.controller_active)
+			return TRUE
+	return FALSE
 
 /// Station worlds autosave every babylon-autosave-minutes (the supervisor's
 /// station_autosave_minutes, default 30): a save pauses them far longer than a Babylon world.

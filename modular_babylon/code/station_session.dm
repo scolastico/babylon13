@@ -131,7 +131,7 @@ SUBSYSTEM_DEF(babylon_station)
 		var/refusal = "You can save again in about [wait] minute\s. Each save pauses the world for about [estimated_pause_seconds()] seconds."
 		to_chat(requester, span_warning(refusal))
 		return list("error" = refusal)
-	to_chat(requester, span_notice("Saving the world pauses it for everyone for about [estimated_pause_seconds()] seconds."))
+	// save_world() itself tells everyone how long the world pauses.
 	var/list/result = save_world()
 	if(result["ok"])
 		next_manual_save_at = world.time + 5 MINUTES

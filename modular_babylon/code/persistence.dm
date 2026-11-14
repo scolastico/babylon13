@@ -324,6 +324,8 @@
 	/// Saved level z (as text) -> list(records JSON, turfs JSON, record count) of the last save in
 	/// this run; a level nobody touched since reuses them (reusable_level()).
 	var/list/saved_level_json = list()
+	/// Saved level z (as text) -> milliseconds its last capture took (the pause estimate).
+	var/list/level_capture_ms = list()
 	/// Saved level z (as text) -> the generation directory holding its z<N>.dmm.
 	var/list/saved_level_source = list()
 	/// Type -> the reference_fields / gas mixture fields its instances have (capture()).
@@ -345,6 +347,7 @@
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
 	busy = TRUE
+	before_checkpoint()
 	// The chat subsystem stops with the master: these messages go out at once.
 	to_chat_immediate(world, span_notice("Saving... the world is paused for about [estimated_pause_seconds()] seconds."))
 	checkpoint_processing = Master.processing
@@ -367,15 +370,31 @@
 		if(!draining)
 			to_chat_immediate(world, span_notice("Saved. Play resumes."))
 	else
+		level_save_failed()
 		to_chat_immediate(world, span_warning("The save failed: [result["error"]]. Play resumes."))
 	return result
 
+/// Just before a save pauses the world (the station build lets a moving tram arrive first).
+/datum/babylon_save/proc/before_checkpoint()
+	return
+
+/// A save failed: levels it took as changed stay changed for the next one.
+/datum/babylon_save/proc/level_save_failed()
+	return
+
 /// Seconds a save pauses this world: the last capture's time, else a guess for the build.
+/// The levels' last capture times add up for the levels the next save captures (a level that
+/// was never captured in this run counts as a whole first save divided by the levels).
 /datum/babylon_save/proc/estimated_pause_seconds()
-	var/capture_ms = last_save_report?["capture_ms"]
-	if(isnum(capture_ms))
-		return max(1, round(capture_ms / 1000 + 0.5))
-	return babylon_is_station_build() ? 45 : 3
+	var/list/levels = persisted_levels()
+	var/fallback_ms = (babylon_is_station_build() ? 45 SECONDS : 3 SECONDS) * 100 / max(1, length(levels))
+	var/total_ms = 0
+	for(var/z in levels)
+		if(reusable_level(z))
+			continue
+		var/known = level_capture_ms["[z]"]
+		total_ms += isnum(known) ? known : fallback_ms
+	return max(1, round(total_ms / 1000 + 0.5))
 
 /// Waits up to timeout (deciseconds) for a save in progress to finish. TRUE when none runs.
 /datum/babylon_save/proc/await_save_idle(timeout)
@@ -623,6 +642,9 @@
 
 /datum/babylon_save/proc/save_world_impl()
 	var/list/levels = persisted_levels()
+	// Which levels changed is taken now, while the world is paused (changes from here on count
+	// for the next save).
+	begin_level_capture()
 	// z (as text) -> the level's map text, records and turf records (levels captured now)
 	var/list/level_maps = list()
 	var/list/level_records = list()
@@ -644,6 +666,7 @@
 		var/level_started = REALTIMEOFDAY
 		var/list/level = save_level(z, mobs_by_turf, skipped_tiles, tile_extras)
 		level_costs["[z]"] = list((REALTIMEOFDAY - level_started) * 100, length(level["records"]))
+		level_capture_ms["[z]"] = (REALTIMEOFDAY - level_started) * 100
 		level_records["[z]"] = level["records"]
 		level_turfs["[z]"] = level["turfs"]
 		level_maps["[z]"] = level["map_text"]
@@ -703,12 +726,19 @@
 		pieces += index > 1 ? ",[turf_parts[index]]" : turf_parts[index]
 	pieces += list(close_list, copytext(state_text, turfs_at + length("\"@babylon-turfs@\"")))
 	fdel("[base]/state.json")
+	var/state_bytes = 0
 	for(var/piece in pieces)
-		bytes += length(piece)
+		state_bytes += length(piece)
 		rustg_file_append(piece, "[base]/state.json")
 		CHECK_TICK
-	// latest.json is committed only after every generation file is present.
-	var/complete = fexists("[base]/state.json")
+	bytes += state_bytes
+	// latest.json is committed only after every generation file is present, and state.json
+	// whole: a truncated one once went unnoticed. (Its size on disk can differ from the text's
+	// length, as BYOND writes text macros such as \improper differently, so its end is compared.)
+	var/written_state = fexists("[base]/state.json") ? file2text("[base]/state.json") : ""
+	var/last_piece = pieces[length(pieces)]
+	var/complete = length(written_state) >= state_bytes / 2 && copytext(written_state, -min(64, length(last_piece))) == copytext(last_piece, -min(64, length(last_piece)))
+	written_state = null
 	for(var/z in levels)
 		if(!fexists("[base]/[level_file(z)]"))
 			complete = FALSE
@@ -732,8 +762,13 @@
 /datum/babylon_save/proc/reusable_level(z)
 	return null
 
-/// After a successful save: the build's bookkeeping of changed levels starts over.
+/// After a successful save: the build's bookkeeping of changed levels.
 /datum/babylon_save/proc/level_saved()
+	return
+
+/// At the start of a capture, while the world is paused: the build takes the set of changed
+/// levels for this save and starts a new one.
+/datum/babylon_save/proc/begin_level_capture()
 	return
 
 /// Atoms that never go into a save (the tutorial engine marks its own props and NPCs).

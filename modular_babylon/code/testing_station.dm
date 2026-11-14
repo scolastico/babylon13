@@ -278,6 +278,12 @@
 		marker.name = "babylon marker z[z]"
 		markers += list(list("name" = marker.name, "x" = spot.x, "y" = spot.y, "z" = spot.z))
 	result["markers_placed"] = length(markers) == 2
+	// Saved on the level without the station trait, moved later (below).
+	var/obj/item/paper/traveller
+	if(length(markers) == 2)
+		var/list/other_marker = markers[2]
+		traveller = new(locate(other_marker["x"], other_marker["y"], other_marker["z"]))
+		traveller.name = "babylon traveller"
 	var/turf/station_spot = test_marker_turf(station_level, skipped)
 	// A locker fills itself the first time it opens: emptied by hand, it must stay empty after a
 	// restart (contents_initialized is saved).
@@ -350,7 +356,28 @@
 	// Nobody connected and nothing moved: a second save reuses every level and still contains
 	// the markers (checked after the restart, which loads the stop's save).
 	var/list/again = save_world()
+	// Something leaving a level nobody stands on (drift, a fall, a teleport) changes both levels:
+	// the next save captures them, so the object is neither lost nor kept twice.
+	var/turf/landing = test_marker_turf(station_level, checkpoint_skipped_tiles())
+	traveller.forceMove(landing)
+	var/list/moved = save_world()
+	var/list/moved_state = json_decode(file2text("data/babylon/saves/[moved["generation"]]/state.json"))
+	var/copies = 0
+	var/copy_z
+	for(var/list/record as anything in moved_state["records"])
+		var/list/fields = record["fields"]
+		if(islist(fields) && ("name" in fields) && fields["name"] == "babylon traveller")
+			copies++
+			copy_z = record["z"]
+	result["moved_object_once"] = moved["ok"] && copies == 1 && copy_z == station_level
+	result["both_levels_recaptured"] = moved["ok"] && moved["reused_levels"] <= length(levels) - 2
+	result["traveller"] = json_encode(list(landing.x, landing.y, landing.z))
 	result["unchanged_levels_reused"] = again["ok"] && again["reused_levels"] == length(levels)
+	if(!result["unchanged_levels_reused"])
+		var/list/causes = list()
+		for(var/z_text in last_dirty_causes)
+			causes += "z[z_text]: [last_dirty_causes[z_text]]"
+		result["changed_by"] = "changed: [causes.Join("; ")]"
 	result["reused_save_is_fast"] = again["ok"] && again["capture_ms"] < saved["capture_ms"]
 	result["reuse_report"] = "full [saved["capture_ms"]] ms, reused [again["capture_ms"]] ms"
 	return result
@@ -358,7 +385,7 @@
 /// Multi-z save, second half: after a stop (saved) and a start from that save, the same levels
 /// are back with their traits, the markers lie where they were, the emptied locker is still
 /// empty, the animal is back and a started round resumed with its clock.
-/datum/babylon_save/proc/test_multiz_restored(encoded_markers, saved_station_time, round_was_started, encoded_planet)
+/datum/babylon_save/proc/test_multiz_restored(encoded_markers, saved_station_time, round_was_started, encoded_planet, encoded_traveller)
 	var/list/result = list()
 	var/list/state = load_resume_data()
 	result["restored_from_save"] = islist(state) && babylon_restoring_saved_levels() && last_save == state["generation"]
@@ -388,6 +415,14 @@
 				found++
 				break
 	result["markers_restored"] = length(markers) == 2 && found == length(markers)
+	var/travellers = 0
+	var/traveller_in_place = FALSE
+	var/list/landing = json_decode("[encoded_traveller]")
+	for(var/obj/item/paper/paper in world)
+		if(paper.name == "babylon traveller")
+			travellers++
+			traveller_in_place = length(landing) == 3 && paper.x == landing[1] && paper.y == landing[2] && paper.z == landing[3]
+	result["moved_object_restored_once"] = travellers == 1 && traveller_in_place
 	var/obj/structure/closet/emcloset/locker
 	for(var/obj/structure/closet/emcloset/candidate in world)
 		if(candidate.name == "babylon marker locker")
@@ -474,12 +509,23 @@
 		result["unlinked_lift_buttons"] = "[buttons - linked] of [buttons]"
 	var/list/transports = list()
 	var/trams_have_ids = TRUE
+	var/trams_positioned = TRUE
 	for(var/transport_type in SStransport.transports_by_type)
 		for(var/datum/transport_controller/linear/controller as anything in SStransport.transports_by_type[transport_type])
-			transports += "[transport_type]:[controller.specific_transport_id]:[length(controller.transport_modules)]"
-			if(transport_type == TRANSPORT_TYPE_TRAM && !controller.specific_transport_id)
-				trams_have_ids = FALSE
+			var/list/shape = list()
+			// A tram is one merged module per level: its size and the tiles it covers.
+			for(var/obj/structure/transport/linear/module as anything in controller.transport_modules)
+				shape += "[module.bound_width / ICON_SIZE_X]x[module.bound_height / ICON_SIZE_Y]/[length(module.locs)]"
+			transports += "[transport_type]:[controller.specific_transport_id]:[length(controller.transport_modules)]:[jointext(sort_list(shape), ",")]"
+			if(transport_type == TRANSPORT_TYPE_TRAM)
+				var/datum/transport_controller/linear/tram/tram = controller
+				if(!tram.specific_transport_id)
+					trams_have_ids = FALSE
+				// It starts from a platform and knows where it is (check_starting_landmark()).
+				if(!tram.idle_platform || !tram.nav_beacon)
+					trams_positioned = FALSE
 	result["trams_have_ids"] = trams_have_ids
+	result["trams_positioned"] = trams_positioned
 	result["transports"] = json_encode(sort_list(transports))
 	result["lift_buttons"] = "[buttons]"
 	return result

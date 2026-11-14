@@ -75,7 +75,8 @@
 			return list("ok" = TRUE, "saved" = FALSE)
 		return list("error" = "Already stopping")
 	if(stop_pending)
-		return list("error" = "Already stopping")
+		// The first stop saves and stops the world once the running save is done: nothing failed.
+		return list("ok" = TRUE, "pending" = TRUE)
 	// An autosave in progress finishes first (it releases the world as usual); then the final save.
 	stop_pending = TRUE
 	var/idle = await_save_idle(120 SECONDS)
