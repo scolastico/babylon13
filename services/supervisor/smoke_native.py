@@ -146,6 +146,9 @@ def main():
         played = call(run, "session", "test_play_time")
         played = {entry["entry"]: entry["value"] for entry in played["entries"]}
         assert played and all(played.values()), played
+        creative = call(run, "session", "test_creative_machines")
+        creative = {entry["entry"]: entry["value"] for entry in creative["entries"]}
+        assert creative and all(creative.values()), creative
         wrap = call(run, "session", "test_space_wrap")
         wrap = {entry["entry"]: entry["value"] for entry in wrap["entries"]}
         assert wrap and all(wrap.values()), wrap
