@@ -569,6 +569,74 @@ the world is deleted when it stops), **Accept** (moves it to `published/`) or
 Deleting or accepting a tutorial does not disturb copies that are running: every
 copy is prepared from its own files when it starts.
 
+### Building a tutorial: the tutorial wand
+
+A tutorial is made of hidden **tutorial objects** placed in the world with the
+**tutorial wand** (Creative panel → Tools). The wand works in every Creative world.
+While it is in your hand you see every tutorial object as a small icon with its id;
+nobody else does, and players of a tutorial never see them. Use the wand in your hand
+to open its window and choose what a click does:
+
+- **Place**: pick an object from the palette (grouped Triggers / Actions / Markers,
+  each with a one-line description) and click a tile. Its settings open at once.
+- **Configure**: click an object (or an NPC) to open its settings. Several objects on
+  one tile offer a list.
+- **NPC**: pick a preset (Guide, Bystander, bruised/burned/poisoned/bleeding/sick or
+  unconscious patient, broken leg) and click a tile; the NPC appears at once.
+- **Delete**: click an object (or an NPC) to remove it.
+
+Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
+other by id, like airlock ids. A marker with the id **start** is where players begin
+(without one they start at the arrivals). The settings window offers the existing ids
+in drop-downs and points out problems inline (an id nobody has, a duplicate id, a
+trigger where an action is expected). The wand's **Overview** lists every object with
+its problems and warns about a missing start marker, triggers that can never fire,
+unused actions and a tutorial without a Complete action; **Go there** jumps to an
+object.
+
+**Triggers** wait for the player and then run their **actions** in order:
+
+| Trigger | Fires when |
+| --- | --- |
+| Zone | the player enters a rectangle (Pick corners, then click two tiles) |
+| Holding | the player holds an item of a type (optionally exactly that type) |
+| Used on | the player uses an item of a type on a marker's object or an NPC |
+| Condition | gas in a zone, power (area power, APC or SMES charge), fluid in a container, a structure at a marker, an NPC's health/damage/alive/dead/disease/awake state becomes true |
+| Button | the player presses it (a visible button) |
+| Say | the player says a phrase (any part, case ignored) |
+| Timer | some seconds after it was enabled |
+
+Every trigger has: **Actions** (ordered ids), **Fire only once**, **Enabled at the
+start**, **Cooldown** and **Delay**. Zone, holding and condition triggers fire when
+their condition *becomes* true.
+
+| Action | Does |
+| --- | --- |
+| Message | a green "Guide" box in the player's chat, or a speaker (NPC or marked object) says it; `[player]` becomes the player's name; optional screen hint |
+| Point | a bouncing arrow over the target for the player; optionally a speaker points at it again and again |
+| Highlight | outlines the target for some seconds (only the player sees it) |
+| Teleport | moves the player to a marker |
+| Spawn NPC | (re)creates an NPC spawner's NPC |
+| Give item | puts an item in the player's hand |
+| Enable/disable triggers | chains steps: only the next step's triggers listen |
+| Sound | plays one of a dozen sounds for the player |
+| Complete | the "Tutorial complete!" screen with **Back to lobby** |
+
+Each action can wait (**Delay**) after the ones before it. **Preview** in an action's
+settings runs it for you alone.
+
+**NPC spawners** create a human standing still (no AI): name, outfit (common job
+outfits or a search; ids and gear are left out), species, facing, **Spawn at the
+start**, and **effects**, each with a chance from 0 to 100 %: brute/burn damage on a
+body part, toxin and suffocation damage, a wound, a disease, a reagent in the blood,
+unconsciousness for some seconds, bleeding. The spawner is saved, never its NPC; the
+NPC is created again when the world starts and for every run.
+
+**Test run** (wand window) plays your tutorial for you alone, from the start marker
+or where you stand; other builders can test at the same time without crossing. Stop
+resets the run, not the world. In a tutorial play instance the run starts by itself
+when the player arrives at the start marker.
+
 ## AFK return to the lobby
 
 Worlds send inactive players back to the lobby after 900 seconds (15 minutes) by default.

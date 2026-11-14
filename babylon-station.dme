@@ -31,8 +31,12 @@
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
 #include "modular_babylon/code/tutorial/objects.dm"
+#include "modular_babylon/code/tutorial/triggers.dm"
+#include "modular_babylon/code/tutorial/actions.dm"
+#include "modular_babylon/code/tutorial/runtime.dm"
 #include "modular_babylon/code/tutorial/wand.dm"
 #ifdef BABYLON_TESTING
 #include "modular_babylon/code/testing_common.dm"
 #include "modular_babylon/code/testing_station.dm"
+#include "modular_babylon/code/tutorial/testing_tutorial.dm"
 #endif

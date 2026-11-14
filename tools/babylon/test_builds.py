@@ -11,8 +11,8 @@ CODE = "modular_babylon/code/"
 
 SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", "showcase", "spectator",
           "sfw", "links", "storyteller", "moderation", "world_players", "interface", "music",
-          "music_loops", "play_time", "testing_common", "tutorial/objects",
-          "tutorial/wand"}
+          "music_loops", "play_time", "testing_common", "tutorial/objects", "tutorial/triggers", "tutorial/actions",
+          "tutorial/runtime", "tutorial/wand", "tutorial/testing_tutorial"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
 STATION_ONLY = {"station_session", "station_round", "testing_station"}

@@ -419,9 +419,12 @@
 
 // --- Tutorials -----------------------------------------------------------------------------
 
-/// Where a tutorial player starts. Task F3 replaces this with the tutorial's start marker; until
-/// then (and when a tutorial has none) it is a late-join spawn point.
+/// Where a tutorial player starts: the tutorial's "start" marker (tutorial/runtime.dm); a
+/// tutorial without one starts at a late-join spawn point.
 /proc/babylon_tutorial_start_turf()
+	var/turf/marked = babylon_tutorial_marker_turf("start")
+	if(marked)
+		return marked
 	if(length(SSjob.latejoin_trackers))
 		return get_turf(pick(SSjob.latejoin_trackers))
 	return GLOB.babylon_save.respawn_turf
@@ -468,6 +471,9 @@
 			if(isliving(character) && start)
 				character.buckled?.unbuckle_mob(character, TRUE)
 				character.forceMove(start)
+			// Play instances run the tutorial for the player; admins editing one test-run it.
+			if(isliving(character) && GLOB.babylon_world.kind == "tutorial")
+				babylon_tutorial_begin(character)
 	catch(var/exception/error)
 		log_world("Babylon: spawning [player_key] in the tutorial failed: [error] ([error?.file]:[error?.line])")
 	tutorial_spawning -= player_key
