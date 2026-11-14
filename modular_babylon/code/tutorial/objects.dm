@@ -168,7 +168,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	last_rename_links = list()
 	var/obj/babylon_tutorial/twin = babylon_tutorial_find(old_id)
 	if(old_id && !twin)
-		last_rename_links = babylon_tutorial_rewrite_links(old_id, value)
+		var/list/changed = babylon_tutorial_rewrite_links(old_id, value)
+		if(isnull(changed))
+			// A link could not be rewritten: keep the old id, nothing changed.
+			tutorial_id = old_id
+			return "The links to [old_id] could not be updated; the id was not changed."
+		last_rename_links = changed
 	babylon_tutorial_changed()
 	return null
 
@@ -179,6 +184,7 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /// Replaces an id in every id and idlist setting. Returns the ids of the objects changed.
 /proc/babylon_tutorial_rewrite_links(old_id, new_id)
 	var/list/changed = list()
+	var/list/pending = list()
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		var/list/values = object.settings().Copy()
 		var/touched = FALSE
@@ -198,8 +204,18 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 						values[key] = renamed
 						touched = TRUE
 		if(touched)
-			object.store_settings(values)
-			changed += object.tutorial_id
+			pending[object] = values
+	// Every new value is a plain id swap, checked before anything is written: all or nothing.
+	for(var/obj/babylon_tutorial/object as anything in pending)
+		var/list/values = pending[object]
+		for(var/list/field as anything in babylon_tutorial_schema(object.type))
+			if(field["type"] in list("id", "idlist"))
+				var/list/cleaned = babylon_tutorial_clean_value(field, values[field["key"]])
+				if(cleaned["error"])
+					return null
+	for(var/obj/babylon_tutorial/object as anything in pending)
+		object.store_settings(pending[object])
+		changed += object.tutorial_id
 	return changed
 
 /// The fields of this kind's settings: a list of babylon_tutorial_field() lists.
@@ -579,12 +595,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		if(object.tutorial_category == "trigger")
 			var/starts = object.setting("starts")
-			if(starts == "manual" && !enabled_later[object.tutorial_id])
-				warnings += list(list("text" = "Trigger [object.tutorial_id] waits for an Enable action, but none enables it: it can never fire.", "ref" = REF(object)))
-			else if(starts == "start" && enabled_later[object.tutorial_id] && !istype(object, /obj/babylon_tutorial/trigger/start))
+			if(starts == "start" && enabled_later[object.tutorial_id] && !istype(object, /obj/babylon_tutorial/trigger/start))
 				warnings += list(list("text" = "Trigger [object.tutorial_id] listens from the beginning, but [enabled_later[object.tutorial_id]] also enables it later. Did you mean \"After [enabled_later[object.tutorial_id]] fired\"?", "ref" = REF(object)))
 		if(object.tutorial_category == "action" && !used_actions[object.tutorial_id])
 			warnings += list(list("text" = "Action [object.tutorial_id] is not used by any trigger.", "ref" = REF(object)))
+	warnings += babylon_tutorial_reachability_warnings()
 	var/has_complete = FALSE
 	for(var/obj/babylon_tutorial/action/complete/complete in GLOB.babylon_tutorial_objects)
 		has_complete = TRUE
@@ -593,6 +608,75 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	cached = warnings
 	cached_version = GLOB.babylon_tutorial_version
 	cached_time = world.time
+	return warnings
+
+/// The triggers that can start listening once this trigger fired: those waiting "After" it and
+/// those its Enable actions switch on.
+/proc/babylon_tutorial_trigger_successors(obj/babylon_tutorial/trigger/trigger)
+	var/list/next = list()
+	for(var/obj/babylon_tutorial/trigger/candidate in GLOB.babylon_tutorial_objects)
+		if(candidate.setting("starts") == "after" && candidate.setting("after") == trigger.tutorial_id)
+			next |= candidate
+	for(var/id in trigger.setting("actions"))
+		var/obj/babylon_tutorial/action/toggle/toggle = babylon_tutorial_find(id)
+		if(istype(toggle) && toggle.setting("mode") == "enable")
+			for(var/enabled_id in toggle.setting("triggers"))
+				var/obj/babylon_tutorial/trigger/enabled = babylon_tutorial_find(enabled_id)
+				if(istype(enabled))
+					next |= enabled
+	return next
+
+/// Triggers that can ever start listening: from those listening at the beginning, following
+/// "After" links and Enable actions. Returns trigger => TRUE.
+/proc/babylon_tutorial_reachable_triggers()
+	var/list/reachable = list()
+	var/list/queue = list()
+	for(var/obj/babylon_tutorial/trigger/trigger in GLOB.babylon_tutorial_objects)
+		if(trigger.listens_at_start())
+			reachable[trigger] = TRUE
+			queue += trigger
+	while(length(queue))
+		var/obj/babylon_tutorial/trigger/current = queue[1]
+		queue.Cut(1, 2)
+		for(var/obj/babylon_tutorial/trigger/next as anything in babylon_tutorial_trigger_successors(current))
+			if(!reachable[next])
+				reachable[next] = TRUE
+				queue += next
+	return reachable
+
+/// Warnings for triggers that can never start listening; "After" loops are named as such.
+/proc/babylon_tutorial_reachability_warnings()
+	var/list/warnings = list()
+	var/list/reachable = babylon_tutorial_reachable_triggers()
+	var/list/reported = list()
+	for(var/obj/babylon_tutorial/trigger/trigger in GLOB.babylon_tutorial_objects)
+		if(reachable[trigger] || reported[trigger])
+			continue
+		// Follow the "After" links: a loop back to an earlier trigger is a cycle.
+		var/list/path = list()
+		var/obj/babylon_tutorial/trigger/current = trigger
+		while(istype(current) && current.setting("starts") == "after" && !(current in path))
+			path += current
+			current = babylon_tutorial_find(current.setting("after"))
+		if(istype(current) && (current in path))
+			var/list/cycle = path.Copy(path.Find(current))
+			if(!reported[current])
+				var/list/names = list()
+				for(var/obj/babylon_tutorial/trigger/member as anything in cycle)
+					names += member.tutorial_id
+					reported[member] = TRUE
+				var/text = length(names) == 1 ? "[names[1]] waits for itself: it will never start." : "[english_list(names)] wait for each other: none of them will ever start."
+				warnings += list(list("text" = text, "ref" = REF(current)))
+			if(trigger in cycle)
+				continue
+		reported[trigger] = TRUE
+		var/starts = trigger.setting("starts")
+		var/text
+		if(starts == "manual")
+			text = "Trigger [trigger.tutorial_id] waits for an Enable action, but no reachable step enables it: it can never fire."
+		else
+			text = "Trigger [trigger.tutorial_id] waits for [trigger.setting("after") || "?"], which can never fire: it will never start."
+		warnings += list(list("text" = text, "ref" = REF(trigger)))
 	return warnings
 
 /// The overview warnings as plain text (tests, logs).
@@ -624,6 +708,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /// The fields of this trigger kind (the common trigger fields are added after them).
 /obj/babylon_tutorial/trigger/proc/own_schema()
 	return list()
+
+/obj/babylon_tutorial/trigger/set_setting(key, value)
+	if(key == "after" && trim("[value]") == tutorial_id)
+		return "A trigger can't wait for itself. Choose the trigger of the step before."
+	return ..()
 
 /obj/babylon_tutorial/trigger/store_settings(list/values)
 	if(isnull(values["starts"]) && values["enabled_at_start"] == 0)

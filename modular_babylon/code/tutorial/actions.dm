@@ -23,6 +23,27 @@
 		babylon_tutorial_field("until_trigger", "Until trigger", "id", "", null, filter = list("trigger"), when = list("until" = list("trigger")), required = TRUE),
 	)
 
+/// "Until the next step" on an action whose trigger has no next step lasts the full 10 minutes.
+/obj/babylon_tutorial/action/proc/until_issue()
+	if(setting("until") != "next")
+		return null
+	for(var/obj/babylon_tutorial/trigger/trigger in GLOB.babylon_tutorial_objects)
+		if((tutorial_id in trigger.setting("actions")) && !length(babylon_tutorial_triggers_after(trigger)))
+			return "No step comes after [trigger.tutorial_id], so this never ends before 10 minutes. Choose some seconds or a trigger."
+	return null
+
+/obj/babylon_tutorial/action/point/find_issues()
+	. = ..()
+	var/issue = until_issue()
+	if(issue)
+		.["until"] = issue
+
+/obj/babylon_tutorial/action/highlight/find_issues()
+	. = ..()
+	var/issue = until_issue()
+	if(issue)
+		.["until"] = issue
+
 /// How long something shown by an action lasts at most.
 /obj/babylon_tutorial/action/proc/show_duration()
 	return setting("until") == "seconds" ? setting("duration") SECONDS : 10 MINUTES
@@ -419,5 +440,5 @@
 			if(!test_run || !isliving(usr))
 				return FALSE
 			ui.close()
-			babylon_tutorial_begin(usr, TRUE, TRUE, TRUE)
+			babylon_tutorial_begin(usr, TRUE, TRUE, run?.reset_npcs)
 			return TRUE

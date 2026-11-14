@@ -628,28 +628,37 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 			wand.sync_view(TRUE)
 			return TRUE
 		if("search")
-			// At most five searches a second per window; results are cached per query.
-			if(world.time < next_search)
-				return FALSE
-			next_search = world.time + 2
+			// At most five searches a second per window; a query arriving sooner waits and runs
+			// when the window ends (the latest one wins), so the last keystroke is never lost.
 			var/key = "[params["key"]]"
 			var/list/field = babylon_tutorial_schema_field(object.type, key)
-			if(field?["type"] == "typepath")
-				var/query = copytext_char("[params["query"]]", 1, 64)
-				search = list("key" = key, "query" = query, "results" = babylon_tutorial_cached_search(field, query))
+			if(field?["type"] != "typepath")
+				return FALSE
+			var/query = copytext_char("[params["query"]]", 1, 64)
+			if(world.time < next_search)
+				if(!pending_search)
+					addtimer(CALLBACK(src, PROC_REF(run_pending_search)), next_search - world.time)
+				pending_search = list(key, query)
+				return FALSE
+			run_search(key, query)
 			return TRUE
 		if("new_linked")
 			// A new action on this trigger's tile, added to its action list, its settings opened.
 			var/key = "[params["key"]]"
 			var/list/field = babylon_tutorial_schema_field(object.type, key)
 			var/path = babylon_tutorial_kinds()["[params["kind"]]"]
-			if(field?["type"] != "idlist" || !ispath(path, /obj/babylon_tutorial/action))
+			var/list/filter = field?["filter"]
+			if(field?["type"] != "idlist" || !("action" in filter) || !ispath(path, /obj/babylon_tutorial/action))
 				return FALSE
 			var/obj/babylon_tutorial/created = new path(get_turf(object))
 			var/list/ids = object.setting(key)
 			ids = islist(ids) ? ids.Copy() : list()
 			ids += created.tutorial_id
-			object.set_setting(key, ids)
+			var/error = object.set_setting(key, ids)
+			if(error)
+				qdel(created)
+				set_notice(error, FALSE, key)
+				return TRUE
 			log_game("BABYLON TUTORIAL: [key_name(user)] placed [created.kind_name] [created.tutorial_id] for [object.tutorial_id].")
 			set_notice("Added [created.kind_name] \"[created.tutorial_id]\" to [object.tutorial_id]. Its settings are open.", TRUE)
 			wand.open_editor(user, created)
@@ -686,6 +695,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 				var/obj/babylon_tutorial/action/previewed = object
 				// Always a throwaway run: it never touches a test run, and no triggers listen.
 				var/datum/babylon_tutorial_run/run = new(user, TRUE)
+				run.preview = TRUE
 				run.enabled.Cut()
 				run.perform(null, previewed)
 				QDEL_IN(run, 60 SECONDS)
@@ -705,8 +715,26 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	return FALSE
 
 /datum/babylon_tutorial_editor
-	/// world.time before which another type search is refused.
+	/// world.time before which another type search waits.
 	var/next_search = 0
+	/// The latest search that arrived too soon: list(key, query).
+	var/list/pending_search
+
+/datum/babylon_tutorial_editor/proc/run_search(key, query)
+	var/obj/babylon_tutorial/object = object_ref?.resolve()
+	var/list/field = object && babylon_tutorial_schema_field(object.type, key)
+	if(!field)
+		return
+	next_search = world.time + 2
+	search = list("key" = key, "query" = query, "results" = babylon_tutorial_cached_search(field, query))
+
+/datum/babylon_tutorial_editor/proc/run_pending_search()
+	if(QDELETED(src) || !pending_search)
+		return
+	var/list/waiting = pending_search
+	pending_search = null
+	run_search(waiting[1], waiting[2])
+	SStgui.update_uis(src)
 
 /// Type search results, cached per base and query (the last 50 queries).
 /proc/babylon_tutorial_cached_search(list/field, query)

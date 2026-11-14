@@ -481,3 +481,58 @@
 		log_world("test_tutorial_review failed: [error] ([error.file]:[error.line])")
 	babylon_tutorial_test_cleanup(made)
 	return result
+
+/// Review round 2: loops and unreachable steps are named, a trigger can't wait for itself, a
+/// fired once-trigger is never revived, previews leave the run's objective alone and images on
+/// the player keep the run's own handler.
+/datum/babylon_save/proc/test_tutorial_chains()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(70)
+	try
+		var/obj/babylon_tutorial/trigger/timer/first = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "chain_a", list("seconds" = 1), made)
+		var/obj/babylon_tutorial/trigger/timer/second = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "chain_b", list("seconds" = 1, "starts" = "after", "after" = "chain_a"), made)
+		result["self_wait_refused"] = !!first.set_setting("after", "chain_a")
+		// chain_a waits for chain_b and chain_b for chain_a: a loop nobody can enter.
+		first.set_setting("starts", "after")
+		first.set_setting("after", "chain_b")
+		var/found_cycle = FALSE
+		for(var/text in babylon_tutorial_overview_texts())
+			if(findtext(text, "wait for each other") && findtext(text, "chain_a") && findtext(text, "chain_b"))
+				found_cycle = TRUE
+		result["cycle_named"] = found_cycle
+		var/obj/babylon_tutorial/trigger/timer/orphan = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "chain_c", list("seconds" = 1, "starts" = "after", "after" = "chain_b"), made)
+		var/found_unreachable = FALSE
+		for(var/text in babylon_tutorial_overview_texts())
+			if(findtext(text, "Trigger chain_c waits for chain_b, which can never fire"))
+				found_unreachable = TRUE
+		result["unreachable_named"] = found_unreachable
+		// Entered through an Enable action, the loop runs each once-trigger once, then stops.
+		var/mob/living/carbon/human/player = new(base)
+		made += player
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, FALSE, TRUE)
+		run.set_enabled(first, TRUE)
+		run.fire(first)
+		run.fire(second)
+		result["once_trigger_not_revived"] = !run.is_enabled(first) && run.fired[first] == 1
+		run.set_enabled(first, TRUE)
+		result["fired_once_stays_off"] = !run.is_enabled(first)
+		result["orphan_listens_after_loop_step"] = run.is_enabled(orphan)
+		// Previews show their objective in chat only; the real run's alert stays.
+		run.set_objective("Real goal", "Guide")
+		var/datum/babylon_tutorial_run/preview = new(player, TRUE)
+		preview.preview = TRUE
+		preview.set_objective("Preview goal", "Guide")
+		qdel(preview)
+		var/atom/movable/screen/alert/babylon_tutorial_objective/alert = player.alerts["babylon_tutorial_objective"]
+		result["preview_leaves_objective"] = alert && findtext(alert.maptext, "Real goal") && run.objective == "Real goal"
+		// An image anchored to the player does not take over the run's deletion handler.
+		var/image/mark = image('icons/hud/screen_gen.dmi', player, "arrow")
+		run.show_image(mark, 5 SECONDS, player)
+		qdel(player)
+		result["player_deletion_still_ends_run"] = QDELETED(run)
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_chains failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_test_cleanup(made)
+	return result

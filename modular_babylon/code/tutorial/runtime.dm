@@ -80,6 +80,7 @@ SUBSYSTEM_DEF(babylon_tutorial)
 			player.forceMove(start)
 	babylon_tutorial_spawn_start_npcs(reset_npcs)
 	var/datum/babylon_tutorial_run/run = new(player, test_run)
+	run.reset_npcs = reset_npcs
 	SSbabylon_tutorial.runs[player] = run
 	SSbabylon_tutorial.refresh_hooks()
 	log_game("BABYLON TUTORIAL: [key_name(player)] started a tutorial run[test_run ? " (test)" : ""].")
@@ -140,6 +141,10 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/datum/babylon_tutorial_complete/complete_screen
 	/// The objective shown on the player's screen, if any.
 	var/objective
+	/// A throwaway run previewing one action: it never touches the player's objective alert.
+	var/preview = FALSE
+	/// The run was started with "Reset NPCs" (Run again does the same).
+	var/reset_npcs = FALSE
 
 /datum/babylon_tutorial_run/New(mob/living/player, test_run)
 	src.player = player
@@ -211,6 +216,9 @@ SUBSYSTEM_DEF(babylon_tutorial)
 
 /datum/babylon_tutorial_run/proc/set_enabled(obj/babylon_tutorial/trigger/trigger, enable)
 	if(QDELETED(trigger))
+		return
+	// A trigger that fires only once stays done: loops of steps cannot revive it.
+	if(enable && fired[trigger] && trigger.setting("once"))
 		return
 	if(enable)
 		enabled[trigger] = world.time
@@ -322,7 +330,8 @@ SUBSYSTEM_DEF(babylon_tutorial)
 /// is deleted, the image goes. clear_on: triggers whose firing removes it early.
 /datum/babylon_tutorial_run/proc/show_image(image/picture, duration, atom/anchor, list/clear_on)
 	images[picture] = list("until" = world.time + duration, "anchor" = anchor ? WEAKREF(anchor) : null, "clear_on" = clear_on ? clear_on.Copy() : list())
-	if(anchor)
+	// The player's own deletion ends the whole run (player_deleted): never replace that handler.
+	if(anchor && anchor != player)
 		RegisterSignal(anchor, COMSIG_QDELETING, PROC_REF(anchor_deleted), override = TRUE)
 	player.client?.images += picture
 	timers += addtimer(CALLBACK(src, PROC_REF(expire_images)), duration + 1, TIMER_STOPPABLE)
@@ -388,6 +397,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 /datum/babylon_tutorial_run/proc/set_objective(text, title = "Guide")
 	objective = text
 	if(!player)
+		return
+	if(preview)
+		// The on-screen objective belongs to the player's real run (if any): only tell.
+		if(length(text))
+			to_chat(player, span_notice("<b>Objective (preview):</b> [html_encode(text)]"))
 		return
 	if(!length(text))
 		player.clear_alert("babylon_tutorial_objective", TRUE)

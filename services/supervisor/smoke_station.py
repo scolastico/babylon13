@@ -243,7 +243,7 @@ def main():
                         world_flags=checks(run, "test_station_world_flags"))
         # Tutorial objects, triggers, actions and NPCs in a running tutorial round.
         # Every test reports before any failure is raised, so one run shows all problems.
-        for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review"):
+        for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains"):
             result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
             tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
         for proc, values in tutorial.items():

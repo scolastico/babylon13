@@ -134,7 +134,9 @@ describe('BabylonTutorialObject', () => {
     show({
       values: { ...base.values, style: 'speaker', speaker: 'ghost' },
     });
-    expect(screen.getByText('ghost (missing)')).toBeDefined();
+    // Shown once, in the picker itself (the issue line explains it).
+    expect(screen.getAllByPlaceholderText('ghost (missing)').length).toBe(1);
+    expect(screen.queryByText('ghost (missing)')).toBeNull();
   });
 
   it("lists a trigger's actions by summary", () => {

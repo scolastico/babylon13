@@ -409,6 +409,7 @@ const IdPicker = (props: {
             width="100%"
             searchInput
             selected={props.value}
+            color={current || !props.value ? undefined : 'average'}
             displayText={
               current
                 ? describeId(current)
@@ -436,11 +437,6 @@ const IdPicker = (props: {
           </Stack.Item>
         )}
       </Stack>
-      {props.value && !current && (
-        <Box color="average" mt={0.25}>
-          {props.value} (missing)
-        </Box>
-      )}
     </Box>
   );
 };
@@ -590,6 +586,7 @@ const TypeInput = (props: { field: Field }) => {
       </Box>
       <Input
         fluid
+        expensive={300}
         value={query}
         placeholder={field.placeholder || 'Search...'}
         onChange={(value: string) => {
