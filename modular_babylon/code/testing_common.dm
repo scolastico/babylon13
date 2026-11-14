@@ -88,7 +88,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 /datum/babylon_debug/proc/admin_request(action, list/request)
 #ifdef BABYLON_STATION
 	var/datum/target = resolve_target(request["target"] || "session")
-#else
+#elif defined(BABYLON_DRONE)
 	var/datum/target = resolve_target(request["target"] || "builder")
 #endif
 	if(action == "find")
@@ -409,7 +409,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	owner.play_time = owner_before
 #ifdef BABYLON_DRONE
 	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
-#else
+#elif defined(BABYLON_STATION)
 	// Someone playing counts for the world and for themselves.
 	var/datum/babylon_player/record = ensure_station_player("babylonsmokeplayer")
 	result["station_player_record"] = record?.ckey == "babylonsmokeplayer" && player_sessions["babylonsmokeplayer"] == record
@@ -494,7 +494,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 #ifdef BABYLON_STATION
 	var/minutes = text2num(world.params["babylon-autosave-minutes"])
 	result["station_autosave_interval"] = autosave_interval == ((isnum(minutes) && minutes >= 1) ? round(minutes) MINUTES : 30 MINUTES)
-#else
+#elif defined(BABYLON_DRONE)
 	result["babylon_autosave_every_15_minutes"] = autosave_interval == 15 MINUTES
 #endif
 	var/obj/structure/closet/crate/crate = new(respawn_turf)

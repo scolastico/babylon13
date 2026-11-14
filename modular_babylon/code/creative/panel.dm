@@ -472,6 +472,6 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 #ifdef BABYLON_DRONE
 	var/datum/babylon_player/player = GLOB.babylon_save?.player_sessions[user?.ckey]
 	return !!player?.respawn_pending
-#else
+#elif defined(BABYLON_STATION)
 	return FALSE
 #endif

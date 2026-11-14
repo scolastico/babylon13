@@ -67,7 +67,7 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_is_station_build()
 #ifdef BABYLON_STATION
 	return TRUE
-#else
+#elif defined(BABYLON_DRONE)
 	return FALSE
 #endif
 
@@ -157,7 +157,7 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	var/datum/babylon_save/session = GLOB.babylon_save
 #ifdef BABYLON_STATION
 	return session && !session.boot_error && session.prepared && session.respawn_turf && Master.init_stage_completed >= INITSTAGE_MAX && SSticker.current_state >= (session.round_mode == "hold" ? GAME_STATE_PREGAME : GAME_STATE_PLAYING)
-#else
+#elif defined(BABYLON_DRONE)
 	return !!session?.ready
 #endif
 
@@ -172,8 +172,8 @@ var/global/babylon_byond_1686_slot_pad_shared
 // babylon-test.dme
 #elif defined(BABYLON_DRONE)
 // babylon.dme
-#elif defined(BABYLON_TESTING)
+#elif defined(BABYLON_STATION) && defined(BABYLON_TESTING)
 // babylon-station-test.dme
-#else
+#elif defined(BABYLON_STATION)
 // babylon-station.dme
 #endif

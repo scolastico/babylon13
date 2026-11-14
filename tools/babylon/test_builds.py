@@ -76,6 +76,30 @@ class BuildSplitTest(unittest.TestCase):
                 if path.name != "babylon.dm" and "BABYLON_STATION" in path.read_text(errors="ignore"):
                     self.assertNotRegex(path.read_text(errors="ignore"), negative, path.relative_to(ROOT).as_posix())
 
+    def test_build_define_arms_name_their_build(self):
+        # An #else arm of "#ifdef BABYLON_STATION" is "not the station build" again: each arm of a
+        # conditional on a game build define names its build (#elif defined(BABYLON_DRONE)).
+        problems = []
+        folders = ["code"] + sorted(p.name for p in ROOT.glob("modular_*") if p.is_dir())
+        for folder in folders:
+            for path in (ROOT / folder).rglob("*.dm"):
+                text = path.read_text(errors="ignore")
+                if path.name == "babylon.dm" or not re.search(r"BABYLON_(STATION|DRONE)", text):
+                    continue
+                stack = []
+                for number, line in enumerate(text.splitlines(), 1):
+                    directive = line.strip()
+                    if directive.startswith("#if"):
+                        stack.append(bool(re.search(r"BABYLON_(STATION|DRONE)", directive)))
+                    elif directive.startswith("#endif"):
+                        stack.pop()
+                    elif stack and stack[-1] and directive.startswith("#else"):
+                        problems.append("%s:%d" % (path.relative_to(ROOT).as_posix(), number))
+                    elif stack and stack[-1] and directive.startswith("#elif") \
+                            and not re.search(r"(?<!!)defined\(BABYLON_(STATION|DRONE)\)", directive):
+                        problems.append("%s:%d" % (path.relative_to(ROOT).as_posix(), number))
+        self.assertEqual(problems, [])
+
     def test_test_builds_wrap_the_game_builds(self):
         for test, game in (("babylon-test.dme", "babylon.dme"), ("babylon-station-test.dme", "babylon-station.dme")):
             text = (ROOT / test).read_text()
