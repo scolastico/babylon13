@@ -89,6 +89,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/list/levels = GLOB.babylon_save?.persisted_levels()
 	return length(levels) ? levels : SSmapping.levels_by_trait(ZTRAIT_STATION)
 
+/// "2 tiles with a player on them (no free tile to move them to)"
+/proc/babylon_area_occupied_text(count)
+	return "[count] tile[count == 1 ? "" : "s"] with a player on [count == 1 ? "it" : "them"] (no free tile to move them to)"
+
 /// "12×8 (96 tiles)"
 /proc/babylon_area_size_text(width, height)
 	var/tiles = width * height
@@ -218,12 +222,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return null
 
 /// Removes objects and non-player mobs from tiles; players are moved out of the rectangle first.
-/// Returns counts: list("objects", "tutorial", "mobs", "moved", "kept").
+/// Returns counts: list("objects", "tutorial", "mobs", "moved", "kept", "occupied").
+/// occupied: tiles kept as they were because a player could not be moved off them.
 /// Each tile is handled within one tick: its players (also inside lockers, body bags, mechs) are
 /// moved out, then its contents go, so nobody can step or be put in between.
 /// turf_path: then the tile becomes this turf, in the same tick (Clear).
 /proc/babylon_area_clear_tiles(list/tiles, list/rect, turf_path)
-	var/list/counts = list("objects" = 0, "tutorial" = 0, "mobs" = 0, "moved" = 0, "kept" = 0)
+	var/list/counts = list("objects" = 0, "tutorial" = 0, "mobs" = 0, "moved" = 0, "kept" = 0, "occupied" = 0)
 	for(var/turf/tile as anything in tiles)
 		counts["moved"] += babylon_area_evict(list(tile), rect, FALSE)
 		for(var/mob/living/body in tile)
@@ -258,20 +263,36 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			counts[istype(thing, /obj/babylon_tutorial) ? "tutorial" : "objects"]++
 			babylon_area_delete(thing)
 		if(turf_path && tile.type != turf_path)
-			babylon_area_change_turf(tile, turf_path, babylon_area_air_flags(tile))
+			// No free tile for a player still here (also inside something): no wall around them.
+			if(ispath(turf_path, /turf/closed) && babylon_area_player_on(tile))
+				counts["occupied"]++
+			else
+				babylon_area_change_turf(tile, turf_path, babylon_area_air_flags(tile))
 		BABYLON_AREA_TICK
 	return counts
 
-/// After a map load: players who walked into the footprint while it loaded and now stand in a
-/// wall or a dense object are moved out.
-/proc/babylon_area_rescue(list/rect)
+/// A player is on a tile or inside something on it.
+/proc/babylon_area_player_on(turf/tile)
+	for(var/mob/living/body in tile.get_all_contents())
+		if(babylon_area_is_player(body))
+			return TRUE
+	return FALSE
+
+/// After a map load: players who walked into the footprint while it loaded, or could not be moved
+/// out before it, and now stand in a wall or a dense object are moved out. Where no free tile is
+/// found, a wall with a player in it becomes plating.
+/// away: the rectangle they are moved out of (the footprint; tests pass one with no free tile).
+/proc/babylon_area_rescue(list/rect, list/away = rect)
 	. = 0
 	for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
 		if(!isclosedturf(tile) && !tile.is_blocked_turf(TRUE))
 			continue
 		for(var/mob/living/body in tile.get_all_contents())
-			if(babylon_area_is_player(body) && babylon_area_move_out(body, rect))
+			if(babylon_area_is_player(body) && babylon_area_move_out(body, away))
 				.++
+		if(isclosedturf(tile) && !babylon_area_locked(tile) && babylon_area_player_on(tile))
+			log_world("BABYLON AREA: no free tile for a player in a pasted wall at [tile.x],[tile.y],[tile.z]; it becomes plating.")
+			babylon_area_change_turf(tile, /turf/open/floor/plating, babylon_area_air_flags(tile))
 
 /// Deletes one thing; a runtime in its Destroy is logged and does not stop the operation.
 /proc/babylon_area_delete(datum/thing)
@@ -325,44 +346,53 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// The pipes and devices of a loaded copy, instead of tg's template setup (which builds the
 /// copy's pipenets at once and then crashes or leaves split nets where they meet existing ones,
 /// especially devices such as a pump next to a vent):
-/// 1. every loaded machine finds its nodes (atmos_init);
-/// 2. on the edge, the pipe or device outside finds the loaded one too, so links go both ways
-///    (a one-way link is dropped: it would break both pipes' deletion later);
-/// 3. the outside machines' pipenets are dropped (a pipeline keeps its gas in its pipes when it is
-///    deleted; a net of devices only is let go by its devices, tg deletes it then);
+/// 1. every loaded machine finds its nodes (atmos_init); a multi-deck pipe also links to the
+///    multi-deck pipes above and below it now (tg does that only when it builds the pipenet);
+/// 2. a node that is not one of the loaded machines (around the paste, on another deck, or a
+///    machine that stayed in the footprint) finds the loaded one too, so links go both ways (a
+///    one-way link is dropped: it would break both pipes' deletion later);
+/// 3. those outside machines' pipenets are dropped (a pipeline keeps its gas in its pipes when it
+///    is deleted; a net of devices only is let go by its devices, tg deletes it then);
 /// 4. everything is queued: the air subsystem builds one network across the edge, as when pipes
 ///    are built by hand.
-/proc/babylon_area_setup_pipes(list/machines, list/rect)
+/// machines: only the machines this paste loaded.
+/proc/babylon_area_setup_pipes(list/machines)
 	var/list/nets = list()
 	var/list/rebuild = list()
+	var/list/loaded = list()
+	for(var/obj/machinery/atmospherics/machine as anything in machines)
+		loaded[machine] = TRUE
 	for(var/obj/machinery/atmospherics/machine as anything in machines)
 		if(QDELETED(machine))
 			continue
 		try
 			machine.atmos_init()
+			if(istype(machine, /obj/machinery/atmospherics/pipe/multiz))
+				machine.pipeline_expansion()
 		catch(var/exception/init_failure)
 			GLOB.babylon_area_link_failures++
 			log_world("BABYLON AREA: setting up [machine.type] failed: [init_failure] ([init_failure.file]:[init_failure.line])")
 		rebuild |= machine
-	for(var/turf/tile as anything in babylon_area_edge(rect[1], rect[2], rect[3], rect[4], rect[5]))
-		for(var/obj/machinery/atmospherics/machine in tile)
-			for(var/obj/machinery/atmospherics/node in machine.nodes.Copy())
-				var/turf/node_tile = get_turf(node)
-				if(!node_tile || (node_tile.x >= rect[1] && node_tile.x <= rect[3] && node_tile.y >= rect[2] && node_tile.y <= rect[4]))
-					continue
+	for(var/obj/machinery/atmospherics/machine as anything in machines)
+		if(QDELETED(machine))
+			continue
+		for(var/obj/machinery/atmospherics/node in machine.nodes.Copy())
+			if(loaded[node])
+				continue
+			if(!QDELETED(node) && get_turf(node))
 				try
 					node.atmos_init()
 				catch(var/exception/failure)
 					GLOB.babylon_area_link_failures++
 					log_world("BABYLON AREA: connecting [machine.type] to [node.type] failed: [failure] ([failure.file]:[failure.line])")
-				if(machine in node.nodes)
-					nets |= node.return_pipenets()
-					rebuild |= node
-				else
-					var/index = machine.nodes.Find(node)
-					if(index)
-						machine.nodes[index] = null
-						machine.update_appearance()
+			if(!QDELETED(node) && (machine in node.nodes))
+				nets |= node.return_pipenets()
+				rebuild |= node
+			else
+				var/index = machine.nodes.Find(node)
+				if(index)
+					machine.nodes[index] = null
+					machine.update_appearance()
 	for(var/datum/pipeline/net as anything in nets)
 		if(net && !QDELETED(net))
 			try
@@ -379,10 +409,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		if(!QDELETED(machine))
 			SSair.add_to_rebuild_queue(machine)
 
-/// Pipes on a rectangle's edge that list an outside pipe which does not list them back (tests).
+/// Pipes in a rectangle that list a pipe which does not list them back (tests).
 /proc/babylon_area_one_way_nodes(list/rect)
 	. = 0
-	for(var/turf/tile as anything in babylon_area_edge(rect[1], rect[2], rect[3], rect[4], rect[5]))
+	for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
 		for(var/obj/machinery/atmospherics/machine in tile)
 			for(var/obj/machinery/atmospherics/node in machine.nodes)
 				if(!(machine in node.nodes))
@@ -689,13 +719,14 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	// The copy replaces the turfs it covers.
 	should_place_on_top = FALSE
 
-/// As tg's, except that pipes and devices are set up by babylon_area_setup_pipes(), which joins
-/// them to the pipes around the paste properly.
+/// A copy of tg's /datum/map_template/proc/initTemplateBounds (code/modules/mapping/map_template.dm;
+/// merge upstream changes here), except that the pipes and devices this paste loaded are set up by
+/// babylon_area_setup_pipes(), which joins them to the pipes around the paste properly.
 /datum/map_template/babylon_clipboard/initTemplateBounds(list/bounds)
 	if(!bounds)
 		stack_trace("[name] template failed to initialize correctly!")
 		return
-	var/list/obj/machinery/atmospherics/atmos_machines = list()
+	var/list/obj/machinery/atmospherics/loaded_machines = list()
 	var/list/obj/structure/cable/cables = list()
 	var/list/atom/movable/movables = list()
 	var/list/area/areas = list()
@@ -712,14 +743,17 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				cables += movable_in_turf
 				continue
 			if(istype(movable_in_turf, /obj/machinery/atmospherics))
-				atmos_machines += movable_in_turf
+				// Not initialized yet: loaded by this paste (not a machine that stayed in the footprint).
+				var/obj/machinery/atmospherics/machine = movable_in_turf
+				if(!(machine.flags_1 & INITIALIZED_1))
+					loaded_machines += machine
 	SSmapping.reg_in_areas_in_z(areas)
 	if(!SSatoms.initialized)
 		return
 	SSatoms.InitializeAtoms(areas + turfs + movables, returns_created_atoms ? created_atoms : null)
 	SSlighting.setup_static_lighting_if_needed(turfs)
 	SSmachines.setup_template_powernets(cables)
-	babylon_area_setup_pipes(atmos_machines, list(bounds[MAP_MINX], bounds[MAP_MINY], bounds[MAP_MAXX], bounds[MAP_MAXY], bounds[MAP_MINZ]))
+	babylon_area_setup_pipes(loaded_machines)
 	for(var/turf/affected_turf as anything in block(bounds[MAP_MINX] - 1, bounds[MAP_MINY] - 1, bounds[MAP_MINZ], bounds[MAP_MAXX] + 1, bounds[MAP_MAXY] + 1, bounds[MAP_MAXZ]))
 		affected_turf.air_update_turf(TRUE, TRUE)
 		affected_turf.levelupdate()
@@ -920,9 +954,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return list(tile.x, tile.y, tile.z, "[tile.type]", tile.dir, gas)
 
 /// Puts a material on tiles (Fill and Border). journal: gets the turfs' old states ("turfs") and
-/// the structures made ("made"). Returns counts: list("changed", "locked", "skipped").
+/// the structures made ("made"). Returns counts: list("changed", "locked", "skipped", "occupied").
+/// occupied: tiles left alone because a player could not be moved off them.
 /proc/babylon_area_put(list/tiles, path, only_empty, list/rect, list/journal)
-	var/list/counts = list("changed" = 0, "locked" = 0, "skipped" = 0)
+	var/list/counts = list("changed" = 0, "locked" = 0, "skipped" = 0, "occupied" = 0)
 	var/is_turf = ispath(path, /turf)
 	var/obj/structure_path = path
 	var/blocks = is_turf ? ispath(path, /turf/closed) : initial(structure_path.density)
@@ -940,7 +975,12 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		else if(isclosedturf(tile) || (locate(path) in tile))
 			continue
 		if(blocks)
-			babylon_area_evict(list(tile), rect)
+			// In the same tick as the change: nobody steps back in between.
+			babylon_area_evict(list(tile), rect, FALSE)
+			// No free tile for a player still here (also inside something): nothing solid on them.
+			if(babylon_area_player_on(tile))
+				counts["occupied"]++
+				continue
 		if(is_turf)
 			journal["turfs"] += list(babylon_area_turf_record(tile))
 			babylon_area_change_turf(tile, path, babylon_area_air_flags(tile))
@@ -1298,6 +1338,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/list/notes = list()
 	if(counts["skipped"])
 		notes += "[counts["skipped"]] tile\s that were not empty"
+	if(counts["occupied"])
+		notes += babylon_area_occupied_text(counts["occupied"])
 	if(counts["locked"])
 		notes += babylon_area_protected_text(counts["locked"])
 	return result("[verb_name]: [counts["changed"]] tile\s now [material["name"]][length(notes) ? " (left alone: [english_list(notes)])" : ""].", TRUE)
@@ -1354,6 +1396,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		notes += "[babylon_area_protected_text(locked)] left alone"
 	if(counts["kept"])
 		notes += "[counts["kept"]] protected object\s kept"
+	if(counts["occupied"])
+		notes += "[babylon_area_occupied_text(counts["occupied"])] left as they were"
 	return result("Cleared [size]: removed [english_list(parts)][length(notes) ? "; [english_list(notes)]" : ""]. Undo puts the area back approximately (floor markings and machine settings are lost).", TRUE)
 
 /// Undoes the last operation. Returns list("text", "ok").
@@ -1367,6 +1411,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	last_op = null
 	var/note = ""
 	var/tiles = 0
+	var/occupied = 0
 	try
 		if(step["kind"] == "turfs")
 			for(var/datum/weakref/made_ref as anything in step["made"])
@@ -1382,9 +1427,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				var/path = text2path(record[4])
 				if(!tile || !ispath(path, /turf))
 					continue
-				// Players who walked in since must not end up inside a wall again.
+				// Players who walked in since must not end up inside a wall again (moved out in the
+				// same tick as the change; one who can't be moved keeps the open tile).
 				if(ispath(path, /turf/closed) && step["rect"])
-					babylon_area_evict(list(tile), step["rect"])
+					babylon_area_evict(list(tile), step["rect"], FALSE)
+					if(babylon_area_player_on(tile))
+						occupied++
+						continue
 				tile = babylon_area_change_turf(tile, path, CHANGETURF_INHERIT_AIR)
 				tile.setDir(record[5])
 				if(record[6] && isopenturf(tile))
@@ -1409,6 +1458,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	finish(tiles)
 	if(error)
 		return result(error, FALSE)
+	if(occupied)
+		note += " [capitalize(babylon_area_occupied_text(occupied))] stayed open."
 	return result("Undone: [step["label"]].[note]", TRUE)
 
 /// Sets one of the window's options. Returns an error or null.

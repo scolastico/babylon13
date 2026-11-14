@@ -38,6 +38,22 @@
 		if(findtext(key, "areatest_") == 1)
 			GLOB.babylon_area_sessions -= key
 
+/// Links a deck to the one above it for a test (the test maps have no multi-deck station).
+/// Returns what babylon_area_test_unlink_decks() needs to undo it, or null.
+/proc/babylon_area_test_link_decks(lower, upper)
+	if(lower < 1 || upper != lower + 1 || length(SSmapping.multiz_levels) < upper || !islist(SSmapping.multiz_levels[lower]) || !islist(SSmapping.multiz_levels[upper]))
+		return null
+	var/list/saved = list(lower, upper, SSmapping.multiz_levels[lower][Z_LEVEL_UP], SSmapping.multiz_levels[upper][Z_LEVEL_DOWN])
+	SSmapping.multiz_levels[lower][Z_LEVEL_UP] = TRUE
+	SSmapping.multiz_levels[upper][Z_LEVEL_DOWN] = TRUE
+	return saved
+
+/proc/babylon_area_test_unlink_decks(list/saved)
+	if(!saved)
+		return
+	SSmapping.multiz_levels[saved[1]][Z_LEVEL_UP] = saved[3]
+	SSmapping.multiz_levels[saved[2]][Z_LEVEL_DOWN] = saved[4]
+
 /// Every tile of a rectangle is of a turf type.
 /proc/babylon_area_test_all(list/tiles, path)
 	for(var/turf/tile as anything in tiles)
@@ -263,6 +279,7 @@
 	var/y1 = rect[2]
 	var/datum/babylon_area_session/setup
 	var/list/made = list()
+	var/list/linked_decks
 	try
 		setup = area_test_setup(rect)
 		var/datum/babylon_area_session/session = babylon_area_test_session("roundtrip")
@@ -387,6 +404,30 @@
 		var/obj/machinery/atmospherics/components/unary/vent_pump/vent = new(locate(x1 + 7, y1 + 2, z), TRUE, EAST)
 		made += vent
 		vent.on_construction(null, vent.pipe_color, vent.piping_layer)
+		// A multi-deck pipe in the copy, and a built one on the next deck where it lands: the
+		// pasted pipe links to it across decks, so its pipenet must be rebuilt as one.
+		var/obj/machinery/atmospherics/pipe/multiz/scrubbers/visible/riser = new(locate(x1 + 1, y1 + 3, z))
+		made += riser
+		var/obj/machinery/atmospherics/pipe/multiz/scrubbers/visible/deck_pipe
+		var/datum/pipeline/deck_net_before
+		for(var/other_z in list(z + 1, z - 1))
+			var/turf/deck_tile = locate(x1 + 9, y1 + 3, other_z)
+			if(!deck_tile || (deck_tile.turf_flags & RESERVATION_TURF))
+				continue
+			linked_decks = babylon_area_test_link_decks(min(z, other_z), max(z, other_z))
+			if(!linked_decks)
+				continue
+			deck_pipe = new(deck_tile)
+			made += deck_pipe
+			deck_pipe.on_construction(null, deck_pipe.pipe_color, deck_pipe.piping_layer)
+			break
+		result["multiz_case_built"] = !!deck_pipe
+		for(var/wait in 1 to 100)
+			if(!deck_pipe || deck_pipe.parent)
+				break
+			sleep(1)
+		deck_net_before = deck_pipe?.parent
+		result["multiz_deck_pipe_has_pipenet"] = !!deck_net_before
 		var/failures_before = GLOB.babylon_area_link_failures
 		session.copy(null)
 		player.forceMove(locate(x1 + 10, y1 + 1, z))
@@ -394,11 +435,12 @@
 		session.click(locate(x1 + 8, y1, z))
 		result["paste_ok"] = session.paste(null)["ok"]
 		var/obj/structure/cable/pasted_cable = locate() in locate(x1 + 9, y1 + 1, z)
-		var/obj/machinery/atmospherics/pipe/pasted_pipe = locate() in locate(x1 + 8, y1 + 1, z)
+		var/obj/machinery/atmospherics/pipe/pasted_pipe = locate(/obj/machinery/atmospherics/pipe/smart) in locate(x1 + 8, y1 + 1, z)
+		var/obj/machinery/atmospherics/pipe/multiz/pasted_riser = locate() in locate(x1 + 9, y1 + 3, z)
 		result["paste_cable_in_powernet"] = !!pasted_cable?.powernet
 		// One live pipenet across the paste edge once the air subsystem rebuilt it.
 		for(var/wait in 1 to 100)
-			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent && vent.parents[1])
+			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent && vent.parents[1] && (!deck_pipe || (pasted_riser?.parent && deck_pipe.parent)))
 				break
 			sleep(1)
 		var/datum/pipeline/net = pasted_pipe?.parent
@@ -418,6 +460,24 @@
 		var/obj/machinery/atmospherics/components/binary/pump/pasted_pump = locate() in locate(x1 + 8, y1 + 2, z)
 		var/datum/pipeline/device_net = vent.parents[1]
 		result["paste_pump_joins_vent"] = !!pasted_pump && !!device_net && !QDELETED(device_net) && (device_net in pasted_pump.parents)
+		// The pasted multi-deck pipe and the one on the next deck: linked both ways, one live
+		// pipeline, each in exactly one, and the deck pipe's old pipeline is gone.
+		if(deck_pipe)
+			result["multiz_pasted"] = !!pasted_riser
+			result["multiz_link_two_way"] = !!pasted_riser && (deck_pipe in pasted_riser.nodes) && (pasted_riser in deck_pipe.nodes)
+			var/datum/pipeline/deck_net = deck_pipe.parent
+			result["multiz_one_live_pipeline"] = !!deck_net && !QDELETED(deck_net) && (deck_net in SSair.networks) && pasted_riser?.parent == deck_net
+			var/riser_nets = 0
+			var/deck_nets = 0
+			for(var/datum/pipeline/any_net as anything in SSair.networks)
+				if(pasted_riser && (pasted_riser in any_net.members))
+					riser_nets++
+				if(deck_pipe in any_net.members)
+					deck_nets++
+			result["multiz_each_in_one_pipeline"] = riser_nets == 1 && deck_nets == 1
+			result["multiz_no_stale_pipeline"] = !!deck_net_before && deck_net != deck_net_before && !!(QDELETED(deck_net_before) || !(deck_net_before in SSair.networks))
+			if(!result["multiz_each_in_one_pipeline"] || !result["multiz_no_stale_pipeline"] || !result["multiz_link_two_way"])
+				result["multiz details: riser nets [riser_nets], deck nets [deck_nets], old net deleted [QDELETED(deck_net_before)], riser nodes [jointext(pasted_riser?.nodes || list(), " ")], deck nodes [jointext(deck_pipe.nodes, " ")]"] = FALSE
 		var/turf/open/pasted_floor = locate(x1 + 11, y1 + 2, z)
 		result["paste_air_sane"] = istype(pasted_floor) && pasted_floor.return_air().return_pressure() > 50
 		player_tile = get_turf(player)
@@ -425,6 +485,10 @@
 		session.undo(null)
 		result["paste_undone"] = !(locate(/obj/structure/cable) in locate(x1 + 9, y1 + 1, z))
 		result["no_one_way_pipes"] = !babylon_area_one_way_nodes(list(x1 + 8, y1, x1 + 13, y1 + 4, z))
+		if(deck_pipe)
+			result["multiz_undo_unlinks"] = !QDELETED(deck_pipe) && !(pasted_riser in deck_pipe.nodes) && GLOB.babylon_area_link_failures == failures_before
+		babylon_area_test_unlink_decks(linked_decks)
+		linked_decks = null
 		// Clear to a wall material: a player in the area ends up beside it, not inside a wall.
 		session.set_option("material", "[/turf/closed/wall]")
 		session.set_option("clear_to", "material")
@@ -434,6 +498,24 @@
 		result["clear_to_wall_moves_player"] = !QDELETED(player) && !isclosedturf(player_tile) && !(player_tile in room)
 		session.undo(null)
 		session.set_option("clear_to", "plating")
+		// A player with no free tile to go to (the rectangle they are moved out of lies on a deck
+		// that does not exist): Clear and Fill to a wall leave their tile open, and a pasted wall
+		// they stand in becomes plating.
+		var/turf/stuck_tile = locate(x1 + 3, y1 + 2, z)
+		player.forceMove(stuck_tile)
+		var/list/nowhere = list(x1 + 3, y1 + 2, x1 + 3, y1 + 2, world.maxz + 1)
+		var/list/stuck_clear = babylon_area_clear_tiles(list(stuck_tile), nowhere, /turf/closed/wall)
+		stuck_tile = locate(x1 + 3, y1 + 2, z)
+		result["clear_keeps_occupied_tile_open"] = stuck_clear["occupied"] == 1 && !isclosedturf(stuck_tile) && get_turf(player) == stuck_tile && !QDELETED(player)
+		var/list/stuck_journal = list("turfs" = list(), "made" = list())
+		var/list/stuck_fill = babylon_area_put(list(stuck_tile), /turf/closed/wall, FALSE, nowhere, stuck_journal)
+		stuck_tile = locate(x1 + 3, y1 + 2, z)
+		result["fill_keeps_occupied_tile_open"] = stuck_fill["occupied"] == 1 && !isclosedturf(stuck_tile) && get_turf(player) == stuck_tile
+		babylon_area_change_turf(stuck_tile, /turf/closed/wall, NONE)
+		babylon_area_rescue(list(x1 + 3, y1 + 2, x1 + 3, y1 + 2, z), nowhere)
+		stuck_tile = locate(x1 + 3, y1 + 2, z)
+		result["rescue_opens_wall_on_stuck_player"] = !isclosedturf(stuck_tile) && get_turf(player) == stuck_tile && !QDELETED(player)
+		babylon_area_change_turf(stuck_tile, /turf/open/floor/plating, NONE)
 
 		// The wand: Select mode, two clicks, outlines for the holder.
 		var/was_creative = GLOB.babylon_world.creative
@@ -460,5 +542,6 @@
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_area_tools_roundtrip failed: [error] ([error.file]:[error.line])")
+	babylon_area_test_unlink_decks(linked_decks)
 	babylon_area_test_cleanup(setup, made)
 	return result
