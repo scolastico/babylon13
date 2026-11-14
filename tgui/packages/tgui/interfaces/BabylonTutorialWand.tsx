@@ -228,7 +228,7 @@ const BuildTab = () => {
         </Stack>
         <Box mt={1} color="label">
           <Icon name="circle-info" mr={1} />
-          {mode.help} Right-click the wand in your hand to switch modes.
+          {mode.help} Right-click the wand while holding it to switch modes.
         </Box>
       </Section>
       {data.mode === 'select' ? (

@@ -23,7 +23,10 @@ export type AreaStats = {
   mobs: number;
   players: number;
   locked: number;
+  protected?: number;
 };
+
+export type AreaResult = { text: string; ok: boolean; id: number };
 
 export type AreaData = {
   step: 'corner1' | 'corner2' | 'selected' | 'paste_target' | 'paste_confirm';
@@ -47,15 +50,20 @@ export type AreaData = {
     tutorial: number;
     x: number;
     y: number;
+    not_copied?: string | null;
   } | null;
   paste: {
     target: { x1: number; y1: number; x2: number; y2: number } | null;
     problem: string | null;
+    replaces?: { objects: number; tutorial: number; mobs: number } | null;
     suffix?: string | null;
     suffix_error?: string | null;
   } | null;
   paste_suffix?: string | null;
   undo: string | null;
+  undo_approximate?: boolean;
+  pasted?: number;
+  result?: AreaResult | null;
   busy: boolean;
   cooldown: number;
   max_tiles: number;
@@ -81,6 +89,24 @@ export const sizeText = (width: number, height: number) => {
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? '' : 's'}`;
 
+/** What Paste and Clear undo cannot bring back exactly. */
+export const APPROXIMATE_UNDO =
+  'Undo puts it back approximately: floor markings and machine settings are lost.';
+
+/** Said before an operation that would replace the pending undo step. */
+export const replacesUndo = (area: AreaData) =>
+  area.undo ? `This replaces your undo of: ${area.undo}.` : null;
+
+/** "floor (dark)" for materials whose names repeat: the end of the path tells them apart. */
+export const materialLabel = (material: Material, materials: Material[]) => {
+  const same = materials.filter((m) => m.name === material.name);
+  if (same.length < 2) {
+    return material.name;
+  }
+  const tail = material.path.split('/').pop() || '';
+  return `${material.name} (${tail.replace(/_/g, ' ')})`;
+};
+
 /** What the next click with the wand does. */
 export const stepHint = (area: AreaData) => {
   switch (area.step) {
@@ -104,10 +130,10 @@ export const blockedReason = (
   materials: Material[],
 ) => {
   if (area.busy) {
-    return 'Another area operation is still running.';
+    return "Another builder's area operation is still running.";
   }
   if (area.cooldown > 0) {
-    return 'One area operation every 2 seconds: wait a moment.';
+    return `Wait ${area.cooldown} more seconds: bigger areas need a longer pause between operations.`;
   }
   if (needs.selection) {
     if (!area.selection) {
@@ -146,6 +172,7 @@ export const AreaTools = () => {
   return (
     <>
       <StepBanner area={area} />
+      <ResultBox result={area.result} />
       <SelectionSection area={area} />
       <CopyPasteSection area={area} materials={materials} />
       <Section title="Fill and border">
@@ -153,7 +180,7 @@ export const AreaTools = () => {
         <Button.Checkbox
           mt={1}
           checked={area.only_empty}
-          tooltip="Skips walls and tiles with furniture, machines, items or mobs on them. Pipes and cables under the floor don't count."
+          tooltip="Skips walls and tiles with furniture, machines, items or mobs on them. Pipes and cables under the floor don't count. Without it, objects stay where they are, also under a new wall."
           onClick={() =>
             act('area_option', {
               option: 'only_empty',
@@ -169,20 +196,61 @@ export const AreaTools = () => {
       <Section title="Undo">
         <Button
           icon="rotate-left"
-          disabled={!area.undo || area.busy || area.cooldown > 0}
+          disabled={!area.undo || area.busy}
           onClick={() => act('area_undo')}
         >
-          {area.undo ? `Undo: ${area.undo}` : 'Undo'}
+          {area.undo
+            ? `Undo: ${area.undo}${area.undo_approximate ? ' (approximate)' : ''}`
+            : 'Undo'}
         </Button>
+        {area.undo_approximate && (
+          <Box color="average" fontSize="0.9em" mt={0.5}>
+            <Icon name="triangle-exclamation" mr={0.5} />
+            Restores the whole rectangle as it was before, also undoing later
+            changes there. Floor markings and machine settings are lost.
+          </Box>
+        )}
         <Reason
           text={
             !area.undo
               ? 'Nothing to undo yet. Undo takes back your last paste, fill, border or clear (one step).'
-              : blockedReason(area, {}, materials)
+              : area.busy
+                ? "Another builder's area operation is still running."
+                : null
           }
         />
       </Section>
     </>
+  );
+};
+
+/** The last area operation's outcome, kept in the panel until dismissed. */
+export const ResultBox = (props: { result?: AreaResult | null }) => {
+  const [hiddenId, setHiddenId] = useState(-1);
+  const { result } = props;
+  if (!result || result.id === hiddenId) {
+    return null;
+  }
+  const content = (
+    <Stack align="center">
+      <Stack.Item>
+        <Icon name={result.ok ? 'check' : 'triangle-exclamation'} />
+      </Stack.Item>
+      <Stack.Item grow>{result.text}</Stack.Item>
+      <Stack.Item>
+        <Button
+          icon="xmark"
+          color="transparent"
+          tooltip="Dismiss"
+          onClick={() => setHiddenId(result.id)}
+        />
+      </Stack.Item>
+    </Stack>
+  );
+  return result.ok ? (
+    <NoticeBox success>{content}</NoticeBox>
+  ) : (
+    <NoticeBox danger>{content}</NoticeBox>
   );
 };
 
@@ -212,6 +280,15 @@ const StepBanner = (props: { area: AreaData }) => {
           </Button>
         </Stack.Item>
       )}
+      <Stack.Item>
+        <Button
+          icon="plus"
+          tooltip="Leave Select mode (right-clicking the wand while holding it also switches modes)."
+          onClick={() => act('mode', { mode: 'place' })}
+        >
+          Back to Place
+        </Button>
+      </Stack.Item>
     </Stack>
   );
   // Paste mode stands out in the default (yellow) notice colour.
@@ -246,7 +323,9 @@ const SelectionSection = (props: { area: AreaData }) => {
               {selection.stats.players > 0 &&
                 `, ${plural(selection.stats.players, 'player')} (never removed)`}
               {selection.stats.locked > 0 &&
-                `, ${plural(selection.stats.locked, 'indestructible tile')} (left alone)`}
+                `, ${plural(selection.stats.locked, 'protected tile')} (walls or floors the game won't let you change, outlined in red; left alone)`}
+              {!!selection.stats.protected &&
+                `, ${plural(selection.stats.protected, 'protected object')} (never copied or removed)`}
               .
             </Box>
           )}
@@ -260,7 +339,7 @@ const SelectionSection = (props: { area: AreaData }) => {
       ) : (
         <Box color="label">
           Nothing selected. Areas can be up to{' '}
-          {area.max_tiles.toLocaleString('en-US')} tiles on one level.
+          {area.max_tiles.toLocaleString('en-US')} tiles on one deck.
         </Box>
       )}
     </Section>
@@ -280,6 +359,7 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
     : area.paste?.problem ||
       area.paste?.suffix_error ||
       blockedReason(area, {}, materials);
+  const replaces = area.paste?.replaces;
   return (
     <Section title="Copy and paste">
       <Box mb={1}>
@@ -290,6 +370,11 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
             {clip.x}, {clip.y} — {plural(clip.objects, 'object')}
             {clip.tutorial > 0 &&
               `, ${plural(clip.tutorial, 'tutorial object')}`}
+            {clip.not_copied && (
+              <Box color="label" fontSize="0.9em" mt={0.5}>
+                {clip.not_copied}
+              </Box>
+            )}
           </>
         ) : (
           <Box inline color="label">
@@ -334,9 +419,13 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
               <b>
                 {target.x2}, {target.y2}
               </b>{' '}
-              (top-right).{' '}
-              <Box inline color="average">
-                It replaces everything there; players are moved aside.
+              (top-right).
+              <Box color="average" mt={0.5}>
+                It replaces everything there
+                {replaces
+                  ? `: ${plural(replaces.objects, 'object')}, ${plural(replaces.tutorial, 'tutorial object')} and ${plural(replaces.mobs, 'mob')}`
+                  : ''}
+                . Players are moved aside. {APPROXIMATE_UNDO}
               </Box>
             </Box>
           ) : (
@@ -362,7 +451,9 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
               >
                 Confirm paste
               </Button>
-              <Reason text={target ? confirmBlocked : null} />
+              <Reason
+                text={target ? confirmBlocked || replacesUndo(area) : null}
+              />
             </Stack.Item>
             <Stack.Item grow basis={0}>
               <Button
@@ -370,7 +461,7 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
                 icon="xmark"
                 onClick={() => act('area_paste_cancel')}
               >
-                {target && !confirmBlocked ? 'Done' : 'Cancel'}
+                {area.pasted ? 'Stop pasting' : 'Cancel'}
               </Button>
             </Stack.Item>
           </Stack>
@@ -385,7 +476,7 @@ const CopyPasteSection = (props: { area: AreaData; materials: Material[] }) => {
           act('area_option', { option: 'skip_space', value: !area.skip_space })
         }
       >
-        Keep the target where the copy has space
+        Don't overwrite tiles that are empty space in the copy
       </Button.Checkbox>
     </Section>
   );
@@ -416,7 +507,7 @@ const SuffixOptions = (props: { area: AreaData }) => {
     ];
   return (
     <Box mt={1}>
-      <Box bold>Tutorial ids in the copy</Box>
+      <Box bold>Names of pasted tutorial objects</Box>
       <Box color="label" fontSize="0.9em" mb={0.5}>
         Each pasted tutorial object gets a suffix (zone1 → zone1_2). Links among
         the pasted objects follow; links to objects outside the copy stay.
@@ -436,7 +527,8 @@ const SuffixOptions = (props: { area: AreaData }) => {
       {area.suffix_mode === 'custom' && (
         <Input
           ml={1}
-          width="80px"
+          width="140px"
+          placeholder="e.g. _b, then Enter"
           value={area.custom_suffix}
           onBlur={(value: string) =>
             act('area_option', { option: 'custom_suffix', value })
@@ -519,6 +611,7 @@ export const MaterialPicker = (props: {
               <Button
                 fluid
                 color="transparent"
+                tooltip={material.path}
                 selected={material.path === props.selected}
                 onClick={() =>
                   act('area_option', {
@@ -527,10 +620,7 @@ export const MaterialPicker = (props: {
                   })
                 }
               >
-                {material.name}{' '}
-                <Box inline color="label" fontSize="0.85em">
-                  {material.path.split('/').slice(-2).join('/')}
-                </Box>
+                {materialLabel(material, props.materials)}
               </Button>
             </Box>
           );
@@ -576,7 +666,7 @@ const FillButtons = (props: {
           </Button>
         </Stack.Item>
       </Stack>
-      <Reason text={blocked} />
+      <Reason text={blocked || replacesUndo(area)} />
     </>
   );
 };
@@ -633,13 +723,16 @@ const ClearSection = (props: {
         icon="trash"
         color="bad"
         disabled={!!blocked}
-        confirmContent={`Remove ${removes}?`}
+        confirmContent={`Remove ${removes}? Undo is approximate.`}
         confirmIcon="triangle-exclamation"
         onClick={() => act('area_clear')}
       >
         Clear selection
       </Button.Confirm>
-      <Reason text={blocked} />
+      <Box color="label" fontSize="0.9em" mt={0.5}>
+        {APPROXIMATE_UNDO}
+      </Box>
+      <Reason text={blocked || replacesUndo(area)} />
     </Section>
   );
 };

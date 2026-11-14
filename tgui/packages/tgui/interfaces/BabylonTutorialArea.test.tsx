@@ -12,6 +12,7 @@ import {
   type AreaData,
   blockedReason,
   type Material,
+  materialLabel,
   sizeText,
   stepHint,
 } from './BabylonTutorialArea';
@@ -204,7 +205,9 @@ describe('BabylonTutorialArea', () => {
       fireEvent.click(screen.getByText('Clear selection'));
     });
     expect(
-      screen.getByText('Remove 30 objects, 1 mob and 4 tutorial objects?'),
+      screen.getByText(
+        'Remove 30 objects, 1 mob and 4 tutorial objects? Undo is approximate.',
+      ),
     ).toBeDefined();
   });
 
@@ -221,7 +224,89 @@ describe('BabylonTutorialArea', () => {
         { selection: true },
         materials,
       ),
-    ).toBe('One area operation every 2 seconds: wait a moment.');
+    ).toBe(
+      'Wait 1.5 more seconds: bigger areas need a longer pause between operations.',
+    );
     expect(stepHint({ ...area, step: 'paste_confirm' })).toContain('confirm');
+  });
+
+  it('labels the paste exit by what happened and counts what it replaces', () => {
+    const paste = {
+      target: { x1: 30, y1: 20, x2: 41, y2: 27 },
+      problem: null,
+      suffix: '_2',
+      replaces: { objects: 12, tutorial: 3, mobs: 1 },
+    };
+    show({ step: 'paste_confirm', clipboard, paste, pasted: 0 });
+    expect(screen.getByText('Cancel')).toBeDefined();
+    expect(
+      screen.getByText(': 12 objects, 3 tutorial objects and 1 mob', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getAllByText('floor markings and machine settings are lost', {
+        exact: false,
+      }).length,
+    ).toBeGreaterThan(0);
+    cleanup();
+    show({
+      step: 'paste_target',
+      clipboard,
+      paste: { ...paste, target: null },
+      pasted: 2,
+    });
+    expect(screen.getByText('Stop pasting')).toBeDefined();
+  });
+
+  it('keeps the last result in the panel and says what was not copied', () => {
+    show({
+      step: 'selected',
+      selection,
+      clipboard: {
+        ...clipboard,
+        not_copied: 'Not copied: 1 mob, floor markings.',
+      },
+      result: { text: 'Copied 12×8 (96 tiles): 30 objects.', ok: true, id: 4 },
+    });
+    expect(
+      screen.getByText('Copied 12×8 (96 tiles): 30 objects.'),
+    ).toBeDefined();
+    expect(
+      screen.getByText('Not copied: 1 mob, floor markings.'),
+    ).toBeDefined();
+  });
+
+  it('marks an approximate undo and warns before replacing it', () => {
+    show({
+      step: 'selected',
+      selection,
+      material: '/turf/closed/wall',
+      undo: 'Clear 12×8 (96 tiles)',
+      undo_approximate: true,
+    });
+    expect(
+      screen.getByText('Undo: Clear 12×8 (96 tiles) (approximate)'),
+    ).toBeDefined();
+    expect(
+      screen.getAllByText('This replaces your undo of: Clear 12×8 (96 tiles).')
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('names materials without paths, telling repeated names apart', () => {
+    const floors: Material[] = [
+      { path: '/turf/open/floor/iron', name: 'floor', group: 'Floors' },
+      {
+        path: '/turf/open/floor/iron/dark_side',
+        name: 'floor',
+        group: 'Floors',
+      },
+      { path: '/turf/closed/wall', name: 'wall', group: 'Walls' },
+    ];
+    expect(materialLabel(floors[1], floors)).toBe('floor (dark side)');
+    expect(materialLabel(floors[2], floors)).toBe('wall');
+    show({ step: 'selected', selection });
+    expect(screen.queryByText('floor/iron')).toBeNull();
   });
 });
