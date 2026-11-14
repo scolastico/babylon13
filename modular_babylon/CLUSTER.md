@@ -592,6 +592,76 @@ countdown, no save verbs, and stopping them ends at once without a save (and nev
 leaves them in an error state). A world stopped before it finished starting is not
 saved either.
 
+## Creative machines
+
+Creative worlds can spawn four creative machines from the Creative panel (purple tint,
+"creative" in the name). Only the Creative Plane maps come with some; research and cargo
+never provide them. They work in Creative worlds, on the Creative Plane maps (whatever the
+Creative setting: they are the plane's power and air) and in tutorials (a tutorial keeps its creative power and air, though its players have
+no Creative panel). In any other world they are ordinary machines that do nothing special and
+say "Creative mode is off in this world" when examined. In a Creative world,
+**Ctrl + Shift + click** one to change its mode and setting.
+
+- **Creative SMES.** *Source*: never runs out of charge and puts out its output level (set
+  in the normal SMES window, up to 10 MW). *Sink*: soaks up the power nobody else on its
+  cable or terminal network used, so it never takes power away from APCs. It needs no
+  terminal.
+- **Creative canister.** *Source*: refills itself with one gas (any gas in the standard
+  list; oxygen by default, a nitrogen preset exists) to a fill pressure (default 4500 kPa,
+  100-9000), so its valve or a connector port never runs dry. Changing only the pressure
+  keeps the gas inside. *Void*: deletes all gas inside it; on a connector port it drains the
+  pipe network, for example as the scrubbers' outlet.
+- **Creative fluid tank** (plumbing: wrench it down; input west, output east, like the
+  chemical tank). *Source*: stays full (400 u) of one reagent. Only reagents a chem
+  synthesizer could make are offered, so no admin-only or ERP reagents. *Void*: destroys
+  everything its input pulls in.
+- **Creative disposal unit.** *Source*: placed on a disposal trunk, it sends one item down
+  the pipe every N seconds (default 10, 2-600) without needing pressure. Pick the item by
+  name (e.g. "iron", "crowbar"). Grenades, bombs, nuclear disks, MMIs, mob holders,
+  lewd items and the like are not offered and are removed from containers it makes. It
+  pauses while 100 of its items still exist and says so when examined. *Void*: deletes
+  everything that reaches it by pipe or is put inside; living beings are put out on the
+  floor, never deleted.
+
+The settings are saved with the world.
+
+## Creative Plane
+
+The **Creative Plane** maps (S, M, L) are an empty floor to try things out on, best with
+Creative mode on. They are station-build worlds: the owner starts the round, and players
+arrive as their preferences character.
+
+- **Floor.** A square iron floor (S 50x50, M 100x100, L 200x200 tiles) in the middle of a
+  255x255 space level, closed by a ring of indestructible reinforced walls. Every floor
+  tile starts with normal air, and the plane relies on that initial air: nothing refills
+  the floor (the vents only condition the utility room), and the ring cannot be breached,
+  so it never vents. The whole plane has gravity and full light (fullbright, no lights
+  needed). Space lies outside the walls.
+- **Power.** A creative SMES (source, 1 MW output) at the south edge feeds the main cable,
+  which runs along the whole south edge and up the middle column on catwalk floor (the
+  cable is visible and reachable there). One APC on the south wall powers the whole floor;
+  anything placed anywhere on it is powered. The utility corner has its own APC. The SMES has a terminal on its north side
+  with no cable: wire it to give a sink SMES an input grid.
+- **Utility room** (south-west corner, glass door south, the "Creative Plane Utilities"
+  area together with the SMES; a plaque explains it). The simplest vent and scrubber cycle:
+  a creative oxygen source and a creative nitrogen source canister on connector ports feed
+  an air mixer (79% nitrogen, 21% oxygen), whose supply line runs two vents; two
+  scrubbers drain into a creative void canister. Ordinary pipes; the air alarm controls
+  the vents and scrubbers. The canisters connect to their ports by themselves (also after
+  a restore); unwrenching one keeps it off its port.
+- **Spawn pad** (dark 5x5 square at the south edge, on the middle cable). Late-joiners
+  arrive here, Assistants start here, and visitors and spectators appear in its middle.
+  Players whose job has no start point on the plane arrive on the pad as well.
+- **Round.** No random events or antagonists (the inert Babylon storyteller), and no
+  emergency shuttle dock: the round never ends by shuttle; calling it is refused. The
+  supply shuttle has no dock either: a cargo console says so instead of calling it.
+- **Without Creative mode** the plane's creative machines still work (infinite power and
+  gas); only changing their settings needs Creative mode.
+
+The maps are generated: change `tools/babylon/gen_creative_plane.py` and run it (it also
+renders the lobby previews); never edit the `.dmm` files by hand. Its test fails when the
+committed maps differ from the script's output.
+
 ## Tutorials
 
 Players build a tutorial in a **Creative** world on a **station map** (a Creative

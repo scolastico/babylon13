@@ -8,8 +8,9 @@ to that path. Output is deterministic, so unchanged maps give byte-identical fil
     python3 tools/babylon/render_map_previews.py            # every station map in the catalog
     python3 tools/babylon/render_map_previews.py icebox     # selected maps
 
-Babylon has no .dmm in the catalog and the Creative Plane maps are generated elsewhere (their
-generator runs this script once they exist); entries without a map file are skipped.
+Babylon has no .dmm in the catalog; entries without a map file are skipped. The Creative Plane
+maps come from gen_creative_plane.py, which runs this script for them; their previews fill the
+card with the plane in their own palette (grid, bright ring, spawn pad and utility corner).
 """
 import json
 from pathlib import Path
@@ -171,20 +172,65 @@ def bounds(positions):
     return xs[cut] - 2, xs[-1 - cut] + 2, ys[cut] - 2, ys[-1 - cut] + 2
 
 
-def render(keys, level):
-    """RGBA rows (bytes) of the level cropped to its station, fitted into WIDTH x HEIGHT."""
+# Creative Plane previews (gen_creative_plane.py): the floor with a faint grid, the
+# indestructible ring as a bright outline, the spawn pad and the utility corner in accents.
+PLANE_RING = (226, 236, 246)
+PLANE_FLOOR = mix(BASE, STATION, 0.62)
+PLANE_GRID = mix(BASE, STATION, 0.45)
+PLANE_CABLE = mix(BASE, (222, 170, 64), 0.45)
+PLANE_UTILITY = mix(BASE, (222, 170, 64), 0.7)
+PLANE_PAD = mix(BASE, (64, 190, 160), 0.8)
+PLANE_GRID_LINES = 10  # about this many grid lines across the floor
+PLANE_MARKER = 8  # pixels: the smallest the spawn pad and utility room are drawn
+
+
+def plane_colour(paths, position, origin, spacing):
+    """A Creative Plane tile's colour, or None when the tile is not part of the plane."""
+    turf = next((p for p in paths if p.startswith("/turf/")), "")
+    area = next((p for p in paths if p.startswith("/area/")), "")
+    if not area.startswith("/area/station/babylon/creative_plane"):
+        return None
+    if turf.startswith("/turf/closed/indestructible"):
+        return PLANE_RING
+    if turf.startswith("/turf/closed"):
+        return mix(PLANE_UTILITY, PLANE_RING, 0.5)
+    if area.endswith("/utilities"):
+        return PLANE_UTILITY
+    if turf == "/turf/open/floor/iron/dark":
+        return PLANE_PAD
+    if "catwalk" in turf:
+        return PLANE_CABLE
+    if (position[0] - origin[0]) % spacing == 0 or (position[1] - origin[1]) % spacing == 0:
+        return PLANE_GRID
+    return PLANE_FLOOR
+
+
+def render(keys, level, creative_plane=False):
+    """RGBA rows (bytes) of the level cropped to its station, fitted into WIDTH x HEIGHT.
+    Creative Plane maps get their own palette (plane_colour) and are cropped to the plane."""
     colours = {}
     station = []
+    origin, spacing = (0, 0), 1
+    if creative_plane:
+        floor = [position for position, key in level.items()
+                 if any(p.startswith("/area/station/babylon/creative_plane") for p in keys.get(key, ()))]
+        origin = (min(x for x, _ in floor), min(y for _, y in floor))
+        spacing = max(2, round((max(x for x, _ in floor) - origin[0]) / PLANE_GRID_LINES))
     for position, key in level.items():
         paths = keys.get(key, ())
-        colour = tile_colour(paths)
+        colour = plane_colour(paths, position, origin, spacing) if creative_plane else tile_colour(paths)
         if colour is not None:
             colours[position] = colour if len(colour) == 4 else colour + (255,)
             if any(p.startswith("/area/station") for p in paths):
                 station.append(position)
     if not colours:
         raise MapError("the level has no visible tiles")
-    left, right, bottom, top = bounds(station or list(colours))
+    if creative_plane:
+        # The whole plane with a one-tile margin, so the ring is never cut off.
+        left, right = min(x for x, _ in station) - 1, max(x for x, _ in station) + 1
+        bottom, top = min(y for _, y in station) - 1, max(y for _, y in station) + 1
+    else:
+        left, right, bottom, top = bounds(station or list(colours))
     span_x, span_y = right - left + 1, top - bottom + 1
     scale = min(WIDTH / span_x, HEIGHT / span_y)
     offset_x = (WIDTH - span_x * scale) / 2
@@ -209,8 +255,43 @@ def render(keys, level):
                 row += bytes((red // alpha, green // alpha, blue // alpha, alpha // SAMPLES ** 2))
             else:
                 row += b"\0\0\0\0"
-        rows.append(bytes(row))
-    return rows
+        rows.append(row)
+    if creative_plane:
+        plane_markers(rows, keys, level, left, top, scale, offset_x, offset_y)
+    return [bytes(row) for row in rows]
+
+
+def plane_markers(rows, keys, level, left, top, scale, offset_x, offset_y):
+    """Keeps the Creative Plane's landmarks readable at every size: the ring as a 2 px outline,
+    the spawn pad and the utility corner as boxes of at least PLANE_MARKER pixels."""
+    def pixel_box(tiles):
+        x0 = offset_x + (min(x for x, _ in tiles) - left) * scale
+        x1 = offset_x + (max(x for x, _ in tiles) - left + 1) * scale
+        y0 = offset_y + (top - max(y for _, y in tiles)) * scale
+        y1 = offset_y + (top - min(y for _, y in tiles) + 1) * scale
+        return x0, y0, x1, y1
+
+    def fill(box, colour, minimum=0, inset=0):
+        x0, y0, x1, y1 = box
+        grow_x, grow_y = max(0, minimum - (x1 - x0)) / 2, max(0, minimum - (y1 - y0)) / 2
+        x0, x1, y0, y1 = x0 - grow_x + inset, x1 + grow_x - inset, y0 - grow_y + inset, y1 + grow_y - inset
+        for py in range(max(0, int(y0)), min(HEIGHT, int(round(y1)))):
+            for px in range(max(0, int(x0)), min(WIDTH, int(round(x1)))):
+                rows[py][px * 4:px * 4 + 4] = bytes(colour + (255,))
+
+    def tiles_where(test):
+        return [position for position, key in level.items() if test(keys.get(key, ()))]
+
+    plane = tiles_where(lambda paths: any(p.startswith("/area/station/babylon/creative_plane") for p in paths))
+    x0, y0, x1, y1 = pixel_box(plane)
+    for edge in ((x0, y0, x1, y0 + 2), (x0, y1 - 2, x1, y1), (x0, y0, x0 + 2, y1), (x1 - 2, y0, x1, y1)):
+        fill(edge, PLANE_RING)
+    utility = tiles_where(lambda paths: any(p.endswith("/creative_plane/utilities") for p in paths))
+    room = [(x, y) for x, y in utility if any(p.startswith("/turf/closed") for p in keys[level[(x, y)]])]
+    fill(pixel_box(room or utility), mix(PLANE_UTILITY, PLANE_RING, 0.5), PLANE_MARKER)
+    fill(pixel_box(room or utility), PLANE_UTILITY, PLANE_MARKER, 1)
+    pad = tiles_where(lambda paths: "/turf/open/floor/iron/dark" in paths)
+    fill(pixel_box(pad), PLANE_PAD, PLANE_MARKER)
 
 
 def png(rows):
@@ -250,7 +331,8 @@ def main(selected):
         keys, levels = parse_dmm(source.read_text(encoding="utf-8", errors="replace"))
         z = busiest_level(keys, levels)
         target = "%s/%s.png" % (PREVIEWS, entry["id"])
-        (ROOT / target).write_bytes(png(render(keys, levels[z])))
+        creative_plane = entry.get("group") == "creative_plane"
+        (ROOT / target).write_bytes(png(render(keys, levels[z], creative_plane)))
         entry["preview"] = target
         print("%s: %s (z%d)" % (entry["id"], target, z))
     CATALOG.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")

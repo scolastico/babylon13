@@ -34,7 +34,9 @@
 #include "modular_babylon/code/music.dm"
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
+#include "modular_babylon/code/creative/machines.dm"
 #ifdef BABYLON_TESTING
 #include "modular_babylon/code/testing_common.dm"
+#include "modular_babylon/code/creative/testing_machines.dm"
 #include "modular_babylon/code/testing.dm"
 #endif

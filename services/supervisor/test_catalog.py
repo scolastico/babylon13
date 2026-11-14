@@ -26,7 +26,7 @@ class Catalog(unittest.TestCase):
 
     def test_station_map_jsons_exist(self):
         for entry in load_catalog(SHIPPED).values():
-            if entry["build"] == "station" and entry["group"] == "station":
+            if entry["build"] == "station":
                 self.assertTrue((SHIPPED.parents[1] / entry["map_json"]).is_file(), entry["id"])
 
     def test_public_catalog_hides_paths(self):
