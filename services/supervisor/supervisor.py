@@ -344,7 +344,7 @@ class Driver:
                             "babylon-kind": self.field(world, "kind", WORLD_KIND),
                             "babylon-tutorial": self.field(world, "tutorial", ""),
                             "babylon-map": self.field(world, "map", "babylon"),
-                            **self.music_param()})
+                            **self.music_param(), **self.autosave_param(build)})
         dmb = "babylon-station.dmb" if build == "station" else "babylon.dmb"
         log = open(root / "daemon.log", "ab", buffering=0)
         try:
@@ -360,6 +360,13 @@ class Driver:
         # Mirror the child's own log files into the container log, prefixed.
         Follower(world_source(world), root, lambda: process.poll() is None).start()
         return process.pid
+
+    def autosave_param(self, build):
+        """Station worlds autosave less often than Babylon's 15 minutes (a save pauses them longer)."""
+        if build != "station":
+            return {}
+        return {"babylon-autosave-minutes": self.config.get("station_autosave_minutes",
+                                                            DEFAULTS["station_autosave_minutes"])}
 
     def alive(self, run):
         process = self.processes.get(run["id"])
@@ -412,7 +419,8 @@ class Driver:
 class Supervisor:
     def __init__(self, config, driver=None, clock=time.time):
         self.config = config
-        for key in ("max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours"):
+        for key in ("max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours",
+                    "station_autosave_minutes"):
             config.setdefault(key, DEFAULTS[key])
         self.clock = clock
         self.lock = threading.RLock()
@@ -1567,7 +1575,8 @@ class Supervisor:
 def load_config(path):
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     for key in ("kept_save_points_per_world", "delete_unused_worlds_after_days", "afk_timeout_seconds",
-                "max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours"):
+                "max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours",
+                "station_autosave_minutes"):
         config.setdefault(key, DEFAULTS[key])
     if type(config["tutorial_submit_cooldown_hours"]) is not int or config["tutorial_submit_cooldown_hours"] < 0:
         raise ValueError("tutorial_submit_cooldown_hours must be a nonnegative integer (0 disables the cooldown)")
@@ -1584,7 +1593,7 @@ def load_config(path):
     for key in ("listen_port", "port_first", "port_last", "max_running_worlds", "max_players_per_world",
                 "max_worlds_per_player", "max_running_worlds_per_player", "empty_grace_seconds",
                 "startup_timeout_seconds", "station_startup_timeout_seconds", "ticket_lifetime_seconds",
-                "kept_save_points_per_world"):
+                "kept_save_points_per_world", "station_autosave_minutes"):
         if type(config.get(key)) is not int or config[key] < 1:
             raise ValueError(f"{key} must be a positive integer")
     if config["port_last"] < config["port_first"] or config["port_last"] > 65535:

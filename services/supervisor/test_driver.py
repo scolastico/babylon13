@@ -242,6 +242,13 @@ class Params(DriverFixture):
         self.assertEqual(arguments[1], "babylon.dmb")
         self.assertEqual((params["babylon-build"], params["babylon-tutorial"], params["babylon-persistent"]),
                          (["babylon"], [""], ["1"]))
+        # Station worlds get their own autosave interval (default 30 minutes); Babylon keeps its 15.
+        self.assertNotIn("babylon-autosave-minutes", params)
+        _, params = self.launch(self.world())
+        self.assertEqual(params["babylon-autosave-minutes"], ["30"])
+        self.driver.config["station_autosave_minutes"] = 45
+        _, params = self.launch(self.world())
+        self.assertEqual(params["babylon-autosave-minutes"], ["45"])
 
 
 if __name__ == "__main__":

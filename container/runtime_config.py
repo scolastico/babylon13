@@ -18,7 +18,8 @@ DEFAULTS = {
     'max_running_worlds': 4, 'max_players_per_world': 4, 'max_worlds_per_player': 3,
     'max_running_worlds_per_player': 1,
     **SUPERVISOR_DEFAULTS,
-    'shutdown_timeout_seconds': 180,
+    # A station world's final save takes about a minute; several run in parallel.
+    'shutdown_timeout_seconds': 600,
     # Countdown in every world before a restart; 0 skips it.
     'restart_warning_seconds': 30,
 }
@@ -89,7 +90,7 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
         'max_running_worlds_per_player', 'kept_save_points_per_world', 'max_total_worlds_per_player',
         'delete_unused_worlds_after_days', 'empty_grace_seconds',
         'startup_timeout_seconds', 'station_startup_timeout_seconds', 'ticket_lifetime_seconds',
-        'afk_timeout_seconds', 'tutorial_submit_cooldown_hours')}
+        'afk_timeout_seconds', 'tutorial_submit_cooldown_hours', 'station_autosave_minutes')}
     discord = discord_settings(env, address, env.get('BABYLON_DATA_DIRECTORY', '/data'))
     config['discord'] = public_discord(discord)
     config.update(listen_host='127.0.0.1', listen_port=values['api_port'], public_host=host,

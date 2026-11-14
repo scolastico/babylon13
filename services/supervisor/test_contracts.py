@@ -93,9 +93,14 @@ class ChildParams(test_driver.DriverFixture):
         with patch("supervisor.subprocess.Popen", return_value=SimpleNamespace(pid=1)) as popen, \
                 patch("supervisor.Follower"), patch("supervisor.prepare_fresh_map"):
             self.driver.start(dict(self.world(), map="babylon"), test_driver.RUN)
-        arguments = popen.call_args.args[0]
-        written = {k for k in parse_qs(arguments[arguments.index("-params") + 1], keep_blank_values=True)
-                   if k.startswith("babylon-")}
+            babylon_arguments = popen.call_args.args[0]
+            # Station worlds get their own parameters too (babylon-autosave-minutes).
+            self.driver.start(self.world(), test_driver.RUN)
+            station_arguments = popen.call_args.args[0]
+        written = set()
+        for arguments in (babylon_arguments, station_arguments):
+            written |= {k for k in parse_qs(arguments[arguments.index("-params") + 1], keep_blank_values=True)
+                        if k.startswith("babylon-")}
         read = set()
         for text in dm_sources().values():
             read |= set(re.findall(r'\bparams\["(babylon-[a-z-]+)"\]', text))
