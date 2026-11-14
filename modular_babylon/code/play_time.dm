@@ -27,16 +27,20 @@
 	play_time_counted_at = now
 	if(!step || draining || !ready)
 		return
-	var/anyone = FALSE
+	var/list/playing = list()
 	for(var/player_key in player_sessions)
 		var/client/student = babylon_ready_client(GLOB.directory[player_key])
 		// Visitors and spectating admins watch; they are not playing this world.
 		if(!student || student.babylon_showcase_visitor || student.babylon_admin_spectator)
 			continue
-		var/datum/babylon_player/player = player_sessions[player_key]
+		playing += player_sessions[player_key]
+	add_play_time(step, playing)
+
+/// Adds one counting step to every playing player's record and, when anyone plays, to the world.
+/datum/babylon_save/proc/add_play_time(step, list/playing)
+	for(var/datum/babylon_player/player as anything in playing)
 		player.play_time += step
-		anyone = TRUE
-	if(anyone)
+	if(length(playing))
 		play_time += step
 
 /// "3h 07m", "45m" or "under a minute".

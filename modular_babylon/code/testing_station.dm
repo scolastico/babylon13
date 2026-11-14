@@ -58,6 +58,8 @@
 	var/list/levels = persisted_levels()
 	result["station_levels_persisted"] = length(levels) && (station_z in levels)
 	result["station_format"] = save_format_version() == BABYLON_STATION_STATE_VERSION && level_file(station_z) == "z[station_z].dmm"
+	// The test must not change the live world: ids handed out here are taken back afterwards.
+	var/first_new_id = next_id
 	var/list/level = save_level(station_z)
 	result["map_text"] = findtext(level["map_text"], "//[DMM2TGM_MESSAGE]") == 1
 	var/list/records = level["records"]
@@ -70,6 +72,20 @@
 			all_z = FALSE
 			break
 	result["records_and_turfs_carry_z"] = all_z
+	var/list/handed_out = list()
+	for(var/list/record as anything in records)
+		if(text2num(copytext(record["id"], 3)) >= first_new_id)
+			handed_out[record["id"]] = TRUE
+	var/cleared = 0
+	for(var/turf/tile as anything in block(1, 1, station_z, world.maxx, world.maxy, station_z))
+		for(var/atom/movable/thing as anything in tile.get_all_contents() - tile)
+			var/id = thing.babylon_save_id
+			if(id && text2num(copytext(id, 3)) >= first_new_id)
+				thing.babylon_save_id = null
+				cleared++
+		CHECK_TICK
+	next_id = first_new_id
+	result["ids_taken_back"] = length(handed_out) && cleared >= length(handed_out)
 	return result
 
 /// Facts about the running station world for the smoke report (not asserted).

@@ -348,6 +348,16 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	qdel(plush)
 	return result
 
+/datum/babylon_save
+	/// Steps counted by test_tick_listener_counts().
+	var/test_tick_count = 0
+
+/datum/babylon_save/proc/test_tick_listener_fails()
+	CRASH("Babylon test: a failing world tick listener (expected)")
+
+/datum/babylon_save/proc/test_tick_listener_counts()
+	test_tick_count++
+
 /// Play time is kept per player in the checkpoint and restored with it (play_time.dm).
 /datum/babylon_save/proc/test_play_time()
 	var/list/result = list()
@@ -377,6 +387,26 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		if(listener.step && (COMSIG_BABYLON_WORLD_TICK in listener._signal_procs?[src]))
 			listening++
 	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 2 : 1)
+	// A failing listener does not keep the listeners after it from their step.
+	var/datum/tick_source = new
+	var/datum/babylon_tick_listener/failing = new(tick_source, CALLBACK(src, PROC_REF(test_tick_listener_fails)))
+	var/datum/babylon_tick_listener/counting = new(tick_source, CALLBACK(src, PROC_REF(test_tick_listener_counts)))
+	test_tick_count = 0
+	SEND_SIGNAL(tick_source, COMSIG_BABYLON_WORLD_TICK)
+	result["failing_listener_does_not_stop_the_next"] = test_tick_count == 1
+	qdel(failing)
+	qdel(counting)
+	qdel(tick_source)
+	// The owner's record is their own: one step with the owner playing adds it once to the
+	// world and once to the owner (the owner's record used to be the session itself).
+	var/datum/babylon_player/owner = owner_player() || new /datum/babylon_player(owner_ckey)
+	result["owner_record_is_not_the_session"] = owner != src
+	var/world_before = play_time
+	var/owner_before = owner.play_time
+	add_play_time(7 SECONDS, list(owner))
+	result["one_step_each"] = play_time == world_before + 7 SECONDS && owner.play_time == owner_before + 7 SECONDS
+	play_time = world_before
+	owner.play_time = owner_before
 #ifndef BABYLON_STATION
 	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
 #else

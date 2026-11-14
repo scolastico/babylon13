@@ -64,6 +64,8 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 /// then COMSIG_BABYLON_WORLD_TICK for the modules' own steps (play time, round control ...).
 /// Defined only here; modules register for the signal (tools/babylon/test_tick_override.py).
 /datum/babylon_save/proc/tick_world()
+	// Only dreamchecker (SpacemanDMM) enforces this; DreamMaker ignores it. The real guard is
+	// tools/babylon/test_tick_override.py.
 	SHOULD_NOT_OVERRIDE(TRUE)
 	tick_players()
 	SEND_SIGNAL(src, COMSIG_BABYLON_WORLD_TICK)
@@ -88,7 +90,11 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 
 /datum/babylon_tick_listener/proc/on_world_tick(datum/babylon_save/source)
 	SIGNAL_HANDLER
-	step.Invoke()
+	// One module's error must not skip the modules after it.
+	try
+		step.Invoke()
+	catch(var/exception/error)
+		babylon_loop_failed("world tick listener [step.delegate]", error)
 
 /// Reads babylon-afk-timeout into afk_timeout. FALSE (with boot_error set) when it is invalid.
 /datum/babylon_save/proc/read_afk_timeout()
