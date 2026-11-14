@@ -97,6 +97,19 @@
 		return text
 	return replacetext(replacetext(replacetext(replacetext(text, "\proper ", ""), "\improper ", ""), "\proper", ""), "\improper", "")
 
+/// TRUE if a save leaves this text field out because it holds the type's own value: the type
+/// default comes back on load, with its \proper/\improper marker. Written stripped, such a text
+/// would make name != initial(name) for every saved object of the type (atmos naming, fire
+/// alarms, cameras and article handling check that), and lose the marker's grammar.
+/// `name` is always left out when unchanged; other text fields when their default carries a marker.
+/proc/babylon_save_keeps_default_text(atom/thing, field, value)
+	if(!istext(value))
+		return FALSE
+	var/default = initial(thing.vars[field])
+	if(value != default)
+		return FALSE
+	return field == "name" || babylon_save_text(default) != default
+
 /datum/babylon_save/proc/encode_value(value)
 	if(istext(value))
 		return babylon_save_text(value)
@@ -152,6 +165,8 @@
 		capture_fields_by_type[thing.type] = capture_fields
 	for(var/field in capture_fields)
 		var/value = thing.vars[field]
+		if(babylon_save_keeps_default_text(thing, field, value))
+			continue
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (field in list_fields))
 			fields[field] = encode_value(value)
 	if(istype(thing, /obj/machinery/portable_atmospherics))
@@ -320,6 +335,8 @@
 				return turf_metadata_cache[turf_key]
 	for(var/field in fields)
 		var/value = thing.vars[field]
+		if(babylon_save_keeps_default_text(thing, field, value))
+			continue
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (islist(value) && (field in list_map_fields)))
 			entries += "[field] = [tgm_encode(istext(value) ? babylon_save_text(value) : value)]"
 	if(is_turf && isopenturf(thing) && !isspaceturf(thing))

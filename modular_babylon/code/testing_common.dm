@@ -517,6 +517,21 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	capture(marked, marked_records, null)
 	var/list/marked_fields = marked_records[1]["fields"]
 	result["text_markers_stripped"] = marked_fields["name"] == "Babylon test screwdriver" && !!findtext(metadata(marked), "name = \"Babylon test screwdriver\"")
+	// A name the object still has from its type is not written at all, so the type's marker
+	// comes back on load and name == initial(name) holds (records and map entries alike).
+	var/obj/item/wallframe/apc/default_marked = new(respawn_turf)
+	var/obj/item/screwdriver/default_plain = new(respawn_turf)
+	var/list/default_records = list()
+	capture(default_marked, default_records, null)
+	capture(default_plain, default_records, null)
+	var/defaults_left_out = length(default_records) == 2
+	for(var/list/record as anything in default_records)
+		var/list/fields = record["fields"]
+		if(islist(fields) && ("name" in fields))
+			defaults_left_out = FALSE
+	result["default_name_not_saved"] = defaults_left_out && !findtext(metadata(default_marked), "name =") && !findtext(metadata(default_plain), "name =") && initial(default_marked.name) != babylon_save_text(initial(default_marked.name))
+	qdel(default_marked)
+	qdel(default_plain)
 	qdel(marked)
 	qdel(crate)
 	return result
