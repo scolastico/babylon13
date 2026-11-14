@@ -8,7 +8,11 @@ import {
 } from '@testing-library/react';
 import { gameDataAtom, store } from '../events/store';
 
-import { BabylonTutorialWand, type WandData } from './BabylonTutorialWand';
+import {
+  BabylonTutorialWand,
+  buildFlow,
+  type WandData,
+} from './BabylonTutorialWand';
 
 const colors = {
   trigger: '#ffc857',
@@ -81,10 +85,17 @@ const data: WandData = {
       z: 2,
       refs: ['hello'],
       issues: ['Nothing has the id "hello".'],
+      actions: ['hello'],
+      starts: 'start',
+      after: null,
     },
   ],
   warnings: [
-    'There is no marker with the id "start": players start at the arrivals instead.',
+    {
+      text: 'There is no marker with the id "start": players start at the arrivals instead.',
+      ref: null,
+    },
+    { text: 'enter_lab: Nothing has the id "hello".', ref: '[0x1]' },
   ],
   picking: null,
   has_start: false,
@@ -134,6 +145,8 @@ describe('BabylonTutorialWand', () => {
     openTab('Overview');
     expect(screen.getByText('enter_lab')).toBeDefined();
     expect(screen.getByText('Nothing has the id "hello".')).toBeDefined();
+    expect(screen.getByText('listens from the beginning')).toBeDefined();
+    expect(screen.getByText('1. hello (missing)')).toBeDefined();
     expect(
       screen.getByText(
         'There is no marker with the id "start": players start at the arrivals instead.',
@@ -155,12 +168,17 @@ describe('BabylonTutorialWand', () => {
         running: true,
         completed: false,
         fired: 2,
-        enabled: 3,
+        listening: ['enter_lab'],
         steps: ['enter_lab>hello'],
+        objective: 'Scan the patient',
       },
     });
     openTab('Test run');
     expect(screen.getByText('Stop test run')).toBeDefined();
+    expect(screen.getByText('Scan the patient')).toBeDefined();
+    expect(
+      screen.getAllByText('enter_lab', { exact: false }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText('enter_lab → hello')).toBeDefined();
   });
 
@@ -168,6 +186,39 @@ describe('BabylonTutorialWand', () => {
     show({ picking: { id: 'enter_lab', corner: 2 } });
     expect(screen.getByText('Cancel')).toBeDefined();
     expect(screen.getByText('enter_lab')).toBeDefined();
+  });
+
+  it('explains how to start while nothing is placed', () => {
+    show({ objects: [] });
+    expect(
+      screen.getByText(
+        'A tutorial is triggers (when…) that run actions (do…).',
+      ),
+    ).toBeDefined();
+  });
+
+  it('groups the flow and counts each problem once', () => {
+    expect(
+      buildFlow([
+        { ...data.objects[0], actions: ['msg'] },
+        {
+          ...data.objects[0],
+          ref: '[0x2]',
+          id: 'msg',
+          category: 'action',
+          actions: null,
+        },
+        {
+          ...data.objects[0],
+          ref: '[0x3]',
+          id: 'lonely',
+          category: 'action',
+          actions: null,
+        },
+      ]).unused.map((object) => object.id),
+    ).toEqual(['lonely']);
+    show();
+    expect(screen.getByText('Overview (1)', { exact: false })).toBeDefined();
   });
 
   it('warns outside creative worlds', () => {

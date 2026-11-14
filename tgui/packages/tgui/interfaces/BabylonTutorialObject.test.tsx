@@ -67,12 +67,27 @@ const base: ObjectData = {
   body_zones: [{ value: 'chest', label: 'Chest' }],
   wounds: [{ value: '/datum/wound/x', label: 'Hairline fracture' }],
   diseases: [{ value: '/datum/disease/cold', label: 'The Cold' }],
+  reagents: [
+    { value: '/datum/reagent/medicine/epinephrine', label: 'Epinephrine' },
+  ],
+  new_actions: [{ value: 'message', label: 'Message' }],
+  id_help: 'Triggers list this id to run it.',
   id: 'hello',
   values: { text: 'Hi [player]!', style: 'chat', speaker: '', delay: 0 },
   issues: {},
   ids: [
-    { id: 'guide1', kind_name: 'NPC spawner', category: 'npc' },
-    { id: 'enter', kind_name: 'Zone', category: 'trigger' },
+    {
+      id: 'guide1',
+      kind_name: 'NPC spawner',
+      category: 'npc',
+      summary: 'Guide',
+    },
+    {
+      id: 'enter',
+      kind_name: 'Zone',
+      category: 'trigger',
+      summary: 'runs hello',
+    },
   ],
   position: { x: 4, y: 5, z: 2 },
   summary: '"Hi [player]!"',
@@ -107,9 +122,47 @@ describe('BabylonTutorialObject', () => {
     expect(screen.getByText('Nothing has the id "ghost".')).toBeDefined();
   });
 
-  it('shows a refused value', () => {
-    show({ notice: { text: 'Enter a number.', ok: false, id: 2 } });
+  it('shows a refused value next to its field', () => {
+    show({
+      notice: { text: 'Enter a number.', ok: false, id: 2, key: 'delay' },
+    });
     expect(screen.getByText('Enter a number.')).toBeDefined();
+    expect(screen.getByText('Triggers list this id to run it.')).toBeDefined();
+  });
+
+  it('marks a missing id and lists other objects with summaries', () => {
+    show({
+      values: { ...base.values, style: 'speaker', speaker: 'ghost' },
+    });
+    expect(screen.getByText('ghost (missing)')).toBeDefined();
+  });
+
+  it("lists a trigger's actions by summary", () => {
+    show({
+      kind: 'zone',
+      kind_name: 'Zone',
+      category: 'trigger',
+      schema: [
+        {
+          key: 'actions',
+          label: 'Actions',
+          type: 'idlist',
+          default: [],
+          help: null,
+          filter: ['action'],
+        },
+      ],
+      ids: [
+        {
+          id: 'hello',
+          kind_name: 'Message',
+          category: 'action',
+          summary: '"Hi"',
+        },
+      ],
+      values: { actions: ['hello'] },
+    });
+    expect(screen.getByText('hello — Message: "Hi"')).toBeDefined();
   });
 
   it('shows the NPC section for spawners', () => {
@@ -118,9 +171,12 @@ describe('BabylonTutorialObject', () => {
       kind_name: 'NPC spawner',
       category: 'npc',
       schema: [],
-      npc: { name: 'Patient', health: 60, stat: 'awake' },
+      npc: { name: 'Patient', health: 60, stat: 'awake', outdated: true },
     });
     expect(screen.getByText('Respawn now')).toBeDefined();
+    expect(
+      screen.getByText('Settings changed: press Respawn now to apply them.'),
+    ).toBeDefined();
     expect(screen.getByText('Patient')).toBeDefined();
   });
 

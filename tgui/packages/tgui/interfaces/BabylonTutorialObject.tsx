@@ -35,7 +35,8 @@ export type Field = {
     | 'id'
     | 'idlist'
     | 'zone'
-    | 'effects';
+    | 'effects'
+    | 'target';
   default: unknown;
   help: string | null;
   options?: Option[];
@@ -48,7 +49,12 @@ export type Field = {
   placeholder?: string;
 };
 
-export type IdEntry = { id: string; kind_name: string; category: string };
+export type IdEntry = {
+  id: string;
+  kind_name: string;
+  category: string;
+  summary?: string;
+};
 
 export type Effect = {
   kind: string;
@@ -71,6 +77,11 @@ export type ObjectData = {
   body_zones: Option[];
   wounds: Option[];
   diseases: Option[];
+  reagents: Option[];
+  new_actions?: Option[];
+  id_help?: string;
+  target_choices?: Option[];
+  target_now?: string;
   id: string;
   values: Record<string, any>;
   issues: Record<string, string>;
@@ -84,7 +95,12 @@ export type ObjectData = {
   } | null;
   notice: { text: string; ok: boolean; id: number; key?: string } | null;
   picking: boolean;
-  npc?: { name: string; health: number; stat: string } | null;
+  npc?: {
+    name: string;
+    health: number;
+    stat: string;
+    outdated?: boolean;
+  } | null;
 };
 
 /** Whether a field applies with the current values (its "when" condition). */
@@ -133,7 +149,7 @@ export const BabylonTutorialObject = () => {
             </Box>
           )}
         </Section>
-        {data.notice && !data.notice.ok && (
+        {data.notice && !data.notice.key && !data.notice.ok && (
           <NoticeBox danger>{data.notice.text}</NoticeBox>
         )}
         {data.notice?.ok && <NoticeBox success>{data.notice.text}</NoticeBox>}
@@ -148,8 +164,11 @@ export const BabylonTutorialObject = () => {
                 onCommit={(value) => act('set', { key: 'id', value })}
               />
               <FieldHelp
-                help="Other parts refer to this object by its id. A marker named start is where players begin."
+                help={
+                  data.id_help || 'Other parts refer to this object by its id.'
+                }
                 issue={data.issues.id}
+                refused={fieldNotice(data, 'id')}
               />
             </LabeledList.Item>
             {fields.map((field) => (
@@ -159,7 +178,11 @@ export const BabylonTutorialObject = () => {
                 verticalAlign="top"
               >
                 <FieldInput field={field} />
-                <FieldHelp help={field.help} issue={data.issues[field.key]} />
+                <FieldHelp
+                  help={field.help}
+                  issue={data.issues[field.key]}
+                  refused={fieldNotice(data, field.key)}
+                />
               </LabeledList.Item>
             ))}
           </LabeledList>
@@ -200,8 +223,24 @@ export const BabylonTutorialObject = () => {
   );
 };
 
-const FieldHelp = (props: { help: string | null; issue?: string }) => (
+/** A refused value for this field, shown next to it. */
+export const fieldNotice = (data: ObjectData, key: string) =>
+  data.notice && !data.notice.ok && data.notice.key === key
+    ? data.notice.text
+    : undefined;
+
+const FieldHelp = (props: {
+  help: string | null;
+  issue?: string;
+  refused?: string;
+}) => (
   <>
+    {props.refused && (
+      <Box color="bad" mt={0.5} fontSize="0.9em">
+        <Icon name="circle-xmark" mr={0.5} />
+        {props.refused}
+      </Box>
+    )}
     {props.issue && (
       <Box color="average" mt={0.5} fontSize="0.9em">
         <Icon name="triangle-exclamation" mr={0.5} />
@@ -299,6 +338,8 @@ const FieldInput = (props: { field: Field }) => {
       return <ZoneInput field={field} value={value} />;
     case 'effects':
       return <EffectsInput value={value || []} onChange={set} />;
+    case 'target':
+      return <TargetInput field={field} value={String(value ?? 'object')} />;
   }
   return <Box color="bad">Unknown field type.</Box>;
 };
@@ -347,37 +388,60 @@ export const idChoices = (field: Field, ids: IdEntry[]) =>
     (entry) => !field.filter?.length || field.filter.includes(entry.category),
   );
 
+/** How another object is shown in pickers: id, kind and what it does. */
+export const describeId = (entry: IdEntry) =>
+  `${entry.id} — ${entry.kind_name}${entry.summary ? `: ${entry.summary}` : ''}`;
+
 const IdPicker = (props: {
   field: Field;
   value: string;
   ids: IdEntry[];
   onSelect: (value: string) => void;
 }) => {
+  const { act } = useBackend<ObjectData>();
   const choices = idChoices(props.field, props.ids);
+  const current = props.ids.find((entry) => entry.id === props.value);
   return (
-    <Stack>
-      <Stack.Item grow>
-        <Dropdown
-          width="100%"
-          selected={props.value || '(none)'}
-          options={[
-            { displayText: '(none)', value: '' },
-            ...choices.map((entry) => ({
-              displayText: `${entry.id} (${entry.kind_name})`,
-              value: entry.id,
-            })),
-          ]}
-          onSelected={(value: string) => props.onSelect(value)}
-        />
-      </Stack.Item>
-      <Stack.Item width="110px">
-        <CommitInput
-          value={props.value}
-          placeholder="or type an id"
-          onCommit={props.onSelect}
-        />
-      </Stack.Item>
-    </Stack>
+    <Box>
+      <Stack align="center">
+        <Stack.Item grow>
+          <Dropdown
+            width="100%"
+            searchInput
+            selected={props.value}
+            displayText={
+              current
+                ? describeId(current)
+                : props.value
+                  ? `${props.value} (missing)`
+                  : '(none) - choose...'
+            }
+            options={[
+              { displayText: '(none)', value: '' },
+              ...choices.map((entry) => ({
+                displayText: describeId(entry),
+                value: entry.id,
+              })),
+            ]}
+            onSelected={(value: string) => props.onSelect(value)}
+          />
+        </Stack.Item>
+        {current && (
+          <Stack.Item>
+            <Button
+              icon="up-right-from-square"
+              tooltip="Open its settings"
+              onClick={() => act('open', { id: props.value })}
+            />
+          </Stack.Item>
+        )}
+      </Stack>
+      {props.value && !current && (
+        <Box color="average" mt={0.25}>
+          {props.value} (missing)
+        </Box>
+      )}
+    </Box>
   );
 };
 
@@ -386,12 +450,16 @@ const IdListInput = (props: {
   value: string[];
   onChange: (value: string[]) => void;
 }) => {
-  const { data } = useBackend<ObjectData>();
+  const { act, data } = useBackend<ObjectData>();
   const { value } = props;
-  const known = new Set(data.ids.map((entry) => entry.id));
+  const byId: Record<string, IdEntry> = {};
+  for (const entry of data.ids) {
+    byId[entry.id] = entry;
+  }
   const choices = idChoices(props.field, data.ids).filter(
     (entry) => !value.includes(entry.id),
   );
+  const offersNew = !!props.field.filter?.includes('action');
   const move = (index: number, delta: number) => {
     const next = [...value];
     const [entry] = next.splice(index, 1);
@@ -402,13 +470,24 @@ const IdListInput = (props: {
     <Box>
       {!value.length && <Box color="label">None yet.</Box>}
       {value.map((id, index) => (
-        <Stack key={id} align="center" mb={0.25}>
+        <Stack key={`${index}-${id}`} align="center" mb={0.25}>
           <Stack.Item color="label" width="18px">
             {index + 1}.
           </Stack.Item>
-          <Stack.Item grow color={known.has(id) ? undefined : 'average'}>
-            {id}
-            {!known.has(id) && ' (missing)'}
+          <Stack.Item grow>
+            {byId[id] ? (
+              <Button
+                fluid
+                color="transparent"
+                tooltip="Open its settings"
+                style={{ whiteSpace: 'normal' }}
+                onClick={() => act('open', { id })}
+              >
+                {describeId(byId[id])}
+              </Button>
+            ) : (
+              <Box color="average">{id} (missing)</Box>
+            )}
           </Stack.Item>
           <Stack.Item>
             <Button
@@ -427,7 +506,7 @@ const IdListInput = (props: {
               icon="xmark"
               tooltip="Remove"
               onClick={() =>
-                props.onChange(value.filter((entry) => entry !== id))
+                props.onChange(value.filter((_, i) => i !== index))
               }
             />
           </Stack.Item>
@@ -435,14 +514,47 @@ const IdListInput = (props: {
       ))}
       <Dropdown
         width="100%"
-        selected="Add..."
-        disabled={!choices.length}
-        options={choices.map((entry) => ({
-          displayText: `${entry.id} (${entry.kind_name})`,
-          value: entry.id,
-        }))}
-        onSelected={(id: string) => props.onChange([...value, id])}
+        searchInput
+        selected={null}
+        placeholder={offersNew ? 'Add an action...' : 'Add...'}
+        disabled={!choices.length && !offersNew}
+        options={[
+          ...(offersNew
+            ? (data.new_actions || []).map((option) => ({
+                displayText: `＋ New ${option.label}`,
+                value: `new:${option.value}`,
+              }))
+            : []),
+          ...choices.map((entry) => ({
+            displayText: describeId(entry),
+            value: entry.id,
+          })),
+        ]}
+        onSelected={(id: string) =>
+          id.startsWith('new:')
+            ? act('new_linked', { key: props.field.key, kind: id.slice(4) })
+            : props.onChange([...value, id])
+        }
       />
+    </Box>
+  );
+};
+
+const TargetInput = (props: { field: Field; value: string }) => {
+  const { act, data } = useBackend<ObjectData>();
+  const choices = data.target_choices || [];
+  return (
+    <Box>
+      <ChoiceInput
+        options={choices}
+        value={props.value}
+        onSelect={(value) => act('set', { key: props.field.key, value })}
+      />
+      {data.target_now && (
+        <Box mt={0.5}>
+          Currently: <b>{data.target_now}</b>
+        </Box>
+      )}
     </Box>
   );
 };
@@ -580,9 +692,8 @@ const EffectsInput = (props: {
   value: Effect[];
   onChange: (value: Effect[]) => void;
 }) => {
-  const { act, data } = useBackend<ObjectData>();
+  const { data } = useBackend<ObjectData>();
   const { value } = props;
-  const [reagentQuery, setReagentQuery] = useState('');
   const update = (index: number, change: Partial<Effect>) =>
     props.onChange(
       value.map((effect, i) =>
@@ -591,8 +702,6 @@ const EffectsInput = (props: {
     );
   const label = (options: Option[], current?: string) =>
     options.find((option) => option.value === current)?.label ?? 'Choose...';
-  const reagentResults =
-    data.search?.key === 'effect_reagent' ? data.search.results : [];
   return (
     <Box>
       {!value.length && <Box color="label">Healthy: no effects.</Box>}
@@ -687,31 +796,17 @@ const EffectsInput = (props: {
               )}
               {needs.reagent && (
                 <Stack.Item grow>
-                  <Box color="label" fontSize="0.85em">
-                    {effect.type || 'No reagent chosen'}
-                  </Box>
-                  <Input
-                    fluid
-                    value={reagentQuery}
-                    placeholder="Search reagents..."
-                    onChange={(query: string) => {
-                      setReagentQuery(query);
-                      act('search', { key: 'effect_reagent', query });
-                    }}
+                  <Dropdown
+                    width="100%"
+                    searchInput
+                    selected={effect.type}
+                    displayText={label(data.reagents, effect.type)}
+                    options={data.reagents.map((option) => ({
+                      displayText: option.label,
+                      value: option.value,
+                    }))}
+                    onSelected={(type: string) => update(index, { type })}
                   />
-                  {reagentResults.slice(0, 8).map((result) => (
-                    <Button
-                      key={result.path}
-                      fluid
-                      color="transparent"
-                      onClick={() => {
-                        update(index, { type: result.path });
-                        setReagentQuery('');
-                      }}
-                    >
-                      {result.name}
-                    </Button>
-                  ))}
                 </Stack.Item>
               )}
             </Stack>
@@ -757,7 +852,7 @@ export const defaultEffect = (kind: string, data: ObjectData): Effect => {
     effect.type = data.diseases[0]?.value;
   }
   if (needs.reagent) {
-    effect.type = '/datum/reagent/water';
+    effect.type = data.reagents?.[0]?.value;
   }
   return effect;
 };
@@ -777,9 +872,16 @@ const NpcSection = () => {
       {npc ? (
         <Box>
           <b>{npc.name}</b> is {npc.stat}, health {Math.round(npc.health)}.
-          <Box color="label" fontSize="0.9em">
-            Changes apply the next time the NPC is created: press Respawn now.
-          </Box>
+          {npc.outdated ? (
+            <Box color="average" mt={0.5}>
+              <Icon name="rotate" mr={0.5} />
+              Settings changed: press Respawn now to apply them.
+            </Box>
+          ) : (
+            <Box color="label" fontSize="0.9em">
+              Changes apply the next time the NPC is created.
+            </Box>
+          )}
         </Box>
       ) : (
         <Box color="label">

@@ -37,6 +37,9 @@ export const BabylonTutorialComplete = () => {
                     This was a test run: players get a "Back to lobby" button
                     here.
                   </Box>
+                  <Button icon="rotate-left" onClick={() => act('again')}>
+                    Run again
+                  </Button>
                   <Button icon="check" onClick={() => act('close')}>
                     Close
                   </Button>

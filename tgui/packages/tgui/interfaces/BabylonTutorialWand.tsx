@@ -21,6 +21,7 @@ export type PaletteEntry = {
   kind: string;
   name: string;
   desc: string;
+  example?: string;
   icon: string;
 };
 
@@ -46,7 +47,12 @@ export type TutorialObject = {
   z: number | null;
   refs: string[];
   issues: string[];
+  actions?: string[] | null;
+  starts?: string | null;
+  after?: string | null;
 };
+
+export type Warning = { text: string; ref: string | null };
 
 export type WandData = {
   palette: PaletteGroup[];
@@ -57,15 +63,16 @@ export type WandData = {
   selected_kind: string;
   selected_preset: string;
   objects: TutorialObject[];
-  warnings: string[];
+  warnings: Warning[];
   picking: { id: string; corner: number } | null;
   has_start: boolean;
   test: {
     running: boolean;
     completed?: boolean;
     fired?: number;
-    enabled?: number;
+    listening?: string[];
     steps?: string[];
+    objective?: string | null;
   };
   notice: { text: string; ok: boolean; id: number } | null;
 };
@@ -100,9 +107,8 @@ const MODES = [
 export const BabylonTutorialWand = () => {
   const { data } = useBackend<WandData>();
   const [tab, setTab] = useState('build');
-  const problems =
-    data.warnings.length +
-    data.objects.filter((object) => object.issues.length).length;
+  // Every object's own problems are part of the warnings: count each once.
+  const problems = data.warnings.length;
   return (
     <Window width={560} height={680} title="Tutorial wand">
       <Window.Content>
@@ -216,10 +222,31 @@ const BuildTab = () => {
           {mode.help}
         </Box>
       </Section>
+      {!data.objects.length && <FirstSteps />}
       {data.mode === 'npc' ? <PresetPalette /> : <ObjectPalette />}
     </>
   );
 };
+
+/** Shown while nothing is placed yet: how a tutorial is built. */
+const FirstSteps = () => (
+  <NoticeBox info>
+    <Box bold mb={0.5}>
+      A tutorial is triggers (when…) that run actions (do…).
+    </Box>
+    <Box>Start here:</Box>
+    <Box>
+      ① <b>NPC → Guide</b> where players arrive.
+    </Box>
+    <Box>
+      ② a <b>Marker</b> with the id <b>start</b> on the arrival tile.
+    </Box>
+    <Box>
+      ③ a <b>Zone</b> trigger (or <b>Tutorial starts</b>) where something should
+      happen, then add actions to it in its settings.
+    </Box>
+  </NoticeBox>
+);
 
 const ObjectPalette = () => {
   const { act, data } = useBackend<WandData>();
@@ -261,6 +288,7 @@ const ObjectPalette = () => {
                     color={data.colors[group.id]}
                     name={entry.name}
                     desc={entry.desc}
+                    example={entry.example}
                     selected={
                       data.mode === 'place' && data.selected_kind === entry.kind
                     }
@@ -307,6 +335,7 @@ const PaletteButton = (props: {
   color: string;
   name: string;
   desc: string;
+  example?: string;
   selected: boolean;
   onClick: () => void;
 }) => (
@@ -320,6 +349,11 @@ const PaletteButton = (props: {
         <Box fontSize="0.9em" opacity={0.8}>
           {props.desc}
         </Box>
+        {props.example && (
+          <Box fontSize="0.85em" opacity={0.6} italic>
+            {props.example}
+          </Box>
+        )}
       </Stack.Item>
     </Stack>
   </Button>
@@ -334,6 +368,37 @@ const CATEGORY_NAMES: Record<string, string> = {
   npc: 'NPCs',
 };
 
+/** Groups the objects as the tutorial flows: each trigger with its actions and the triggers that
+ * listen after it; markers and NPCs; actions no trigger uses at the bottom. */
+export const buildFlow = (objects: TutorialObject[]) => {
+  const triggers = objects.filter((object) => object.category === 'trigger');
+  const used = new Set<string>();
+  for (const trigger of triggers) {
+    for (const id of trigger.actions || []) {
+      used.add(id);
+    }
+  }
+  const usedBy: Record<string, string[]> = {};
+  for (const trigger of triggers) {
+    for (const id of trigger.actions || []) {
+      usedBy[id] = [...(usedBy[id] || []), trigger.id];
+    }
+  }
+  return {
+    triggers,
+    usedBy,
+    places: objects.filter(
+      (object) => object.category === 'marker' || object.category === 'npc',
+    ),
+    usedActions: objects.filter(
+      (object) => object.category === 'action' && used.has(object.id),
+    ),
+    unused: objects.filter(
+      (object) => object.category === 'action' && !used.has(object.id),
+    ),
+  };
+};
+
 const OverviewTab = () => {
   const { act, data } = useBackend<WandData>();
   const [query, setQuery] = useState('');
@@ -343,15 +408,34 @@ const OverviewTab = () => {
       `${object.id} ${object.kind_name} ${object.summary}`,
   );
   const objects = query ? data.objects.filter(search) : data.objects;
+  const flow = buildFlow(objects);
+  const byId: Record<string, TutorialObject> = {};
+  for (const object of data.objects) {
+    byId[object.id] = byId[object.id] || object;
+  }
+  const open = (id: string) =>
+    byId[id] && act('configure', { ref: byId[id].ref });
   return (
     <>
       <Section title="Checks">
         {data.warnings.length ? (
           <Stack vertical>
-            {data.warnings.map((warning) => (
-              <Stack.Item key={warning} color="average">
-                <Icon name="triangle-exclamation" mr={1} />
-                {warning}
+            {data.warnings.map((warning, index) => (
+              <Stack.Item key={`${index}-${warning.text}`}>
+                <Button
+                  fluid
+                  color="transparent"
+                  disabled={!warning.ref}
+                  style={{ whiteSpace: 'normal' }}
+                  onClick={() =>
+                    warning.ref && act('configure', { ref: warning.ref })
+                  }
+                >
+                  <Box color="average">
+                    <Icon name="triangle-exclamation" mr={1} />
+                    {warning.text}
+                  </Box>
+                </Button>
               </Stack.Item>
             ))}
           </Stack>
@@ -363,7 +447,7 @@ const OverviewTab = () => {
         )}
       </Section>
       <Section
-        title="All tutorial objects"
+        title="Flow"
         buttons={
           <Input
             placeholder="Search..."
@@ -379,30 +463,76 @@ const OverviewTab = () => {
             trigger and a message.
           </Box>
         )}
-        {Object.keys(CATEGORY_NAMES).map((category) => {
-          const inCategory = objects.filter(
-            (object) => object.category === category,
-          );
-          if (!inCategory.length) {
-            return null;
-          }
-          return (
-            <Box key={category} mb={1.5}>
-              <Box bold color={data.colors[category]} mb={0.5}>
-                {CATEGORY_NAMES[category]} ({inCategory.length})
+        {flow.triggers.map((trigger, index) => (
+          <Box key={`${trigger.ref}-${index}`} mb={1}>
+            <ObjectRow object={trigger} />
+            <Box ml={3}>
+              <Box color="label" fontSize="0.9em">
+                {trigger.starts === 'after'
+                  ? `listens after ${trigger.after || '?'} fired`
+                  : trigger.starts === 'manual'
+                    ? 'listens when an Enable action switches it on'
+                    : 'listens from the beginning'}
               </Box>
-              {inCategory.map((object) => (
-                <ObjectRow key={object.ref} object={object} />
+              {(trigger.actions || []).map((id, index) => (
+                <Button
+                  key={`${trigger.ref}-${index}-${id}`}
+                  icon={byId[id]?.icon || 'question'}
+                  color={byId[id] ? undefined : 'average'}
+                  onClick={() => open(id)}
+                >
+                  {index + 1}. {id}
+                  {byId[id] ? ` — ${byId[id].kind_name}` : ' (missing)'}
+                </Button>
               ))}
+              {!(trigger.actions || []).length && (
+                <Box color="average" fontSize="0.9em">
+                  No actions yet.
+                </Box>
+              )}
             </Box>
-          );
-        })}
+          </Box>
+        ))}
+        {!!flow.places.length && (
+          <Box mt={1.5}>
+            <Box bold mb={0.5}>
+              Markers and NPCs
+            </Box>
+            {flow.places.map((object, index) => (
+              <ObjectRow key={`${object.ref}-${index}`} object={object} />
+            ))}
+          </Box>
+        )}
+        {!!flow.usedActions.length && (
+          <Box mt={1.5}>
+            <Box bold mb={0.5}>
+              Actions
+            </Box>
+            {flow.usedActions.map((object, index) => (
+              <ObjectRow
+                key={`${object.ref}-${index}`}
+                object={object}
+                note={`used by ${(flow.usedBy[object.id] || []).join(', ')}`}
+              />
+            ))}
+          </Box>
+        )}
+        {!!flow.unused.length && (
+          <Box mt={1.5}>
+            <Box bold mb={0.5} color="average">
+              Not used by any trigger
+            </Box>
+            {flow.unused.map((object, index) => (
+              <ObjectRow key={`${object.ref}-${index}`} object={object} />
+            ))}
+          </Box>
+        )}
       </Section>
     </>
   );
 };
 
-const ObjectRow = (props: { object: TutorialObject }) => {
+const ObjectRow = (props: { object: TutorialObject; note?: string }) => {
   const { act, data } = useBackend<WandData>();
   const { object } = props;
   return (
@@ -428,9 +558,10 @@ const ObjectRow = (props: { object: TutorialObject }) => {
           </Box>
           <Box fontSize="0.9em" opacity={0.8}>
             {object.summary}
+            {props.note && ` — ${props.note}`}
           </Box>
-          {object.issues.map((issue) => (
-            <Box key={issue} fontSize="0.9em" color="average">
+          {object.issues.map((issue, index) => (
+            <Box key={`${index}-${issue}`} fontSize="0.9em" color="average">
               <Icon name="triangle-exclamation" mr={0.5} />
               {issue}
             </Box>
@@ -464,6 +595,9 @@ const ObjectRow = (props: { object: TutorialObject }) => {
 const TestTab = () => {
   const { act, data } = useBackend<WandData>();
   const { test } = data;
+  const [resetNpcs, setResetNpcs] = useState(true);
+  const start = (from: string) =>
+    act('test_start', { from, reset_npcs: resetNpcs });
   return (
     <Section title="Test your tutorial">
       <Box color="label" mb={1}>
@@ -472,14 +606,44 @@ const TestTab = () => {
         can test at the same time without getting in your way. Stopping resets
         the run, not the world (spawned NPCs and given items stay).
       </Box>
+      <Button.Checkbox
+        checked={resetNpcs}
+        onClick={() => setResetNpcs(!resetNpcs)}
+        tooltip="NPCs set to spawn at the start are created again, with their effects."
+      >
+        Reset NPCs when starting
+      </Button.Checkbox>
       {test.running ? (
         <>
-          <NoticeBox success>
+          <NoticeBox success mt={1}>
             <Icon name="circle-play" mr={1} />
             {test.completed
               ? 'Test run complete: you reached a Complete action.'
-              : `Test run active: ${test.enabled} trigger(s) listening, ${test.fired} action(s) run so far.`}
+              : `Test run active: ${test.fired} action(s) run so far.`}
           </NoticeBox>
+          {!test.completed && (
+            <Box mb={1}>
+              <Box bold mb={0.5}>
+                Listening now
+              </Box>
+              {test.listening?.length ? (
+                test.listening.map((id) => (
+                  <Box inline key={id} mr={1}>
+                    <Icon name="ear-listen" color={data.colors.trigger} /> {id}
+                  </Box>
+                ))
+              ) : (
+                <Box color="average">
+                  No trigger is listening: nothing more can happen.
+                </Box>
+              )}
+            </Box>
+          )}
+          {test.objective && (
+            <Box mb={1}>
+              <b>Objective on screen:</b> {test.objective}
+            </Box>
+          )}
           {!!test.steps?.length && (
             <Box mb={1}>
               <Box bold mb={0.5}>
@@ -498,13 +662,13 @@ const TestTab = () => {
           <Button
             icon="rotate-left"
             disabled={!data.has_start}
-            onClick={() => act('test_start', { from: 'start' })}
+            onClick={() => start('start')}
           >
             Restart from start marker
           </Button>
         </>
       ) : (
-        <Stack vertical>
+        <Stack vertical mt={1}>
           <Stack.Item>
             <Button
               fluid
@@ -515,17 +679,13 @@ const TestTab = () => {
                   ? undefined
                   : 'Place a marker with the id "start" first.'
               }
-              onClick={() => act('test_start', { from: 'start' })}
+              onClick={() => start('start')}
             >
               Start at the start marker
             </Button>
           </Stack.Item>
           <Stack.Item>
-            <Button
-              fluid
-              icon="person"
-              onClick={() => act('test_start', { from: 'here' })}
-            >
+            <Button fluid icon="person" onClick={() => start('here')}>
               Start where I stand
             </Button>
           </Stack.Item>
