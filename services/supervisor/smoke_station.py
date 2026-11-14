@@ -62,8 +62,9 @@ def main():
     parser.add_argument("--only-multiz", action="store_true", help="skip the --maps checks and the tutorial world")
     parser.add_argument("--only-characters", action="store_true",
                         help="only the characters' save and restore on the first --maps map")
+    parser.add_argument("--only-planes", action="store_true", help="only the --creative-planes checks")
     args = parser.parse_args()
-    if args.only_characters:
+    if args.only_characters or args.only_planes:
         args.only_multiz, args.no_multiz, args.restore_maps = True, True, []
     root = Path(__file__).resolve().parents[2]
     for ext in ("dmb", "rsc"):
@@ -510,7 +511,7 @@ def main():
                 discard_child()
             report["maps"][map_id] = entry
             print(json.dumps({map_id: entry}), flush=True)
-        for map_id in ([] if args.only_multiz else args.creative_planes):
+        for map_id in ([] if args.only_multiz and not args.only_planes else args.creative_planes):
             try:
                 entry = run_creative_plane(map_id)
             except Exception as error:
