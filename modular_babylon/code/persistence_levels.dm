@@ -470,7 +470,7 @@
 	dirty_levels["[z]"] = TRUE
 
 /// A tram saved between stations has no platform under it and cannot start after a restore:
-/// a save waits up to 60 seconds for moving trams to arrive. (A tram stopped on the line, by an
+/// a save waits up to 20 seconds for moving trams to arrive. (A tram stopped on the line, by an
 /// emergency stop or damage, is saved where it is; test_station_links reports it.)
 /datum/babylon_save/before_checkpoint()
 	// A stop does not wait: its save may catch the tram between stations, which the restore
@@ -485,30 +485,124 @@
 
 /// After a restore: a tram saved between stations (or stopped on the line) knows where it is
 /// (its nav beacon rides with it) but not its platform. It drives to the nearest platform, as
-/// tg's own controller reset does, once its control cabinet is paired.
+/// tg's own controller reset does, once its control cabinet is paired. A tram that cannot be
+/// reset, or whose cabinet never pairs, is logged and the players are told; a control cabinet
+/// paired with no tram is logged.
 /datum/babylon_save/proc/reset_stray_trams()
 	if(!babylon_restoring_saved_levels())
 		return
-	var/list/pending = list()
+	var/list/stray = list()
+	var/list/unpaired = list()
+	var/list/failed = list()
 	for(var/datum/transport_controller/linear/tram/tram as anything in SStransport.transports_by_type[TRANSPORT_TYPE_TRAM])
+		if(!tram.paired_cabinet)
+			unpaired += tram
 		if(!tram.idle_platform && tram.nav_beacon)
-			pending += tram
+			stray += tram
 	var/waited = 0
-	while(length(pending) && waited < 2 MINUTES)
-		for(var/datum/transport_controller/linear/tram/tram as anything in pending.Copy())
+	while((length(stray) || length(unpaired)) && waited < 2 MINUTES)
+		for(var/datum/transport_controller/linear/tram/tram as anything in unpaired.Copy())
+			if(QDELETED(tram) || tram.paired_cabinet)
+				unpaired -= tram
+		for(var/datum/transport_controller/linear/tram/tram as anything in stray.Copy())
 			if(QDELETED(tram))
-				pending -= tram
+				stray -= tram
 				continue
 			if(!tram.paired_cabinet || tram.controller_active)
 				continue
-			log_world("Babylon: tram [tram.specific_transport_id] was saved between stations; driving it to the nearest platform.")
-			// check_starting_landmark() turns the transport subsystem on only for a tram found on a
-			// platform; without this the reset trip never moves.
-			SStransport.can_fire = TRUE
-			tram.reset_position()
-			pending -= tram
+			stray -= tram
+			if(!reset_stray_tram(tram))
+				failed += tram
 		sleep(1 SECONDS)
 		waited += 1 SECONDS
+	var/list/problems = list()
+	for(var/datum/transport_controller/linear/tram/tram as anything in unpaired)
+		if(QDELETED(tram))
+			continue
+		problems += tram
+		log_world("Babylon: tram [tram.specific_transport_id] has no control cabinet after the restore[(tram in stray) ? " and is stuck between stations" : ""]; it cannot be called.")
+		message_admins("Babylon: tram [tram.specific_transport_id] has no control cabinet after the restore; it cannot be called.")
+	for(var/datum/transport_controller/linear/tram/tram as anything in failed)
+		if(!QDELETED(tram) && !(tram in problems))
+			problems += tram
+	for(var/obj/machinery/transport/tram_controller/cabinet as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/transport/tram_controller))
+		if(!cabinet.controller_datum)
+			log_world("Babylon: tram control cabinet [cabinet.type] at ([cabinet.x], [cabinet.y], [cabinet.z]) is not paired with any tram after the restore (wanted [cabinet.configured_transport_id]).")
+	if(length(problems))
+		INVOKE_ASYNC(src, PROC_REF(tell_tram_problem), problems)
+
+/// Drives a stray tram to the nearest platform: inbound first (tg's direction after a restore,
+/// which does not save travel_direction), else outbound. FALSE, logged, if it cannot.
+/datum/babylon_save/proc/reset_stray_tram(datum/transport_controller/linear/tram/tram)
+	var/direction = babylon_tram_reset_direction(tram, tram.nav_beacon)
+	if(!direction)
+		log_world("Babylon: tram [tram.specific_transport_id] was saved between stations at ([tram.nav_beacon.x], [tram.nav_beacon.y], [tram.nav_beacon.z]) and no platform lies on its line in either direction; it cannot be reset.")
+		message_admins("Babylon: tram [tram.specific_transport_id] could not be reset after the restore (no platform on its line) at [ADMIN_JMP(tram.nav_beacon)].")
+		return FALSE
+	log_world("Babylon: tram [tram.specific_transport_id] was saved between stations; driving it to the nearest platform ([direction == INBOUND ? "inbound" : "outbound"]).")
+	// check_starting_landmark() turns the transport subsystem on only for a tram found on a
+	// platform; without this the reset trip never moves.
+	SStransport.can_fire = TRUE
+	// reset_position() takes its direction from travel_direction (EAST/NORTH outbound).
+	tram.travel_direction = direction == OUTBOUND ? EAST : WEST
+	tram.reset_position()
+	if(!tram.controller_active)
+		log_world("Babylon: tram [tram.specific_transport_id] did not start its reset trip ([direction == INBOUND ? "inbound" : "outbound"]); it stays between stations.")
+		return FALSE
+	return TRUE
+
+/// The direction a reset trip from origin takes: INBOUND if a platform lies that way (what tg
+/// does), else OUTBOUND, else null.
+/proc/babylon_tram_reset_direction(datum/transport_controller/linear/tram/tram, atom/origin)
+	if(babylon_tram_platforms_towards(tram, INBOUND, origin))
+		return INBOUND
+	if(babylon_tram_platforms_towards(tram, OUTBOUND, origin))
+		return OUTBOUND
+	return null
+
+/// How many of the tram's platforms lie on its line from origin in direction (INBOUND/OUTBOUND),
+/// by the rule of tg's closest_nav_in_travel_dir() (the line runs along the nav beacon's dir),
+/// which stack_traces when there are none.
+/proc/babylon_tram_platforms_towards(datum/transport_controller/linear/tram/tram, direction, atom/origin)
+	var/obj/effect/landmark/transport/nav_beacon/tram/nav = tram.nav_beacon
+	. = 0
+	if(!nav || !origin?.z)
+		return
+	for(var/obj/effect/landmark/transport/nav_beacon/tram/candidate in SStransport.nav_beacons[tram.specific_transport_id])
+		if(candidate.z != origin.z)
+			continue
+		var/inbound
+		switch(nav.dir)
+			if(EAST, WEST)
+				if(candidate.y != origin.y)
+					continue
+				inbound = candidate.x < origin.x
+			if(NORTH, SOUTH)
+				if(candidate.x != origin.x)
+					continue
+				inbound = candidate.y < origin.y
+			else
+				continue
+		if(inbound == (direction == INBOUND))
+			.++
+
+/// Tells everyone in the world, and everyone who joins later, that a tram could not be reset
+/// after the restart, until each such tram stands at a platform with its cabinet again.
+/datum/babylon_save/proc/tell_tram_problem(list/trams)
+	var/list/told = list()
+	while(TRUE)
+		var/still_broken = FALSE
+		for(var/datum/transport_controller/linear/tram/tram as anything in trams)
+			if(!QDELETED(tram) && (!tram.idle_platform || !tram.paired_cabinet))
+				still_broken = TRUE
+		if(!still_broken)
+			return
+		for(var/client/player in GLOB.clients)
+			if(player.ckey in told)
+				continue
+			told += player.ckey
+			to_chat(player, span_warning("The tram could not be reset after the world restarted. It is stuck where it was saved and cannot be called. An admin can fix it."))
+		sleep(5 SECONDS)
 
 /proc/babylon_tram_travelling()
 	for(var/datum/transport_controller/linear/tram/tram as anything in SStransport.transports_by_type[TRANSPORT_TYPE_TRAM])

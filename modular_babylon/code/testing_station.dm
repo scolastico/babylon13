@@ -548,6 +548,23 @@
 	if(!destination)
 		return result
 	var/obj/effect/landmark/transport/nav_beacon/tram/platform/start = tram.idle_platform
+	// The reset direction after a restore (reset_stray_tram()): inbound when a platform lies that
+	// way, else outbound, so a tram beyond the last inbound platform still finds one.
+	var/obj/effect/landmark/transport/nav_beacon/tram/platform/first
+	var/obj/effect/landmark/transport/nav_beacon/tram/platform/last
+	for(var/obj/effect/landmark/transport/nav_beacon/tram/platform/candidate in SStransport.nav_beacons[tram.specific_transport_id])
+		if(candidate.z != tram.nav_beacon.z)
+			continue
+		var/along = (tram.nav_beacon.dir & (EAST|WEST)) ? candidate.x : candidate.y
+		if(!first || along < ((tram.nav_beacon.dir & (EAST|WEST)) ? first.x : first.y))
+			first = candidate
+		if(!last || along > ((tram.nav_beacon.dir & (EAST|WEST)) ? last.x : last.y))
+			last = candidate
+	result["reset_beyond_first_platform_goes_outbound"] = first && babylon_tram_reset_direction(tram, first) == OUTBOUND
+	result["reset_beyond_last_platform_goes_inbound"] = last && last != first && babylon_tram_reset_direction(tram, last) == INBOUND
+	// Off the line (a row or column with no platform): no reset, which the restore reports.
+	var/turf/off_line = locate(1, 1, tram.nav_beacon.z)
+	result["reset_off_line_is_refused"] = isnull(babylon_tram_reset_direction(tram, off_line))
 	// As the tram's own call buttons and console ask for it.
 	SStransport.incoming_request(tram.paired_cabinet, tram.specific_transport_id, destination.platform_code, NONE)
 	// Stopped once it is clearly off its platform (and before it reaches the next one).
