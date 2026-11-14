@@ -1057,6 +1057,7 @@
 			restore_gas(open.return_air(), record["gas"])
 		CHECK_TICK
 	restore_portable_connections(records)
+	reconnect_creative_canisters()
 	SSmachines.makepowernets()
 	restore_airlock_configuration(state)
 	// Door animations and their sleeping procs cannot survive a process restart.

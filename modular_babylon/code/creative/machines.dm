@@ -389,6 +389,15 @@ GLOBAL_VAR(babylon_creative_test_answers)
 		return FALSE
 	return connect(port)
 
+/// After a restore (persistence.dm restore_world, once the saved pipe networks and portable
+/// connections are back): every restored creative canister that belongs on a port goes back onto
+/// it. One that cannot yet (no pipe network) retries lazily in process_atmos.
+/datum/babylon_save/proc/reconnect_creative_canisters()
+	for(var/save_id in restored_atoms)
+		var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister = restored_atoms[save_id]
+		if(istype(canister) && !QDELETED(canister) && canister.babylon_port_wanted)
+			canister.babylon_reconnect_port()
+
 /obj/machinery/portable_atmospherics/canister/babylon_creative/connect(obj/machinery/atmospherics/components/unary/portables_connector/new_port)
 	. = ..()
 	if(.)
