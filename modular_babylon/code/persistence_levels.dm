@@ -33,9 +33,12 @@
 /proc/babylon_restoring_saved_levels()
 	return SSmapping.current_map?.map_path == BABYLON_SAVED_MAP_PATH && fexists("data/babylon/resume-state.json")
 
-/// Station checkpoints: a z<N>.dmm per level, records and turfs with their z.
 /datum/babylon_save/save_format_version()
 	return BABYLON_STATION_STATE_VERSION
+
+/// Station checkpoints: a z<N>.dmm per level, records and turfs with their z.
+/datum/babylon_save/writes_level_files()
+	return TRUE
 
 /// Every level a round can change: all but CentCom, transit/reserved levels and the Interlink,
 /// which every start rebuilds.

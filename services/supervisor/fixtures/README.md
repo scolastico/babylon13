@@ -16,10 +16,19 @@ Writers and readers:
 - **Supervisor** is `services/supervisor`: `Driver.prepare_station` (supervisor.py) and
   `checkpoints.py`.
 
-Readers branch on `version` and on which keys are present, never on the build. Babylon
-(`babylon.dmb`) checkpoints stay at version 7, with one `map.dmm` and no `levels` key. Station
-checkpoints start at version 8. The DM constants are `BABYLON_STATE_VERSION` and
-`BABYLON_STATION_STATE_VERSION` in `modular_babylon/__DEFINES/babylon.dm`.
+The layout and the version are separate things:
+
+- **Layout** is a property of the build. A Babylon (`babylon.dmb`) checkpoint has one `map.dmm`, no
+  `levels` key, and records and turfs without `z`. A station checkpoint has one `z<N>.dmm` per
+  saved level, a `levels` key, and a `z` on every record and turf. The DM writer picks it with
+  `writes_level_files()` (persistence.dm, overridden by the station build), and the supervisor's
+  `Driver.prepare` picks the reader by the world's build (`build_of`, from the map catalog). The DM
+  restore reads it from the keys (`z` present or not).
+- **Version** is only for migrations within a build's own format: the DM restore branches on it
+  to repair older saves (`version < 2`, `< 7`, ...). Bumping either build's version never changes
+  the layout. Babylon checkpoints are at version 7, station checkpoints at version 8. The DM
+  constants are `BABYLON_STATE_VERSION` and `BABYLON_STATION_STATE_VERSION` in
+  `modular_babylon/__DEFINES/babylon.dm`.
 
 | Key | Written by | Read by | Meaning |
 | --- | --- | --- | --- |

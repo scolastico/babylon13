@@ -515,8 +515,9 @@
 /datum/babylon_save/proc/restore_session_state(list/state)
 	return
 
-/// state.json "version" this build's checkpoints are written in. Babylon: BABYLON_STATE_VERSION
-/// (one map.dmm, records without z). The station build overrides it (BABYLON_STATION_STATE_VERSION).
+/// state.json "version" this build's checkpoints are written in, for migrations only (the layout
+/// is writes_level_files()). Babylon: BABYLON_STATE_VERSION. The station build overrides it
+/// (BABYLON_STATION_STATE_VERSION).
 /datum/babylon_save/proc/save_format_version()
 	return BABYLON_STATE_VERSION
 
@@ -580,13 +581,20 @@
 /datum/babylon_save/proc/persisted_levels()
 	return list(station_z)
 
+/// The checkpoint layout, separate from save_format_version() (which only drives migrations):
+/// FALSE (Babylon) writes one map.dmm and records and turfs without z; TRUE (the station build)
+/// writes a z<N>.dmm per saved level and a z on every record and turf. Driver.prepare reads the
+/// layout by the world's build (services/supervisor/fixtures/README.md).
+/datum/babylon_save/proc/writes_level_files()
+	return FALSE
+
 /// The map file a saved level is written to inside its generation directory.
 /datum/babylon_save/proc/level_file(z)
-	return save_format_version() < BABYLON_STATION_STATE_VERSION ? "map.dmm" : "z[z].dmm"
+	return writes_level_files() ? "z[z].dmm" : "map.dmm"
 
 /// Saves one z-level: list("map_text" = its .dmm (a single-level TGM map), "records" = saved
 /// objects (state.json "records"), "turfs" = room air and temperature (state.json "turfs")).
-/// Records and turfs carry their z from BABYLON_STATION_STATE_VERSION on; Babylon's do not.
+/// Records and turfs carry their z when writes_level_files(); Babylon's do not.
 /datum/babylon_save/proc/save_level(z, list/mobs_by_turf = checkpoint_mobs(), list/skipped_tiles = checkpoint_skipped_tiles(), list/tile_extras = checkpoint_tile_extras())
 	var/list/records = list()
 	var/list/turfs = list()
@@ -678,7 +686,7 @@
 			grid += "[key]\n"
 		grid += "\"}\n"
 		CHECK_TICK
-	if(save_format_version() >= BABYLON_STATION_STATE_VERSION)
+	if(writes_level_files())
 		for(var/list/record as anything in records)
 			record["z"] = z
 		for(var/list/turf_data as anything in turfs)

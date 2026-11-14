@@ -52,6 +52,20 @@ class FixtureShape(unittest.TestCase):
         self.assertEqual(dm_define("BABYLON_STATION_STATE_VERSION"), 8)
         self.assertEqual(dm_define("BABYLON_STATE_VERSION"), 7)
 
+    def test_layout_is_not_decided_by_version(self):
+        """The layout (one map.dmm or z<N>.dmm per level) is writes_level_files(), never a version
+        comparison: a Babylon format bump must not switch it to the station layout."""
+        code = ROOT / "modular_babylon/code"
+        for path in code.rglob("*.dm"):
+            text = path.read_text()
+            self.assertNotRegex(text, r"save_format_version\(\)\s*[<>]=?\s*BABYLON_STATION_STATE_VERSION", path.name)
+            self.assertNotRegex(text, r"version\"?\]?\s*\|\|\s*1\)\s*[<>]=?\s*BABYLON_STATION_STATE_VERSION", path.name)
+        engine = (code / "persistence.dm").read_text()
+        self.assertRegex(engine, r"/datum/babylon_save/proc/writes_level_files\(\)\n\treturn FALSE")
+        self.assertIn('return writes_level_files() ? "z[z].dmm" : "map.dmm"', engine)
+        station = (code / "persistence_levels.dm").read_text()
+        self.assertRegex(station, r"/datum/babylon_save/writes_level_files\(\)\n\treturn TRUE")
+
     def test_generation_name(self):
         state = load_fixture()
         self.assertRegex(state["generation"], r"^save-\d{8}-\d{6}-%d$" % state["save_count"])
