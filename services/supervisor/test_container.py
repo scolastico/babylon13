@@ -38,6 +38,21 @@ class ContainerConfiguration(unittest.TestCase):
         self.assertEqual(config['afk_timeout_seconds'], 300)
         self.assertEqual(runtime.settings(dict(BABYLON_AFK_TIMEOUT_SECONDS='0'))[0]['afk_timeout_seconds'], 0)
 
+    def test_tutorial_cooldown_and_review_channel_come_from_the_environment(self):
+        self.assertEqual(runtime.settings({})[0]['tutorial_submit_cooldown_hours'], 6)
+        self.assertEqual(runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS='0'))[0]['tutorial_submit_cooldown_hours'], 0)
+        self.assertEqual(runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS='24'))[0]['tutorial_submit_cooldown_hours'], 24)
+        for value in ('-1', '1.5', 'six'):
+            with self.assertRaises(ValueError):
+                runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS=value))
+        bot = runtime.discord_settings(dict(BABYLON_DISCORD_TOKEN='t', BABYLON_DISCORD_GUILD_ID='123456',
+                                            BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL='987654'))
+        self.assertEqual(bot['channels'], dict(tutorial_review=987654))
+        root = Path(__file__).resolve().parents[2]
+        for name in ('BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS', 'BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL'):
+            for document in ('.env.example', 'compose.yml', 'modular_babylon/CLUSTER.md'):
+                self.assertIn(name, (root / document).read_text(), document)
+
     def test_hub_listing_is_opt_in_and_configurable(self):
         lobby = runtime.settings({})[1]
         self.assertFalse(lobby['hub_listed'])

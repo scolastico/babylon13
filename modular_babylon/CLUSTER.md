@@ -97,6 +97,12 @@ are set; `BABYLON_DISCORD_FEATURES` picks what it does:
 | `ahelp` | Every adminhelp from a world becomes a message with a thread in a staff channel: the player's messages and replies, and in-game admins' answers. Staff answer with the "Reply" button; the player gets it as an admin PM (shown as "Administrator" unless `SHOW_IRC_NAME` is set). "Close ticket" closes it in the world and archives the thread. The player is told "Created an adminhelp for you." and, if any member of `_AHELP_ROLES` (default: the staff roles) is online on Discord, how many; that count needs the bot's Presence Intent, without it the bot runs and the count is left out. | `_AHELP_CHANNEL`, `_STAFF_ROLES`, optional `_AHELP_ROLES` |
 | `tickets` | An "Open a ticket" button in a read-only channel opens a private channel for the member and `BABYLON_DISCORD_STAFF_ROLES`. Creator and staff can add people; closing it sends a `.txt` transcript to the creator by DM and to the ticket log. | `_TICKET_PANEL_CHANNEL`, `_TICKET_LOG_CHANNEL`, `_TICKET_CATEGORY`, `_STAFF_ROLES` |
 
+`BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL` (no feature needed) is a staff channel
+that gets a "New tutorial submitted" message with the title, author, map and
+description of every submitted tutorial and a hint to review it in the lobby.
+Without it (or without the bot) a submission is only logged; it still waits in
+the lobby under **Pending tutorials**.
+
 `/status` is always available. In the developer portal, enable the
 **Server Members Intent** for `link`, `logs` and `ahelp`, and the **Message
 Content Intent** for `logs`; without them Discord refuses the connection and the
@@ -530,6 +536,38 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 - **Failed starts.** If the round cannot start, the world says so and the owner may press
   Start round again; tutorial worlds show a RETRY TUTORIAL button after three failed
   spawns of a player.
+
+## Tutorials
+
+Players build a tutorial in a **Creative** world on a **station map** (a Creative
+Plane or a station; Babylon worlds can build but not submit) and submit it from the
+Creative panel. The world's owner submits it with a title (1-60 characters) and a
+short description (up to 500). The supervisor copies a checkpoint of the world into
+`<data>/tutorials/pending/<id>/` (`meta.json` plus `save/`); the submitted copy can't
+be changed by its author afterwards. Each player can submit once every
+`BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS` hours (default 6, `0` turns the cooldown
+off; supervisor JSON: `tutorial_submit_cooldown_hours`). A submission that fails
+(for example a save that can't be copied) starts no cooldown.
+
+The lobby's **Tutorials** tab lists the published tutorials as cards with the map's
+preview, title, author and description:
+
+- **Play** starts a private, unsaved copy for the player and joins it. It counts
+  towards the running-world limits but not towards the world limits, and it is
+  deleted as soon as it stops. A player has one tutorial at a time: Play on the same
+  tutorial rejoins the running copy, another tutorial waits until that one has ended.
+- **Copy to my worlds** creates a new **Creative, saved** world of the player's own
+  whose first checkpoint is the tutorial. It counts against the world limits like any
+  saved world.
+
+Server administrators also see **Pending tutorials** (the tab shows how many wait):
+**Play** it as a player, **Edit** it (an admin-owned, Creative, unsaved world started
+from the pending copy; there is one per tutorial and other admins join it; **Save back
+to pending tutorial** in the Creative panel's Tutorial tab overwrites the pending copy;
+the world is deleted when it stops), **Accept** (moves it to `published/`) or
+**Reject** (deletes it). Published tutorials have a **Delete** button for admins.
+Deleting or accepting a tutorial does not disturb copies that are running: every
+copy is prepared from its own files when it starts.
 
 ## AFK return to the lobby
 

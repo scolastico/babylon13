@@ -428,6 +428,41 @@ class BotHelpers(unittest.TestCase):
         self.assertIsNone(masked_link.search(embed.fields[0].value), embed.fields[0].value)
         self.assertIsNotNone(masked_link.search(bait))  # the pattern does catch an unescaped link
 
+    def test_tutorial_notice_is_escaped_and_points_to_the_lobby(self):
+        bait = "[Free Nitro](https://example.org) **bold**"
+        embed = self.bot.tutorial_embed(dict(id="t", title=bait, description=bait, author="someone",
+                                             map="creative_plane_m", map_name="Creative Plane M"))
+        self.assertEqual(embed.title, "📝 New tutorial submitted")
+        fields = {f.name: f.value for f in embed.fields}
+        self.assertEqual((fields["Author"], fields["Map"]), ("`someone`", "Creative Plane M"))
+        self.assertNotIn("**bold**", fields["Title"])
+        self.assertNotIn("**bold**", embed.description)
+        self.assertIn("Pending tutorials", embed.footer.text)
+
+    def test_tutorials_are_posted_to_the_review_channel_or_only_logged(self):
+        import asyncio
+        sent = []
+
+        async def send(key, **message):
+            sent.append((key, message))
+        tutorial = dict(id="t1", title="Power", description="", author="someone", map="m", map_name="M")
+        for channel in (None, object()):
+            client = types.SimpleNamespace(channel=lambda key, c=channel: c if key == "tutorial_review" else None, send=send)
+            asyncio.run(self.bot.BabylonBot.post_tutorial(client, tutorial))
+        (key, message), = sent
+        self.assertEqual(key, "tutorial_review")
+        self.assertEqual(message["embed"].fields[0].value, "Power")
+
+    def test_the_bot_tells_the_supervisor_where_to_send_tutorials(self):
+        import asyncio
+
+        async def sync(guild=None):
+            return []
+        client = types.SimpleNamespace(tree=types.SimpleNamespace(sync=sync), guild_object=None, features=set(),
+                                       supervisor=types.SimpleNamespace(), tutorial_threadsafe="notify")
+        asyncio.run(self.bot.BabylonBot.setup_hook(client))
+        self.assertEqual(client.supervisor.tutorial_notify, "notify")
+
     def test_raw_http_goes_through_request_only(self):
         # discord.py's http helpers take multipart parameters; calling them with keywords
         # fails at runtime only. Raw calls must use http.request with a Route.
