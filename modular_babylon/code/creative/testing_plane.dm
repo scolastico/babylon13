@@ -315,6 +315,14 @@
 	if(nitrogen)
 		nitrogen.creative_pressure = 3210
 	result["canister_setting_changed"] = nitrogen?.creative_pressure == 3210
+	// A player unwrenches the void canister and leaves it on its port's tile.
+	var/obj/machinery/portable_atmospherics/canister/babylon_creative/void_canister
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
+		if(babylon_on_plane(canister) && canister.creative_mode == "void")
+			void_canister = canister
+	void_canister?.disconnect()
+	result["void_canister_unwrenched"] = !!void_canister && !void_canister.connected_port && !void_canister.babylon_port_wanted \
+		&& !!(locate(/obj/machinery/atmospherics/components/unary/portables_connector) in void_canister.loc)
 	// Two spawned cleanbots (as the Creative panel spawns them): one as spawned, without ghost
 	// possession, and one whose personality setting a player switched on.
 	var/mob/living/basic/bot/cleanbot/bot_off = new(locate(origin.x + 28, origin.y + 20, origin.z))
@@ -330,9 +338,10 @@
 	result["outfit_type"] = "[outfit_item?.type]"
 	return result
 
-/// After the save above was restored: the creative canisters are back on their ports with their
-/// settings, the NPC spawner came back and made its NPC once (the NPC and the dropped outfit item
-/// were never saved), and the ordinary item next to it was.
+/// After the save above was restored: the creative source canisters are back on their ports with
+/// their settings and the unwrenched void canister is not, the NPC spawner came back and made its
+/// NPC once (the NPC and the dropped outfit item were never saved), the ordinary item next to it
+/// was saved, and the two cleanbots kept their possession setting.
 /datum/babylon_save/proc/test_creative_plane_restored(spawner_id, outfit_type)
 	var/list/result = list()
 	var/turf/origin = creative_plane_origin()
@@ -341,17 +350,26 @@
 		return result
 	var/turf/drop_tile = locate(origin.x + 24, origin.y + 20, origin.z)
 	var/list/canisters = list()
-	var/connected = TRUE
+	var/ports_right = TRUE
+	var/ports_right_at_restore = TRUE
 	var/pressure_kept = FALSE
 	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
 		if(!babylon_on_plane(canister))
 			continue
 		canisters += canister
-		if(!canister.connected_port || canister.connected_port.loc != canister.loc)
-			connected = FALSE
+		// The two sources are back on their ports; the void canister, unwrenched before the save,
+		// stays off its port (now and as the restore left it, before any atmos tick).
+		var/wanted = canister.creative_mode != "void"
+		var/on_port = !!canister.connected_port && canister.connected_port.loc == canister.loc
+		if(canister.babylon_port_wanted != wanted || on_port != wanted)
+			ports_right = FALSE
+		var/list/at_restore = creative_canister_ports_after_restore?[canister.babylon_save_id]
+		if(!at_restore || !!at_restore[1] != wanted || !!at_restore[2] != wanted)
+			ports_right_at_restore = FALSE
 		if(canister.creative_gas == /datum/gas/nitrogen && canister.creative_pressure == 3210)
 			pressure_kept = TRUE
-	result["three_canisters_reconnected"] = length(canisters) == 3 && connected
+	result["canister_ports_as_saved"] = length(canisters) == 3 && ports_right
+	result["canister_ports_as_saved_at_restore"] = length(canisters) == 3 && ports_right_at_restore
 	result["canister_setting_restored"] = pressure_kept
 	var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_find(spawner_id)
 	result["spawner_restored"] = istype(spawner) && spawner.setting("npc_name") == "Guide"

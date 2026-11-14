@@ -18,7 +18,7 @@
 #define BABYLON_CREATIVE_TINT "#c8a2ff"
 #define BABYLON_CREATIVE_GESTURE "Ctrl + Shift + click"
 /// Persisted settings of the creative machines, added to the save's extra_fields.
-#define BABYLON_CREATIVE_MACHINE_FIELDS list("creative_mode", "creative_gas", "creative_pressure", "creative_reagent", "creative_item", "creative_interval")
+#define BABYLON_CREATIVE_MACHINE_FIELDS list("creative_mode", "creative_gas", "creative_pressure", "creative_reagent", "creative_item", "creative_interval", "babylon_port_wanted")
 
 /// Integration tests answer the settings prompts from this list instead of asking a player.
 GLOBAL_VAR(babylon_creative_test_answers)
@@ -334,7 +334,8 @@ GLOBAL_VAR(babylon_creative_test_answers)
 /obj/machinery/portable_atmospherics/canister/babylon_creative/proc/on_air_initialized(datum/source)
 	SIGNAL_HANDLER
 	UnregisterSignal(SSair, COMSIG_SUBSYSTEM_POST_INITIALIZE)
-	babylon_reconnect_port()
+	if(babylon_port_wanted)
+		babylon_reconnect_port()
 
 /// Connects to a free connector port on its tile once that port's pipe network exists. TRUE if
 /// it is connected afterwards. Also called after a save is restored.
@@ -346,14 +347,28 @@ GLOBAL_VAR(babylon_creative_test_answers)
 		return FALSE
 	return connect(port)
 
+/datum/babylon_save
+	/// Save id => list(wanted, connected) of every restored creative canister, as
+	/// reconnect_creative_canisters() left it (for the restore test).
+	var/list/creative_canister_ports_after_restore
+
 /// After a restore (persistence.dm restore_world, once the saved pipe networks and portable
-/// connections are back): every restored creative canister that belongs on a port goes back onto
-/// it. One that cannot yet (no pipe network) retries lazily in process_atmos.
+/// connections are back), every restored creative canister takes its saved babylon_port_wanted:
+/// one that belongs on its port goes back onto it (one that cannot yet, without a pipe network,
+/// retries lazily in process_atmos); one a player had unwrenched but left on the port's tile is
+/// taken off the port again, which Initialize connected it to. Saves from before the field was
+/// kept leave it as Initialize set it (on a port: wanted).
 /datum/babylon_save/proc/reconnect_creative_canisters()
+	creative_canister_ports_after_restore = list()
 	for(var/save_id in restored_atoms)
 		var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister = restored_atoms[save_id]
-		if(istype(canister) && !QDELETED(canister) && canister.babylon_port_wanted)
+		if(!istype(canister) || QDELETED(canister))
+			continue
+		if(canister.babylon_port_wanted)
 			canister.babylon_reconnect_port()
+		else if(canister.connected_port)
+			canister.disconnect()
+		creative_canister_ports_after_restore[save_id] = list(canister.babylon_port_wanted, !!canister.connected_port)
 
 /obj/machinery/portable_atmospherics/canister/babylon_creative/connect(obj/machinery/atmospherics/components/unary/portables_connector/new_port)
 	. = ..()

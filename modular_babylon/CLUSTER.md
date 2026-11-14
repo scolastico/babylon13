@@ -703,7 +703,7 @@ arrive as their preferences character.
   an air mixer (79% nitrogen, 21% oxygen), whose supply line runs two vents; two
   scrubbers drain into a creative void canister. Ordinary pipes; the air alarm controls
   the vents and scrubbers. The canisters connect to their ports by themselves (also after
-  a restore); unwrenching one keeps it off its port.
+  a restore); unwrenching one keeps it off its port, also across saves and restarts.
 - **Spawn pad** (dark 5x5 square at the south edge, on the middle cable). Late-joiners
   arrive here, Assistants start here, and visitors and spectators appear in its middle.
   Players whose job has no start point on the plane arrive on the pad as well.
