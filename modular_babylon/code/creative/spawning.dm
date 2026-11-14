@@ -65,6 +65,16 @@
 /proc/babylon_creative_spawn_blocked(path)
 	if(!ispath(path))
 		return TRUE
+	// Searches (the panel's index, the disposal unit's picker, the tutorial wand's type fields)
+	// ask about thousands of types; each answer is worked out once.
+	var/static/list/verdicts = list()
+	. = verdicts[path]
+	if(isnull(.))
+		. = babylon_creative_spawn_verdict(path)
+		verdicts[path] = .
+
+/// babylon_creative_spawn_blocked() without the cache.
+/proc/babylon_creative_spawn_verdict(path)
 	var/static/list/blocked_roots = list(
 		/obj/singularity,
 		/obj/energy_ball,
