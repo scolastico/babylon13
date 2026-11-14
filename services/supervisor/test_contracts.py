@@ -176,5 +176,20 @@ class WorldPolicy(unittest.TestCase):
             self.assertNotIn("babylon_station_saving_available", text, path.name)
 
 
+class RestoreGuards(unittest.TestCase):
+    def test_every_after_restore_call_is_guarded(self):
+        # One object's reconcile step (babylon_after_restore) must never fail a whole world's
+        # restore or a whole paste: every call runs inside its own try.
+        calls = 0
+        for path, text in dm_sources().items():
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                if ".babylon_after_restore(" not in line:
+                    continue
+                calls += 1
+                self.assertEqual(lines[index - 1].strip(), "try", "%s:%d" % (path.name, index + 1))
+        self.assertGreaterEqual(calls, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

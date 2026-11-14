@@ -161,15 +161,12 @@ SUBSYSTEM_DEF(babylon_builder)
 		drones += drone
 	return drones_by_turf
 
-/datum/babylon_save/capture_session_state(list/state)
+/datum/babylon_save/capture_session_state(list/state, for_tutorial = FALSE)
 	// The owner's drone, also at the top level, as saves before multiplayer had it.
 	var/datum/babylon_player/owner = owner_player()
 	state["builder"] = !QDELETED(owner.builder) ? owner.builder?.babylon_save_id : null
 	state["player"] = list("respawn_pending" = owner.respawn_pending, "respawn_remaining" = max(0, owner.respawn_ready_at - world.time), "spawn_x" = owner.respawn_turf?.x, "spawn_y" = owner.respawn_turf?.y, "profile" = owner.respawn_pending ? owner.drone_profile.Copy() : owner.capture_drone_profile())
-	var/list/players = list()
-	for(var/player_key in player_sessions)
-		players[player_key] = player_snapshot(player_sessions[player_key])
-	state["players"] = players
+	capture_players(state, for_tutorial)
 	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
 	if(research)
 		state["research"] = list("nodes" = research.researched_nodes.Copy(), "designs" = research.researched_designs.Copy(), "points" = research.research_points.Copy(), "target" = research.babylon_target, "target_by" = research.babylon_target_by, "target_location" = research.babylon_target_location)
@@ -182,12 +179,7 @@ SUBSYSTEM_DEF(babylon_builder)
 		legacy_player["builder"] = state["builder"]
 		players = list()
 		players[owner_ckey] = legacy_player
-	for(var/player_key in players)
-		var/datum/babylon_player/player = player_sessions[player_key]
-		if(!player)
-			player = new(player_key)
-			player_sessions[player_key] = player
-		restore_player(player, players[player_key])
+	restore_players(players)
 	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
 	var/list/research_data = state["research"]
 	if(research && research_data)
@@ -252,15 +244,15 @@ SUBSYSTEM_DEF(babylon_builder)
 	player_sessions[player_key] = player
 	return player
 
-/datum/babylon_save/proc/player_snapshot(datum/babylon_player/player)
-	return list("builder" = !QDELETED(player.builder) ? player.builder.babylon_save_id : null, "respawn_pending" = player.respawn_pending, "respawn_remaining" = max(0, player.respawn_ready_at - world.time), "spawn_x" = player.respawn_turf?.x, "spawn_y" = player.respawn_turf?.y, "profile" = player.respawn_pending ? player.drone_profile.Copy() : player.capture_drone_profile(), "play_time" = player.play_time)
+/datum/babylon_save/player_snapshot(datum/babylon_player/player)
+	return ..() + list("builder" = !QDELETED(player.builder) ? player.builder.babylon_save_id : null, "respawn_pending" = player.respawn_pending, "respawn_remaining" = max(0, player.respawn_ready_at - world.time), "spawn_x" = player.respawn_turf?.x, "spawn_y" = player.respawn_turf?.y, "profile" = player.respawn_pending ? player.drone_profile.Copy() : player.capture_drone_profile())
 
-/datum/babylon_save/proc/restore_player(datum/babylon_player/player, list/snapshot)
+/datum/babylon_save/restore_player(datum/babylon_player/player, list/snapshot)
+	..()
 	player.builder = restored_atoms[snapshot["builder"]]
 	player.respawn_pending = snapshot["respawn_pending"]
 	player.respawn_ready_at = player.respawn_pending ? world.time + snapshot["respawn_remaining"] : 0
 	player.drone_profile = snapshot["profile"] || list()
-	player.play_time = isnum(snapshot["play_time"]) ? snapshot["play_time"] : 0
 	if(snapshot["spawn_x"] && snapshot["spawn_y"])
 		player.respawn_turf = locate(snapshot["spawn_x"], snapshot["spawn_y"], station_z)
 	var/mob/living/basic/drone/babylon/drone = player.builder

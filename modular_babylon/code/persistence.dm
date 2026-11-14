@@ -404,8 +404,10 @@
 	var/list/last_save_report
 
 /// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced
-/// (a tutorial's save back to its pending copy).
-/datum/babylon_save/proc/save_world(force = FALSE)
+/// (a tutorial's save back to its pending copy). for_tutorial: the checkpoint becomes a tutorial
+/// snapshot (a submission or save-back) and keeps no characters or per-player records
+/// (babylon_world_saves_characters()).
+/datum/babylon_save/proc/save_world(force = FALSE, for_tutorial = FALSE)
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
@@ -424,7 +426,7 @@
 	sleep(1 TICKS)
 	var/list/result
 	try
-		result = save_world_impl()
+		result = save_world_impl(for_tutorial)
 	catch(var/exception/error)
 		result = list("error" = "Checkpoint failed: [error]")
 		log_world("BABYLON SAVE ERROR: [error]")
@@ -524,8 +526,16 @@
 	return list()
 
 /// Adds the build's own session data (players, research ...) to a checkpoint's state.json.
-/datum/babylon_save/proc/capture_session_state(list/state)
+/// for_tutorial: a tutorial snapshot, which keeps no characters or per-player records.
+/datum/babylon_save/proc/capture_session_state(list/state, for_tutorial = FALSE)
 	return
+
+/// Creates the saved objects that hold other saved objects but are not in the saved map (the
+/// station's player characters), before restore_world()'s records pass: they get their save ids
+/// in restored_atoms, so records whose parent they are find it. Returns the records to restore
+/// with the others (their own records and those of their contents). Babylon has none.
+/datum/babylon_save/proc/restore_containers(list/state)
+	return list()
 
 /// Restores what capture_session_state saved, once every saved object exists again.
 /datum/babylon_save/proc/restore_session_state(list/state)
@@ -709,7 +719,7 @@
 			turf_data["z"] = z
 	return list("map_text" = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]", "records" = records, "turfs" = turfs)
 
-/datum/babylon_save/proc/save_world_impl()
+/datum/babylon_save/proc/save_world_impl(for_tutorial = FALSE)
 	var/list/levels = persisted_levels()
 	// Which levels changed is taken now, while the world is paused (changes from here on count
 	// for the next save).
@@ -745,7 +755,9 @@
 	// 7: non-item contents of closets and crates are saved (restore_lost_supermatter()).
 	// "records" and "turfs" are spliced in as JSON below, level by level.
 	var/list/state = list("version" = save_format_version(), "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = "@babylon-records@", "turfs" = "@babylon-turfs@")
-	capture_session_state(state)
+	capture_session_state(state, for_tutorial)
+	// The session's capture may give objects their first save id (the characters' items).
+	state["next_id"] = next_id
 	state["sun"] = list("azimuth" = SSsun.azimuth, "azimuth_mod" = SSsun.azimuth_mod, "base_rotation" = SSsun.base_rotation)
 	state["play_time"] = play_time
 	checkpoint_capture_ms = (REALTIMEOFDAY - checkpoint_started) * 100
@@ -905,6 +917,11 @@
 		CHECK_TICK
 	if(duplicate_ids)
 		log_world("Babylon restore: [duplicate_ids] save id(s) are carried by more than one object; references to them may point at the wrong one.")
+	var/list/container_records = restore_containers(state)
+	if(length(container_records))
+		records = records + container_records
+		for(var/list/record as anything in container_records)
+			resume_records[record["id"]] = record
 	var/list/used_children = list()
 	for(var/list/record as anything in records)
 		var/save_id = record["id"]
@@ -915,6 +932,9 @@
 				continue
 			var/path = text2path(record["type"])
 			for(var/obj/candidate in parent.contents)
+				// A body's own organs and limbs are never one of its saved items.
+				if(ismob(parent) && (isorgan(candidate) || isbodypart(candidate)))
+					continue
 				// A candidate that carries another saved object's id is that object, not this one.
 				if(candidate.type == path && !(candidate in used_children) && (!candidate.babylon_save_id || candidate.babylon_save_id == save_id))
 					thing = candidate
@@ -1106,7 +1126,11 @@
 	for(var/list/record as anything in records)
 		var/atom/thing = restored_atoms[record["id"]]
 		if(thing && !QDELETED(thing))
-			thing.babylon_after_restore(record["fields"] || list())
+			// One object's reconcile step must never fail the whole world's restore.
+			try
+				thing.babylon_after_restore(record["fields"] || list())
+			catch(var/exception/error)
+				log_world("Babylon restore: [thing.type] [record["id"]] could not be reconciled: [error] ([error?.file]:[error?.line])")
 		CHECK_TICK
 	record_creative_canister_ports()
 	SSmachines.makepowernets()

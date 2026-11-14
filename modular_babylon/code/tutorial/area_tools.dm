@@ -650,8 +650,12 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			value = values.Copy()
 		thing.vars[field] = value
 	thing.update_appearance()
-	// As after a restore: lights, cameras, canister ports ... reconcile (persistence.dm).
-	thing.babylon_after_restore(settings)
+	// As after a restore: lights, cameras, canister ports ... reconcile (persistence.dm). One
+	// object's reconcile step must not abort the rest of the paste.
+	try
+		thing.babylon_after_restore(settings)
+	catch(var/exception/error)
+		log_world("Babylon paste: [thing.type] could not be reconciled: [error] ([error?.file]:[error?.line])")
 
 /// Closets and storage items: their contents are copied too.
 /proc/babylon_area_is_container(atom/thing)

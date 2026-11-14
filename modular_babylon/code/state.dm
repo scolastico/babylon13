@@ -77,6 +77,41 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 /datum/babylon_player/New(ckey)
 	src.ckey = ckey
 
+// Per-player state goes through one keyed path in both builds: state["players"][ckey] is
+// player_snapshot() of player_sessions[ckey], and restore_players() gives each saved ckey its
+// record back through restore_player(). The builds add their own fields by overriding both
+// (Babylon: the drone; play_time.dm's play time is here). The station's characters
+// (state["characters"], station_characters.dm) are held on the same records.
+
+/// Writes state["players"]: every player's snapshot, by ckey. Nothing for a tutorial snapshot
+/// (babylon_world_saves_characters()).
+/datum/babylon_save/proc/capture_players(list/state, for_tutorial = FALSE)
+	var/list/players = list()
+	if(babylon_world_saves_characters(for_tutorial))
+		for(var/player_key in player_sessions)
+			players[player_key] = player_snapshot(player_sessions[player_key])
+	state["players"] = players
+
+/// One player's saved record (state["players"][ckey]).
+/datum/babylon_save/proc/player_snapshot(datum/babylon_player/player)
+	return list("play_time" = player.play_time)
+
+/// Restores state["players"] (or a build's legacy equivalent): a record for every saved ckey.
+/datum/babylon_save/proc/restore_players(list/players)
+	if(!islist(players))
+		return
+	for(var/player_key in players)
+		if(ckey(player_key) != player_key || !islist(players[player_key]))
+			continue
+		var/datum/babylon_player/player = player_sessions[player_key]
+		if(!player)
+			player = new(player_key)
+			player_sessions[player_key] = player
+		restore_player(player, players[player_key])
+
+/datum/babylon_save/proc/restore_player(datum/babylon_player/player, list/snapshot)
+	player.play_time = isnum(snapshot["play_time"]) ? snapshot["play_time"] : 0
+
 /// The world owner's record, once they have one (Babylon: from SSbabylon_builder's start on).
 /datum/babylon_save/proc/owner_player()
 	RETURN_TYPE(/datum/babylon_player)
