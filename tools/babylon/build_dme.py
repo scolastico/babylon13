@@ -13,10 +13,13 @@ import sys
 
 QUIRK = re.compile(r"error: \w+: invalid variable|warning \(unused_var\)")
 RECIPE = """
-Babylon: this looks like the BYOND 516.1686 slot quirk, not a real problem in the reported file.
-The compiler mishandles whichever variable lands on one particular slot, so any change that adds
-or removes a variable can move it onto another one: a static that is "invalid", or a used local
-reported as "unused_var". Add or remove one padding global (babylon_byond_1686_slot_pad_*) in
+Babylon: this may be the BYOND 516.1686 slot quirk. First check the reported variable: a local
+that really is never read is an ordinary warning to fix in the code, not the quirk. If it is
+plainly used (or a static is "invalid"), it is the quirk: the compiler mishandles whichever
+variable lands on one particular slot, and any change that adds or removes a variable can move
+it. Treat such a build as possibly MISCOMPILED, not as noise: the same slot is used for code
+generation, and a variable that lands on it without a diagnostic can be broken silently. Do not
+ship or bisect with it. Add or remove one padding global (babylon_byond_1686_slot_pad_*) in
 modular_babylon/code/world_flags.dm for the affected build and compile all four builds again.
 See modular_babylon/UPSTREAM_HOOKS.md, "BYOND 516.1686 slot quirk".
 """
@@ -30,7 +33,9 @@ def quirk_lines(output):
 def main(environments):
     status = 0
     for environment in environments:
-        result = subprocess.run(["DreamMaker", "-DCBT", environment], capture_output=True, text=True)
+        # DreamMaker output is not always UTF-8; never fail a build over how its log decodes.
+        result = subprocess.run(["DreamMaker", "-DCBT", environment], capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
         output = result.stdout + result.stderr
         sys.stdout.write(output)
         if quirk_lines(output):

@@ -207,7 +207,10 @@ plainly used but reported as `warning (unused_var)` (`suspect_gloves` in
 `forensics_helpers.dm`, `loser_controller` in `cat_bt.dm`, `plant_smudge` in
 `plant_genes.dm`). The reported file is never the cause: any change that adds or removes
 a variable anywhere in the build moves the slot onto another variable, so the same
-change can break one build and not the other three.
+change can break one build and not the other three. Treat a build that shows it as
+possibly miscompiled, not as noise: the slot is used for code generation too, and a
+clean build only means that whichever variable holds the slot now gives no diagnostic.
+A local that really is never read is an ordinary warning, not the quirk.
 
 Recipe: add or remove one padding global (`var/global/babylon_byond_1686_slot_pad_<n>`)
 in the block for the affected build at the end of `modular_babylon/code/world_flags.dm`,
