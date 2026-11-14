@@ -120,10 +120,6 @@ class SupervisorReadsTheFixture(unittest.TestCase):
         self.driver.prepare(world, {"id": "run", "port": 1400, "secret": "test-only"})
         return self.data / "worlds/w1"
 
-    # Driver.prepare_station accepts only a list for a level's "traits", but tg's map json (and so
-    # what a station save writes, Task D1) uses an object per level. Remove this marker when the
-    # supervisor accepts objects; "unexpected success" then reminds whoever fixes it.
-    @unittest.expectedFailure
     def test_restore_stages_the_saved_levels(self):
         root = self.prepare()
         files = [level["file"] for level in self.state["levels"]]

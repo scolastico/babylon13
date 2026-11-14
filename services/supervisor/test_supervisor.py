@@ -13,6 +13,7 @@ class FakeDriver:
         self.runs = {}
         self.starts = 0
         self.fail_save = False
+        self.saves = True
 
     def start(self, world, run):
         self.starts += 1
@@ -30,7 +31,8 @@ class FakeDriver:
         if self.fail_save:
             return {"error": "disk full"}
         del self.runs[run["id"]]
-        return {"ok": True}
+        # What managed_stop answers (admission.dm): worlds that are not saved stop without a save.
+        return {"ok": True, "saved": int(self.saves)}
 
     def ahelp_reply(self, run, payload):
         self.replies = getattr(self, "replies", []) + [(run["id"], payload)]
@@ -291,6 +293,24 @@ class Policies(unittest.TestCase):
             time.sleep(.01)
         self.s.tick()
         self.assertIsNone(self.s.row("SELECT * FROM runs"))
+
+    def test_unsaved_world_stop_ends_stopped_not_in_error(self):
+        # A world that is not saved (persistent=0) answers managed_stop with ok and saved=0: the
+        # run must end as an ordinary stop, never in the error state that keeps its process.
+        w = self.create(persistent=0)
+        run = self.start(w)
+        self.driver.saves = False
+        self.s.dispatch("owner", "stop", {"world": w})
+        for _ in range(100):
+            if not self.s.stop_workers:
+                break
+            time.sleep(.01)
+        current = self.s.row("SELECT * FROM runs")
+        self.assertTrue(current is None or (current["state"], current["error"]) == ("stopping", None), dict(current or {}))
+        self.s.tick()
+        self.assertIsNone(self.s.row("SELECT * FROM runs"))
+        self.assertFalse(self.driver.alive(run))
+        self.assertIsNone(self.s.last_save(w))
 
     def test_list_shows_round_end_and_members_to_managers(self):
         w = self.create()

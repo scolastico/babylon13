@@ -17,6 +17,7 @@ CATALOG = {"maps": [
      "map_json": "box/box.json", "preview": None, "multiz": True}]}
 BOX_JSON = '{"map_name": "Box", "map_path": "map_files/box", "map_file": ["a.dmm"]}'
 RUN = {"id": "run", "port": 1400, "secret": "test-only"}
+STATION_FIXTURE = Path(__file__).resolve().parent / "fixtures/station_state.json"
 
 
 class DriverFixture(unittest.TestCase):
@@ -52,8 +53,8 @@ class DriverFixture(unittest.TestCase):
         (directory / "state.json").write_text(json.dumps(state or {}))
 
     def station_state(self):
-        return dict(levels=[{"file": "z2.dmm", "traits": ["Station"]}, {"file": "z3.dmm", "traits": ["Mining"]}],
-                    map_config={"map_name": "Box", "map_path": "map_files/box", "map_file": ["a.dmm"], "extra": 1})
+        # The station save contract (fixtures/station_state.json): levels z2.dmm and z3.dmm.
+        return json.loads(STATION_FIXTURE.read_text())
 
     def save_generation(self, state, files):
         saves = self.root() / "data/babylon/saves"
@@ -80,9 +81,30 @@ class StationPrepare(DriverFixture):
         saved = self.root() / "_maps/babylon/saved"
         self.assertEqual(sorted(p.name for p in saved.iterdir()), ["z2.dmm", "z3.dmm"])
         next_map = json.loads((self.root() / "data/next_map.json").read_text())
-        self.assertEqual(next_map, {"map_name": "Box", "map_path": "babylon/saved", "map_file": ["z2.dmm", "z3.dmm"],
-                                    "extra": 1, "traits": [["Station"], ["Mining"]]})
+        state = self.station_state()
+        self.assertEqual(next_map, dict(state["map_config"], map_path="babylon/saved", map_file=["z2.dmm", "z3.dmm"],
+                                        traits=[level["traits"] for level in state["levels"]]))
         self.assertTrue((self.root() / "data/babylon/resume-state.json").is_file())
+
+    def test_station_restore_accepts_a_trait_list_per_level_file(self):
+        # A level file holding several z carries one trait object per z, as a multi-z map json does.
+        state = self.station_state()
+        state["levels"][0]["traits"] = [{"Station": 1, "Up": 1}, {"Station": 1, "Down": 1}]
+        self.save_generation(state, ["z2.dmm", "z3.dmm"])
+        self.driver.prepare(self.world(), RUN)
+        next_map = json.loads((self.root() / "data/next_map.json").read_text())
+        self.assertEqual(next_map["traits"], [{"Station": 1, "Up": 1}, {"Station": 1, "Down": 1},
+                                              state["levels"][1]["traits"]])
+
+    def test_station_restore_rejects_malformed_traits(self):
+        for traits in (["Station"], "Station", [], [{"Station": 1}, "Mining"], 5):
+            saves = self.root() / "data/babylon/saves"
+            shutil.rmtree(saves, ignore_errors=True)
+            state = self.station_state()
+            state["levels"][0]["traits"] = traits
+            self.save_generation(state, ["z2.dmm", "z3.dmm"])
+            with self.assertRaises(Denied, msg=repr(traits)):
+                self.driver.prepare(self.world(), RUN)
 
     def test_station_restore_rejects_unsafe_level_names(self):
         state = self.station_state()

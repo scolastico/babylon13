@@ -128,6 +128,18 @@ def build_of(catalog, map_id):
     return entry["build"]
 
 
+def level_trait_sets(traits):
+    """A saved level's z-level traits as tg map jsons have them: one object per z ({"Station": 1, ...}),
+    or a list of such objects for a level file holding several z. Returns the list of objects, or None."""
+    sets = [traits] if isinstance(traits, dict) else traits
+    if not isinstance(sets, list) or not sets:
+        return None
+    for entry in sets:
+        if not isinstance(entry, dict) or not all(isinstance(key, str) for key in entry):
+            return None
+    return sets
+
+
 class Driver:
     def __init__(self, config, catalog=None):
         self.config = config
@@ -248,11 +260,11 @@ class Driver:
             if (not isinstance(name, str) or not re.fullmatch(r"z\d+\.dmm", name)
                     or (source / name).is_symlink() or not (source / name).is_file()):
                 raise Denied("The saved state lists an invalid level file")
-            level_traits = level.get("traits", [])
-            if not isinstance(level_traits, list):
+            level_traits = level_trait_sets(level.get("traits", {}))
+            if level_traits is None:
                 raise Denied("The saved state lists invalid level traits")
             files.append(name)
-            traits.append(level_traits)
+            traits.extend(level_traits)
         # Everything is validated; stage the levels aside so a failed copy never leaves saved/ half-cleared.
         staging = saved.with_name("saved.staging")
         shutil.rmtree(staging, ignore_errors=True)
@@ -384,7 +396,8 @@ class Driver:
         return topic(run["port"], run["secret"], "status")
 
     def stop(self, run):
-        return topic(run["port"], run["secret"], "managed_stop", timeout=180)
+        # The final save of a station world (every level) can take minutes.
+        return topic(run["port"], run["secret"], "managed_stop", timeout=600)
 
     def ahelp_reply(self, run, payload):
         return topic(run["port"], run["secret"], "ahelp_reply", payload)
@@ -1442,7 +1455,9 @@ class Supervisor:
         if run["id"] in self.stop_workers:
             return
         self.stop_workers.add(run["id"])
-        log("Stopping %s (port %s): saving" % (self.describe(run["world"]), run["port"]))
+        world = self.row("SELECT persistent, kind FROM worlds WHERE id=?", (run["world"],))
+        saved = bool(world) and world["persistent"] and world["kind"] not in TUTORIAL_KINDS
+        log("Stopping %s (port %s): %s" % (self.describe(run["world"]), run["port"], "saving" if saved else "not saved"))
         self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
         self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
         self.db.commit()

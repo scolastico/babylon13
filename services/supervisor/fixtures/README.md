@@ -29,10 +29,10 @@ checkpoints start at version 8. The DM constants are `BABYLON_STATE_VERSION` and
 | `save_count` | DM | DM | Saves so far; the `N` in the generation name. |
 | `records` | DM | DM, checkpoints.py (count) | Saved objects. Each has `id`, `type`, `parent` (the id of the container, or null for objects on a turf), `x`, `y`, `z`, `fields`, `references`, plus type-specific keys. A record without `z` (Babylon) belongs to the station level. |
 | `turfs` | DM | DM | Temperature and air of non-space turfs: `x`, `y`, `z`, `temperature`, optional `gas`. A turf without `z` (Babylon) belongs to the station level. |
-| `levels` | DM | Supervisor (`prepare_station`) | The saved levels in load order: `file` (`z<N>.dmm`, N is the level's z in the saving world) and `traits` (that level's tg z-level traits, the same shape as one entry of a map json's `traits`). |
+| `levels` | DM | Supervisor (`prepare_station`), DM restore | The saved levels in load order: `file` (`z<N>.dmm`, N is the level's z in the saving world) and `traits` (that level's tg z-level traits exactly as loaded, the same shape as one entry of a map json's `traits`; the supervisor also accepts a list of such objects for a file holding several z). The restoring world loads the levels with these traits, not with the map json's. |
 | `map_config` | DM | Supervisor (`prepare_station`) | The map's tg map json as the world loaded it. The supervisor rewrites `map_path`, `map_file` and `traits` from `levels` into `data/next_map.json`, so the world loads the saved levels instead. |
 | `round` | DM | DM (`station_round.dm`) | `started`: the round had started (the next start resumes it). `station_time`: the station clock in deciseconds. |
-| `characters` | DM | DM | Player characters by ckey (Task D2). Empty until then. |
+| `characters` | DM | DM | Player characters by ckey (Task D2). Empty (`{}`) until then. |
 | `sun` | DM (shared engine) | DM | `SSsun` azimuth, azimuth_mod and base_rotation. |
 | `play_time` | DM (shared engine) | DM | Deciseconds the world was played. |
 
