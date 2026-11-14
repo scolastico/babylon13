@@ -479,6 +479,17 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	busy = TRUE
 	result["wait_is_bounded"] = !await_save_idle(1 SECONDS)
 	busy = real_busy
+	// A second stop while one is under way answers with that stop's outcome, not a bare
+	// "pending" (the supervisor would keep the run stopping for good if the first failed).
+	var/real_last_stop = last_stop_result
+	stop_pending = TRUE
+	last_stop_result = list("error" = "first stop failed (test)")
+	spawn(2 SECONDS)
+		stop_pending = FALSE
+	var/list/second = managed_stop()
+	result["second_stop_gets_first_outcome"] = second["error"] == "first stop failed (test)" && !draining
+	stop_pending = FALSE
+	last_stop_result = real_last_stop
 	result["pause_estimate"] = estimated_pause_seconds() >= 1
 #ifdef BABYLON_STATION
 	var/minutes = text2num(world.params["babylon-autosave-minutes"])
@@ -499,5 +510,13 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		if(record["type"] == "[kept.type]")
 			kept_saved = TRUE
 	result["skip_hook_respected"] = !prop_saved && kept_saved
+	// BYOND's \improper marker never goes into a save (the file writer dropped its bytes).
+	var/obj/item/screwdriver/marked = new(respawn_turf)
+	marked.name = "\improper Babylon test screwdriver"
+	var/list/marked_records = list()
+	capture(marked, marked_records, null)
+	var/list/marked_fields = marked_records[1]["fields"]
+	result["text_markers_stripped"] = marked_fields["name"] == "Babylon test screwdriver" && !!findtext(metadata(marked), "name = \"Babylon test screwdriver\"")
+	qdel(marked)
 	qdel(crate)
 	return result

@@ -18,6 +18,8 @@
 
 /// _maps/<path> of the levels the supervisor stages from a save (Driver.prepare_station).
 #define BABYLON_SAVED_MAP_PATH "babylon/saved"
+/// Longest a save waits for a moving tram to reach a platform.
+#define BABYLON_TRAM_SAVE_WAIT (20 SECONDS)
 
 /datum/babylon_save
 	/// Saved level z (as text) -> the z it was loaded at in this world (restore only).
@@ -371,7 +373,6 @@
 		return SS_INIT_NO_NEED
 	return ..()
 
-#undef BABYLON_SAVED_MAP_PATH
 
 // Unchanged levels. A level counts as changed while a player's body is on it, when a shuttle
 // arrives on or leaves it, and (station levels) whenever the round runs with anyone connected:
@@ -455,9 +456,9 @@
 /// Without it, an object moved off a level nobody stood on was lost, or kept twice.
 /atom/movable/on_changed_z_level(turf/old_turf, turf/new_turf, same_z_layer, notify_contents = TRUE)
 	var/datum/babylon_save/session = GLOB.babylon_save
-	// Only what a save keeps: objects and living things (not effects, ghosts, eyes or other
-	// abstract movables, which hop levels all the time).
-	if(session && old_turf && new_turf && old_turf.z != new_turf.z && ((isobj(src) && !iseffect(src)) || isliving(src)))
+	// Only what a save keeps: objects, the effects it keeps and living things (not passing
+	// effects, ghosts, eyes or other abstract movables, which hop levels all the time).
+	if(session && old_turf && new_turf && old_turf.z != new_turf.z && (isliving(src) || (isobj(src) && (!iseffect(src) || session.saves_effect(src)))))
 		session.mark_level_changed(old_turf.z, src)
 		session.mark_level_changed(new_turf.z, src)
 	return ..()
@@ -472,8 +473,40 @@
 /// a save waits up to 60 seconds for moving trams to arrive. (A tram stopped on the line, by an
 /// emergency stop or damage, is saved where it is; test_station_links reports it.)
 /datum/babylon_save/before_checkpoint()
+	// A stop does not wait: its save may catch the tram between stations, which the restore
+	// handles (reset_stray_trams()).
+	if(draining || stop_pending || !babylon_tram_travelling())
+		return
+	to_chat_immediate(world, span_notice("Waiting for the tram to arrive before saving..."))
 	var/waited = 0
-	while(waited < 60 SECONDS && babylon_tram_travelling())
+	while(waited < BABYLON_TRAM_SAVE_WAIT && babylon_tram_travelling() && !draining && !stop_pending)
+		sleep(1 SECONDS)
+		waited += 1 SECONDS
+
+/// After a restore: a tram saved between stations (or stopped on the line) knows where it is
+/// (its nav beacon rides with it) but not its platform. It drives to the nearest platform, as
+/// tg's own controller reset does, once its control cabinet is paired.
+/datum/babylon_save/proc/reset_stray_trams()
+	if(!babylon_restoring_saved_levels())
+		return
+	var/list/pending = list()
+	for(var/datum/transport_controller/linear/tram/tram as anything in SStransport.transports_by_type[TRANSPORT_TYPE_TRAM])
+		if(!tram.idle_platform && tram.nav_beacon)
+			pending += tram
+	var/waited = 0
+	while(length(pending) && waited < 2 MINUTES)
+		for(var/datum/transport_controller/linear/tram/tram as anything in pending.Copy())
+			if(QDELETED(tram))
+				pending -= tram
+				continue
+			if(!tram.paired_cabinet || tram.controller_active)
+				continue
+			log_world("Babylon: tram [tram.specific_transport_id] was saved between stations; driving it to the nearest platform.")
+			// check_starting_landmark() turns the transport subsystem on only for a tram found on a
+			// platform; without this the reset trip never moves.
+			SStransport.can_fire = TRUE
+			tram.reset_position()
+			pending -= tram
 		sleep(1 SECONDS)
 		waited += 1 SECONDS
 
@@ -488,3 +521,6 @@
 /datum/babylon_save/proc/read_autosave_interval()
 	var/minutes = text2num(world.params["babylon-autosave-minutes"])
 	autosave_interval = (isnum(minutes) && minutes >= 1) ? round(minutes) MINUTES : 30 MINUTES
+
+#undef BABYLON_SAVED_MAP_PATH
+#undef BABYLON_TRAM_SAVE_WAIT

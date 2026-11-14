@@ -65,22 +65,36 @@
 	return "This world is stopping without a save (saving is off for this world). Returning you to the lobby."
 
 /datum/babylon_save
-	/// A managed stop is waiting for a save in progress to finish.
+	/// A managed stop is under way (waiting for a save in progress, or saving).
 	var/stop_pending = FALSE
+	/// What the last managed stop answered (a second stop meanwhile returns it too).
+	var/list/last_stop_result
 
 /datum/babylon_save/proc/managed_stop()
+	if(stop_pending)
+		// Another stop is under way: this one answers with its outcome, never a bare "pending"
+		// (the supervisor would otherwise keep the run stopping for good if that stop fails).
+		var/waited = 0
+		while(stop_pending && waited < 10 MINUTES)
+			sleep(1 SECONDS)
+			waited += 1 SECONDS
+		return last_stop_result || list("error" = "The stop did not finish")
 	if(draining)
 		// A world whose round ended is already on its way out, without a save.
 		if(round_ending)
 			return list("ok" = TRUE, "saved" = FALSE)
-		return list("error" = "Already stopping")
-	if(stop_pending)
-		// The first stop saves and stops the world once the running save is done: nothing failed.
-		return list("ok" = TRUE, "pending" = TRUE)
+		return last_stop_result || list("error" = "Already stopping")
 	// An autosave in progress finishes first (it releases the world as usual); then the final save.
 	stop_pending = TRUE
-	var/idle = await_save_idle(120 SECONDS)
+	last_stop_result = null
+	. = managed_stop_now()
+	last_stop_result = .
 	stop_pending = FALSE
+
+/datum/babylon_save/proc/managed_stop_now()
+	// A running save ends its tram wait as soon as this stop is pending (before_checkpoint()), so
+	// this covers its capture and writes.
+	var/idle = await_save_idle(240 SECONDS)
 	if(!idle)
 		return list("error" = "A save is still running; try stopping again in a moment")
 	draining = TRUE

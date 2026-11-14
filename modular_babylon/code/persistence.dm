@@ -89,8 +89,18 @@
 		thing.babylon_save_id = "bb[next_id++]"
 	return thing.babylon_save_id
 
+/// Text as a save writes it: without BYOND's \proper/\improper markers. They are stored as
+/// bytes that are not UTF-8, and the file writer dropped them, so a save whose text held one
+/// came out shorter on disk than written (names of objects made during play carry them).
+/proc/babylon_save_text(text)
+	if(!istext(text))
+		return text
+	return replacetext(replacetext(replacetext(replacetext(text, "\proper ", ""), "\improper ", ""), "\proper", ""), "\improper", "")
+
 /datum/babylon_save/proc/encode_value(value)
-	if(isnull(value) || isnum(value) || istext(value))
+	if(istext(value))
+		return babylon_save_text(value)
+	if(isnull(value) || isnum(value))
 		return value
 	if(ispath(value))
 		return list("path" = "[value]")
@@ -311,7 +321,7 @@
 	for(var/field in fields)
 		var/value = thing.vars[field]
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (islist(value) && (field in list_map_fields)))
-			entries += "[field] = [tgm_encode(value)]"
+			entries += "[field] = [tgm_encode(istext(value) ? babylon_save_text(value) : value)]"
 	if(is_turf && isopenturf(thing) && !isspaceturf(thing))
 		entries += "initial_gas_mix = [tgm_encode(saved_gas_mix(thing))]"
 	. = length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
@@ -727,18 +737,25 @@
 	pieces += list(close_list, copytext(state_text, turfs_at + length("\"@babylon-turfs@\"")))
 	fdel("[base]/state.json")
 	var/state_bytes = 0
+	var/append_error
 	for(var/piece in pieces)
 		state_bytes += length(piece)
-		rustg_file_append(piece, "[base]/state.json")
+		// rust-g answers an error text when a write fails; one failed piece fails the save.
+		var/append_result = rustg_file_append(piece, "[base]/state.json")
+		if(append_result && !append_error)
+			append_error = "[append_result]"
 		CHECK_TICK
 	bytes += state_bytes
-	// latest.json is committed only after every generation file is present, and state.json
-	// whole: a truncated one once went unnoticed. (Its size on disk can differ from the text's
-	// length, as BYOND writes text macros such as \improper differently, so its end is compared.)
-	var/written_state = fexists("[base]/state.json") ? file2text("[base]/state.json") : ""
-	var/last_piece = pieces[length(pieces)]
-	var/complete = length(written_state) >= state_bytes / 2 && copytext(written_state, -min(64, length(last_piece))) == copytext(last_piece, -min(64, length(last_piece)))
-	written_state = null
+	var/state_file_size = fexists("[base]/state.json") ? length(file("[base]/state.json")) : 0
+	if(state_file_size != state_bytes)
+		log_world("Babylon save [generation]: state.json is [num2text(state_file_size, 12)] bytes on disk for [num2text(state_bytes, 12)] bytes of text.")
+	// latest.json is committed only after every generation file is present and state.json was
+	// written whole: every append succeeded and the file holds (nearly) all of its text. Bytes
+	// that are not UTF-8 are dropped by the writer; saved text has its markers removed
+	// (babylon_save_text()), the 1% only covers anything left of that kind.
+	var/complete = !append_error && state_file_size >= state_bytes * 0.99
+	if(append_error)
+		log_world("Babylon save [generation]: writing state.json failed: [append_error]")
 	for(var/z in levels)
 		if(!fexists("[base]/[level_file(z)]"))
 			complete = FALSE

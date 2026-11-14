@@ -529,3 +529,34 @@
 	result["transports"] = json_encode(sort_list(transports))
 	result["lift_buttons"] = "[buttons]"
 	return result
+
+/// Sends the map's tram towards another platform and stops it on the line a few seconds later
+/// (an emergency stop): the next save catches it between stations. The restore must drive it
+/// back to a platform (reset_stray_trams()).
+/datum/babylon_save/proc/test_tram_mid_trip()
+	var/list/result = list()
+	var/datum/transport_controller/linear/tram/tram = locate() in SStransport.transports_by_type[TRANSPORT_TYPE_TRAM]
+	result["tram_found"] = !!tram
+	if(!tram)
+		return result
+	var/obj/effect/landmark/transport/nav_beacon/tram/platform/destination
+	for(var/obj/effect/landmark/transport/nav_beacon/tram/platform/candidate in SStransport.nav_beacons[tram.specific_transport_id])
+		if(candidate != tram.idle_platform)
+			destination = candidate
+			break
+	result["destination_found"] = !!destination
+	if(!destination)
+		return result
+	var/obj/effect/landmark/transport/nav_beacon/tram/platform/start = tram.idle_platform
+	// As the tram's own call buttons and console ask for it.
+	SStransport.incoming_request(tram.paired_cabinet, tram.specific_transport_id, destination.platform_code, NONE)
+	// Stopped once it is clearly off its platform (and before it reaches the next one).
+	var/waited = 0
+	while(waited < 20 SECONDS && get_dist(tram.nav_beacon, start) < 8)
+		sleep(2)
+		waited += 2
+	tram.estop()
+	result["stopped_between_stations"] = get_dist(tram.nav_beacon, start) >= 8 && get_dist(tram.nav_beacon, destination) >= 8
+	if(!result["stopped_between_stations"])
+		result["tram_state"] = "operational [tram.controller_operational], cabinet [!!tram.paired_cabinet], status [tram.controller_status], active [tram.controller_active], moved [get_dist(tram.nav_beacon, start)], trip [get_dist(start, destination)]"
+	return result

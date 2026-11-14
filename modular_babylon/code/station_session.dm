@@ -44,7 +44,8 @@ SUBSYSTEM_DEF(babylon_station)
 			return
 		sleep(1 SECONDS)
 	ready = TRUE
-	next_autosave_at = world.time + 15 MINUTES
+	next_autosave_at = world.time + autosave_interval
+	INVOKE_ASYNC(src, PROC_REF(reset_stray_trams))
 	// One runtime error must not end this loop for the rest of the run.
 	while(TRUE)
 		try
