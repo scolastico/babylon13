@@ -7,7 +7,9 @@
 #define SKIP_SPACE_LEVELS
 #define SKIP_LAVALAND
 #include "tgstation.dme"
+#include "modular_babylon/code/world_flags.dm"
 #include "modular_babylon/code/state.dm"
+#include "modular_babylon/code/rules.dm"
 #include "modular_babylon/code/persistence.dm"
 #include "modular_babylon/code/session.dm"
 #include "modular_babylon/code/afk.dm"
@@ -32,5 +34,6 @@
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
 #ifdef BABYLON_TESTING
+#include "modular_babylon/code/testing_common.dm"
 #include "modular_babylon/code/testing.dm"
 #endif

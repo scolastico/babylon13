@@ -1,3 +1,5 @@
+// Apply saved physical configuration BEFORE Initialize creates cable/pipe nodes.
+// Version 1 maps omitted these assignments due to an unparenthesized `in`.
 /datum/babylon_save/proc/preload_atom(atom/thing)
 	if(!resume_data && fexists("data/babylon/resume-state.json"))
 		resume_data = json_decode(file2text("data/babylon/resume-state.json"))
@@ -267,17 +269,16 @@
 	return length(entries) ? "{\n\t[entries.Join(";\n\t")]\n\t}" : ""
 
 /datum/babylon_save/proc/save_world()
+	// The engine saves one Babylon level; station maps (multi-z) cannot be saved yet.
+	if(babylon_is_station_build())
+		return list("error" = "This world cannot be saved yet")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
 	busy = TRUE
 	checkpoint_processing = Master.processing
 	checkpoint_started = REALTIMEOFDAY
 	Master.processing = FALSE
-	for(var/player_key in player_sessions)
-		var/datum/babylon_save/player = player_sessions[player_key]
-		if(!QDELETED(player.builder))
-			ADD_TRAIT(player.builder, TRAIT_IMMOBILIZED, "babylon_checkpoint")
-			ADD_TRAIT(player.builder, TRAIT_UI_BLOCKED, "babylon_checkpoint")
+	checkpoint_hold(TRUE)
 	sleep(1 TICKS)
 	var/list/result
 	try
@@ -295,12 +296,24 @@
 /datum/babylon_save/proc/release_checkpoint()
 	if(draining)
 		return
-	for(var/player_key in player_sessions)
-		var/datum/babylon_save/player = player_sessions[player_key]
-		if(!QDELETED(player.builder))
-			REMOVE_TRAIT(player.builder, TRAIT_IMMOBILIZED, "babylon_checkpoint")
-			REMOVE_TRAIT(player.builder, TRAIT_UI_BLOCKED, "babylon_checkpoint")
+	checkpoint_hold(FALSE)
 	Master.processing = checkpoint_processing
+
+/// Freezes (or releases) the players' bodies for a checkpoint. The build's session supplies it.
+/datum/babylon_save/proc/checkpoint_hold(frozen)
+	return
+
+/// Mobs saved with the map, as list(turf = list(mob, ...)). The build's session supplies them.
+/datum/babylon_save/proc/checkpoint_mobs()
+	return list()
+
+/// Adds the build's own session data (players, research ...) to a checkpoint's state.json.
+/datum/babylon_save/proc/capture_session_state(list/state)
+	return
+
+/// Restores what capture_session_state saved, once every saved object exists again.
+/datum/babylon_save/proc/restore_session_state(list/state)
+	return
 
 /datum/babylon_save/proc/save_world_impl()
 	var/list/records = list()
@@ -310,17 +323,7 @@
 	var/list/grid = list()
 	var/key_index = 1
 	var/list/empty_space_keys = list()
-	// A drone can be inside a locker or vent. Save it at the enclosing tile
-	// rather than silently dropping its body and inventory from the checkpoint.
-	var/list/drones_by_turf = list()
-	for(var/mob/living/basic/drone/babylon/drone in GLOB.mob_list)
-		var/turf/tile = get_turf(drone)
-		if(QDELETED(drone) || tile?.z != station_z)
-			continue
-		if(!drones_by_turf[tile])
-			drones_by_turf[tile] = list()
-		var/list/drones = drones_by_turf[tile]
-		drones += drone
+	var/list/mobs_by_turf = checkpoint_mobs()
 	// All map changes and room air are exported; nested items and live settings go in state.json.
 	for(var/x in 1 to world.maxx)
 		grid += "\n([x],1,1) = {\"\n"
@@ -330,7 +333,7 @@
 			// instead of inspecting and encoding its vars 60,000 times.
 			var/area/room = get_area(tile)
 			var/space_signature
-			if(isspaceturf(tile) && !(locate(/obj) in tile) && !drones_by_turf[tile])
+			if(isspaceturf(tile) && !(locate(/obj) in tile) && !mobs_by_turf[tile])
 				space_signature = "[tile.type]|[room.type]|[tile.dir]|[tile.name]|[tile.pixel_x]|[tile.pixel_y]|[tile.pixel_z]|[tile.layer]|[tile.plane]|[tile.alpha]|[tile.density]|[tile.opacity]|[tile.icon_state]"
 				if(empty_space_keys[space_signature])
 					grid += "[empty_space_keys[space_signature]]\n"
@@ -357,10 +360,10 @@
 					continue
 				objects += "[object.type][metadata(object)]"
 				capture(object, records, null)
-			for(var/mob/living/basic/drone/babylon/drone as anything in drones_by_turf[tile])
-				if(!QDELETED(drone))
-					objects += "[drone.type][metadata(drone)]"
-					capture(drone, records, null)
+			for(var/mob/living/saved_mob as anything in mobs_by_turf[tile])
+				if(!QDELETED(saved_mob))
+					objects += "[saved_mob.type][metadata(saved_mob)]"
+					capture(saved_mob, records, null)
 			objects += "[tile.type][metadata(tile, TRUE)]"
 			objects += "[room.type]"
 			var/header = "(\n[objects.Join(",\n")])\n"
@@ -377,19 +380,10 @@
 	var/generation = "save-[time2text(world.realtime, "YYYYMMDD-hhmmss")]-[++save_count]"
 	var/base = "data/babylon/saves/[generation]"
 	var/map_text = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]"
-	var/list/state = list("version" = 5, "generation" = generation, "next_id" = next_id, "save_count" = save_count, "builder" = !QDELETED(builder) ? builder?.babylon_save_id : null, "records" = records, "turfs" = turfs)
-	state["player"] = list("respawn_pending" = respawn_pending, "respawn_remaining" = max(0, respawn_ready_at - world.time), "spawn_x" = respawn_turf?.x, "spawn_y" = respawn_turf?.y, "profile" = respawn_pending ? drone_profile.Copy() : capture_drone_profile())
 	// 7: non-item contents of closets and crates are saved (restore_lost_supermatter()).
-	state["version"] = 7
-	var/list/players = list()
-	for(var/player_key in player_sessions)
-		players[player_key] = player_snapshot(player_sessions[player_key])
-	state["players"] = players
-	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
-	if(research)
-		state["research"] = list("nodes" = research.researched_nodes.Copy(), "designs" = research.researched_designs.Copy(), "points" = research.research_points.Copy(), "target" = research.babylon_target, "target_by" = research.babylon_target_by, "target_location" = research.babylon_target_location)
+	var/list/state = list("version" = 7, "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = records, "turfs" = turfs)
+	capture_session_state(state)
 	state["sun"] = list("azimuth" = SSsun.azimuth, "azimuth_mod" = SSsun.azimuth_mod, "base_rotation" = SSsun.base_rotation)
-	state["lore"] = GLOB.babylon_lore.snapshot()
 	state["play_time"] = play_time
 	checkpoint_capture_ms = (REALTIMEOFDAY - checkpoint_started) * 100
 	release_checkpoint()
@@ -651,38 +645,8 @@
 				control.track = record["fields"]["track"]
 		if(istype(thing, /obj/item/modular_computer) && record["active_program"])
 			programs_to_resume[thing] = record
-	var/list/players = state["players"]
-	if(!players)
-		var/list/legacy_player = state["player"] || list()
-		legacy_player["builder"] = state["builder"]
-		players = list()
-		players[owner_ckey] = legacy_player
-	for(var/player_key in players)
-		var/datum/babylon_save/player = player_sessions[player_key]
-		if(!player)
-			player = new
-			player.owner_ckey = player_key
-			player_sessions[player_key] = player
-		restore_player(player, players[player_key])
-	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
-	var/list/research_data = state["research"]
-	if(research && research_data)
-		for(var/node in research_data["nodes"])
-			research.research_node_id(node, TRUE, FALSE, FALSE)
-		for(var/design in research_data["designs"])
-			research.add_design_by_id(design)
-		research.research_points = research_data["points"]
-		research.recalculate_nodes()
-		// research_points is the progress towards the saved target (research.dm). Older saves
-		// have no target, so their banked points are dropped; an invalid target is cleared.
-		research.babylon_target = research_data["target"]
-		research.babylon_target_by = research_data["target_by"]
-		research.babylon_target_location = research_data["target_location"]
-		research.babylon_try_finish()
-	GLOB.babylon_lore.restore(state["lore"])
+	restore_session_state(state)
 	play_time = isnum(state["play_time"]) ? state["play_time"] : 0
-	if((state["version"] || 1) < 7)
-		restore_lost_supermatter()
 	to_chat(world, span_notice("Babylon resumed from [last_save]."))
 
 /// Saves before version 7 dropped the supermatter shard from the engine's secure crate, which

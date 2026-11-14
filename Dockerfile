@@ -35,13 +35,13 @@ RUN . ./dependencies.sh \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates icons \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates modular_zubbers/icons \
  && python3 tools/build_bt.py
-RUN DreamMaker -DCBT babylon.dme && DreamMaker -DCBT babylon-lobby.dme
+RUN DreamMaker -DCBT babylon.dme && DreamMaker -DCBT babylon-station.dme && DreamMaker -DCBT babylon-lobby.dme
 RUN python3 container/stage-runtime.py /src /opt/babylon
 
-# PRs and default-branch pushes build this target: both game builds, the
+# PRs and default-branch pushes build this target: the test game builds (Babylon and station), the
 # standalone lobby, upstream compatibility, Python tests and browser UX tests.
 FROM build AS check
-RUN DreamMaker -DCBT babylon-test.dme && DreamMaker -DCBT tgstation.dme \
+RUN DreamMaker -DCBT babylon-test.dme && DreamMaker -DCBT babylon-station-test.dme && DreamMaker -DCBT tgstation.dme \
  && python3 -m unittest discover -s services/supervisor -v \
  && python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v \
  && node tools/babylon/test_lobby_loading.cjs \

@@ -1,9 +1,31 @@
 # Upstream integration hooks
 
-Babylon is opt-in: compile `babylon.dme`. The upstream `tgstation.dme` is
-unchanged. The fifteen modified upstream DM files use hooks guarded by
-`BABYLON_BUILDER` and marked `BABYLON13`. Ordinary SPLURT builds compile
-those blocks out.
+Babylon is opt-in: compile `babylon.dme` (the drone builder) and
+`babylon-station.dme` (normal tg rounds on the map catalog's station maps). The
+upstream `tgstation.dme` is unchanged. The fifteen modified upstream DM files use
+hooks guarded by `BABYLON_BUILDER` and marked `BABYLON13`. Ordinary SPLURT builds
+compile those blocks out.
+
+Both Babylon builds define `BABYLON_BUILDER`; the station build also defines
+`BABYLON_STATION`. Hooks that only fit the drone builder are guarded with
+`#if defined(BABYLON_BUILDER) && !defined(BABYLON_STATION)`: the announcement
+suppression (`priority_announce.dm`), the round-start divergency report, and
+the 255x255 single-level sizing in `mapping.dm`. All other hooks (admission,
+showcase visitors, persistence preloading, material pruning, the Discord button,
+the SQL message guard, the master's restore wait) apply to both builds. The
+station build keeps the full CentCom map (its shuttle docks are needed for a
+round) and skips the Interlink (`ABSOLUTE_MINIMUM`).
+
+Module split: `world_flags.dm` (`GLOB.babylon_world`, the supervisor's world
+parameters and `babylon_world_ready()`), `state.dm`, `persistence.dm` (engine,
+with per-build hooks `checkpoint_hold`, `checkpoint_mobs`,
+`capture_session_state`, `restore_session_state`), admission, control, AFK,
+showcase, spectator, SFW, links, storyteller, moderation, world players,
+interface, music and play time are in both builds. `rules.dm` (Babylon's world
+rules: one 255x255 level, no events, storyteller subsystem, weather or minor
+mapping), `session.dm`, drone recovery, builder experience, lore, vault,
+survival, silicons and research are only in `babylon.dme`;
+`station_session.dm` only in `babylon-station.dme`.
 
 The wrapper also defines upstream's `ABSOLUTE_MINIMUM` flag to skip the
 separate Interlink/cafe map loader. Builder behavior, restricted observer
@@ -19,9 +41,12 @@ instead of SPLURT's `MobInteraction` window. After an upstream merge, re-check
 newly added lewd interactions, designs, reactions and verbs against it.
 
 Babylon has no storyteller yet. `modular_babylon/code/storyteller.dm` runs an
-inert `/datum/storyteller/babylon` in every world (no events, no antagonists),
-refuses the storyteller vote and any other storyteller, and keeps tgstation's
-random events off, again through overrides only. After an upstream merge,
+inert `/datum/storyteller/babylon` in every Babylon world (no events, no
+antagonists), refuses the storyteller vote and any other storyteller, and keeps
+tgstation's random events off, again through overrides only. Station worlds run
+SPLURT's storytellers without a vote: `DEFAULT_STORYTELLER` from the config,
+else `/datum/storyteller/default` (SSgamemode's choice without a vote); Creative
+Plane maps and tutorial worlds are inert like Babylon. After an upstream merge,
 re-check `SSgamemode`'s `set_storyteller`/`init_storyteller`, the storyteller
 vote and `SSevents.spawnEvent` against it; the native smoke test asserts it.
 
@@ -39,8 +64,9 @@ a techweb researches one selected node at a time, all income (through
 that progress, income without a target is dropped and switching targets starts
 over. The target is saved with the world. After an upstream merge, re-check
 `add_point_list`, `research_node`, `complete_experiment`, the queue procs and
-the R&D console / PDA `research_node` and `ui_data` against it. It also removes
-designs Babylon never offers (ERP, pAI, AI core, MMI, positronic brain) from every node in
+the R&D console / PDA `research_node` and `ui_data` against it. `sfw.dm` (both
+builds) removes designs no world offers (ERP; in Babylon also pAI, AI core, MMI,
+positronic brain) from every node in
 `SSresearch.calculate_techweb_nodes` and refuses them in `/datum/techweb/add_design`;
 `/datum/techweb_node/Initialize` is not usable for that, because upstream's
 `initialize_all_techweb_nodes` calls it on the old, empty node list.
@@ -63,11 +89,11 @@ upstream merge, check new player verbs and the `infobuttons` controls.
 | Upstream file | Purpose |
 | --- | --- |
 | `code/controllers/master.dm` | Wait for restoration and final subsystem initialization before physics runs; support the isolated-test hold parameter. |
-| `code/controllers/subsystem/mapping.dm` | Size the standalone map for Babylon and account for already allocated, unregistered lobby levels. |
+| `code/controllers/subsystem/mapping.dm` | Size the standalone map for Babylon and account for already allocated, unregistered lobby levels (not in the station build). |
 | `code/modules/mapping/preloader.dm` | Apply saved structural properties before atom initialization builds pipes and power networks. |
 | `code/game/machinery/computer/atmos_computers/_air_sensor.dm` | Skip fresh-map automatic vent claiming for restored sensors. |
-| `code/__HELPERS/priority_announce.dm` | Suppress round announcements and command reports in the builder world. |
-| `modular_zubbers/code/modules/storyteller/divergency_report.dm` | Suppress round-start station-trait reporting. |
+| `code/__HELPERS/priority_announce.dm` | Suppress round announcements and command reports in the builder world (not in the station build). |
+| `modular_zubbers/code/modules/storyteller/divergency_report.dm` | Suppress round-start station-trait reporting (not in the station build). |
 | `code/modules/client/client_procs.dm` | Validate single-use lobby admission before registering a child client or creating an avatar. Enforce showcase play mode and restrict visitor Topics/clicks before target dispatch. Standalone builds restrict access to their configured owner. |
 | `code/modules/escape_menu/escape_menu.dm` | Add the Discord button (`modular_babylon/code/links.dm`) to Resources when `DISCORDURL` is set. |
 | `code/controllers/subsystem/verbs.dm` | Enforce the visitor verb allowlist for native/context verbs, including verbs belonging to world objects. |

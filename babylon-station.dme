@@ -1,0 +1,34 @@
+// Babylon station build (babylon-station.dmb): normal tg rounds on the map catalog's station
+// maps (the supervisor writes data/next_map.json), with the Babylon cluster modules that every
+// world shares. Babylon's drone-builder session and world rules stay in babylon.dme.
+// Keep tgstation.dme identical to upstream.
+// BABYLON_BUILDER enables the upstream hooks every Babylon cluster world needs (admission,
+// showcase visitors, persistence preloading ...); BABYLON_STATION turns off the ones that only
+// fit Babylon's drone builder (see modular_babylon/UPSTREAM_HOOKS.md).
+// The full CentCom stays: station rounds need its shuttle docks (emergency, cargo, ferry).
+#define BABYLON_BUILDER
+#define BABYLON_STATION
+#define ABSOLUTE_MINIMUM
+#include "tgstation.dme"
+#include "modular_babylon/code/world_flags.dm"
+#include "modular_babylon/code/state.dm"
+#include "modular_babylon/code/persistence.dm"
+#include "modular_babylon/code/station_session.dm"
+#include "modular_babylon/code/afk.dm"
+#include "modular_babylon/code/control.dm"
+#include "modular_babylon/code/admission.dm"
+#include "modular_babylon/code/showcase.dm"
+#include "modular_babylon/code/spectator.dm"
+#include "modular_babylon/code/sfw.dm"
+#include "modular_babylon/code/links.dm"
+#include "modular_babylon/code/storyteller.dm"
+#include "modular_babylon/code/moderation.dm"
+#include "modular_babylon/code/world_players.dm"
+#include "modular_babylon/code/interface.dm"
+#include "modular_babylon/code/music.dm"
+#include "modular_babylon/code/music_loops.dm"
+#include "modular_babylon/code/play_time.dm"
+#ifdef BABYLON_TESTING
+#include "modular_babylon/code/testing_common.dm"
+#include "modular_babylon/code/testing_station.dm"
+#endif

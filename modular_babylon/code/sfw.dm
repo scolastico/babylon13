@@ -120,7 +120,37 @@
 	plappable = FALSE
 	return ..()
 
-// Research: lewd designs are never unlockable (babylon_removed_design() in research.dm).
+// Research: lewd designs are never unlockable.
+
+/// Designs no world offers: ERP ones, and in Babylon pAI / AI core ones (silicons.dm, which
+/// the station build does not include).
+/proc/babylon_removed_design(datum/design/design)
+	if(!istype(design))
+		return FALSE
+	if(design.id in babylon_erp_design_ids())
+		return TRUE
+#ifndef BABYLON_STATION
+	if(babylon_unplayable_design(design))
+		return TRUE
+#endif
+	return FALSE
+
+// Pruned from every node right before SSresearch links nodes and designs. Not in
+// /datum/techweb_node/Initialize(): initialize_all_techweb_nodes() calls it on the previous,
+// still empty node list, so at startup it never runs. Modular nodes also add IDs in New().
+/datum/controller/subsystem/research/calculate_techweb_nodes()
+	for(var/node_id in techweb_nodes)
+		var/datum/techweb_node/node = techweb_nodes[node_id]
+		for(var/design_id in LAZYCOPY(node.design_ids))
+			if(babylon_removed_design(techweb_design_by_id(design_id)))
+				node.design_ids -= design_id
+	return ..()
+
+// Saved research (or anything else) cannot add a removed design either.
+/datum/techweb/add_design(datum/design/design, custom = FALSE, list/add_to)
+	if(babylon_removed_design(design))
+		return FALSE
+	return ..()
 
 // Chemistry: the forced config removes reactions flagged erp_reaction. Remove
 // unflagged ones that make or consume ERP reagents too (e.g. drinks whose

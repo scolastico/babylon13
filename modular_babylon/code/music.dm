@@ -104,7 +104,9 @@ GLOBAL_DATUM_INIT(babylon_music, /datum/babylon_music, new)
 	var/turf/place = get_turf(listener)
 	if(!place)
 		return null
-	if(tracks["vault"] && istype(get_area(place), /area/ruin/space/bb13/engineering/vault/inner))
+	// Babylon's vault area exists only in babylon.dmb (vault.dm).
+	var/static/vault_area = text2path("/area/ruin/space/bb13/engineering/vault/inner")
+	if(tracks["vault"] && vault_area && istype(get_area(place), vault_area))
 		return "vault"
 	if(isspaceturf(place) || istype(get_area(place), /area/space))
 		return tracks["space"] ? "space" : null
