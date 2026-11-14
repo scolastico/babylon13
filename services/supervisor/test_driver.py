@@ -1,4 +1,5 @@
 import json
+import shutil
 import os
 from pathlib import Path
 import tempfile
@@ -89,6 +90,41 @@ class StationPrepare(DriverFixture):
         self.save_generation(state, ["z3.dmm"])
         with self.assertRaises(Denied):
             self.driver.prepare(self.world(), RUN)
+
+    def test_station_corrupt_or_non_dict_state_is_denied(self):
+        for text in ("{not json", "[1, 2]", "5"):
+            saves = self.root() / "data/babylon/saves"
+            shutil.rmtree(saves, ignore_errors=True)
+            self.save_generation({}, ["z2.dmm"])
+            (saves / "save-20261109-120000-1/state.json").write_text(text)
+            with self.assertRaises(Denied):
+                self.driver.prepare(self.world(), RUN)
+
+    def test_station_invalid_level_keeps_previous_saved_levels(self):
+        saved = self.root() / "_maps/babylon/saved"
+        saved.mkdir(parents=True)
+        (saved / "keep.dmm").write_text("old")
+        self.save_generation(self.station_state(), ["z2.dmm"])  # z3.dmm is missing
+        with self.assertRaises(Denied):
+            self.driver.prepare(self.world(), RUN)
+        self.assertEqual((saved / "keep.dmm").read_text(), "old")
+        self.assertFalse((saved.parent / "saved.staging").exists())
+
+    @unittest.skipIf(os.name == "nt", "symlinks")
+    def test_station_rejects_symlinked_level_file(self):
+        self.save_generation(self.station_state(), ["z3.dmm"])
+        generation = self.root() / "data/babylon/saves/save-20261109-120000-1"
+        outside = Path(self.temp.name) / "outside.dmm"
+        outside.write_text("secret")
+        (generation / "z2.dmm").symlink_to(outside)
+        with self.assertRaises(Denied):
+            self.driver.prepare(self.world(), RUN)
+
+    def test_babylon_snapshot_without_map_is_denied(self):
+        self.generation(self.data / "tutorials/pending/tut1/save", [], {"save_count": 9})
+        world = dict(self.world(), map="babylon", kind="tutorial", tutorial="tut1", persistent=0)
+        with self.assertRaisesRegex(Denied, "map.dmm"):
+            self.driver.prepare(world, RUN)
 
     def test_station_needs_dmb_and_map_file(self):
         (self.template / "babylon-station.dmb").unlink()

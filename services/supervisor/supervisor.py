@@ -210,10 +210,20 @@ class Driver:
             return
         link.symlink_to(central, target_is_directory=True)
 
+    @staticmethod
+    def read_state(source):
+        """A saved generation's state.json as a dict; anything unreadable is a clean denial."""
+        try:
+            state = json.loads((source / "state.json").read_text())
+        except (OSError, ValueError):
+            raise Denied("The saved state is missing or corrupt")
+        if not isinstance(state, dict):
+            raise Denied("The saved state is missing or corrupt")
+        return state
+
     def prepare_station(self, world, root, entry, source):
         data = root / "data"
         saved = root / "_maps/babylon/saved"
-        shutil.rmtree(saved, ignore_errors=True)
         resume = data / "babylon/resume-state.json"
         next_map = data / "next_map.json"
         next_map.parent.mkdir(parents=True, exist_ok=True)
@@ -221,26 +231,38 @@ class Driver:
             map_json = root / "_maps" / entry["map_json"]
             if not map_json.is_file():
                 raise Denied("The map file %s is missing; generate it first" % entry["map_json"])
+            shutil.rmtree(saved, ignore_errors=True)
             next_map.write_text(map_json.read_text(encoding="utf-8"), encoding="utf-8")
             resume.unlink(missing_ok=True)
             return
-        state = json.loads((source / "state.json").read_text())
+        state = self.read_state(source)
         levels = state.get("levels")
         config = state.get("map_config")
         if not isinstance(levels, list) or not levels or not isinstance(config, dict):
             raise Denied("The saved state has no level list")
-        saved.mkdir(parents=True)
         files, traits = [], []
         for level in levels:
             name = level.get("file") if isinstance(level, dict) else None
-            if not isinstance(name, str) or not re.fullmatch(r"z\d+\.dmm", name) or not (source / name).is_file():
+            if (not isinstance(name, str) or not re.fullmatch(r"z\d+\.dmm", name)
+                    or (source / name).is_symlink() or not (source / name).is_file()):
                 raise Denied("The saved state lists an invalid level file")
             level_traits = level.get("traits", [])
             if not isinstance(level_traits, list):
                 raise Denied("The saved state lists invalid level traits")
-            shutil.copy2(source / name, saved / name)
             files.append(name)
             traits.append(level_traits)
+        # Everything is validated; stage the levels aside so a failed copy never leaves saved/ half-cleared.
+        staging = saved.with_name("saved.staging")
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        try:
+            for name in files:
+                shutil.copy2(source / name, staging / name)
+        except OSError:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise Denied("The saved levels could not be copied")
+        shutil.rmtree(saved, ignore_errors=True)
+        staging.rename(saved)
         next_map.write_text(json.dumps(dict(config, map_path="babylon/saved", map_file=files, traits=traits)))
         resume.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source / "state.json", resume)
@@ -282,7 +304,9 @@ class Driver:
         active = root / "_maps/babylon/active.dmm"
         active.parent.mkdir(parents=True, exist_ok=True)
         if source is not None:
-            json.loads((source / "state.json").read_text())
+            self.read_state(source)
+            if (source / "map.dmm").is_symlink() or not (source / "map.dmm").is_file():
+                raise Denied("The saved snapshot has no map.dmm")
             shutil.copy2(source / "map.dmm", active)
             shutil.copy2(source / "state.json", resume)
         else:
