@@ -47,11 +47,20 @@
  *   haunted cult blade, the talking claymore null rod, the disco necktie, xeno embryos,
  *   empowered borer eggs, zombie tumours, the TerraGov reporter and the communications console
  *   (its 911 call summons a ghost response team), the bitrunning quantum server, lavaland
- *   elite tumours, ectoplasm ghost portals, the heretic lock tear, blob minions, bots (ghost
- *   possession), star gazers, revenants, spriggans;
+ *   elite tumours, ectoplasm ghost portals, the heretic lock tear, blob minions, star gazers,
+ *   revenants, spriggans. Simple bots (/mob/living/basic/bot) stay spawnable: a spawned bot
+ *   polls nobody (only mapped station bots enable possession); a ghost can take one over only
+ *   after a player switches on its personality setting;
+ * - items that are no real item or that make map levels: hand gestures (hand_item), mob holders,
+ *   the Hilbert's hotel sphere, and abstract (ABSTRACT flag) items;
  * - Babylon's own builder drones (the drone builder session owns them);
  * - humans other than the plain NPC human and its species variants (no test dummies);
  * - the circuit board of anything blocked here (it builds the same machine).
+ *
+ * This is the one spawn blocklist of every Creative and tutorial feature: the creative disposal
+ * unit (babylon_creative_item_allowed, machines.dm) and the tutorial's typepath fields and Give
+ * item action (babylon_tutorial_type_allowed, tutorial/objects.dm) call it and only add their
+ * own extra restrictions on top.
  */
 /proc/babylon_creative_spawn_blocked(path)
 	if(!ispath(path))
@@ -103,11 +112,13 @@
 		/obj/structure/ghost_portal,
 		/obj/structure/lock_tear,
 		/mob/living/basic/blob_minion,
-		/mob/living/basic/bot,
 		/mob/living/basic/heretic_summon/star_gazer,
 		/mob/living/basic/revenant,
 		/mob/living/basic/spriggan,
 		/obj/effect/immovablerod,
+		/obj/item/hand_item,
+		/obj/item/mob_holder,
+		/obj/item/hilbertshotel,
 	)
 	for(var/blocked in blocked_roots)
 		if(ispath(path, blocked))
@@ -122,6 +133,10 @@
 	var/atom/movable/thing = path
 	if(initial(thing.abstract_type) == path || !initial(thing.name) || !initial(thing.icon))
 		return TRUE
+	if(ispath(path, /obj/item))
+		var/obj/item/item_path = path
+		if(initial(item_path.item_flags) & ABSTRACT)
+			return TRUE
 	if(babylon_type_is_erp(path))
 		return TRUE
 	var/text = lowertext("[path]")
@@ -467,6 +482,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_mobs)
 		/mob/living/basic/carp,
 		/mob/living/basic/bear,
 		/mob/living/basic/spider/giant,
+		/mob/living/basic/bot/cleanbot,
+		/mob/living/basic/bot/medbot,
 	))
 	mobs.Insert(1, list(babylon_creative_entry(/mob/living/carbon/human, "NPC human")))
 	categories += list(list("id" = "mobs", "name" = "Mobs", "icon" = "paw", "entries" = mobs))

@@ -141,76 +141,22 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	return sortTim(choices, GLOBAL_PROC_REF(cmp_text_asc))
 
 /// Item types a creative disposal source never produces, nor lets out inside what it produces:
-/// ones that would harm the server or the round when made every few seconds, and the SFW
-/// lockdown's lewd items (they delete themselves anyway; this keeps them out of the search).
-/// The Creative panel's spawn blacklist (E1) covers the same ground; the controller unifies them.
+/// everything the Creative panel may not spawn (babylon_creative_spawn_blocked, spawning.dm: the
+/// one spawn blocklist, ERP items included), plus what would harm the round when made every few
+/// seconds: grenades, bomb cores, tank transfer valves and brain holders.
 /proc/babylon_creative_item_blocked(item_type)
-	var/static/list/blocked = typecacheof(list(
-		/obj/item/antag_spawner, // summons ghost roles
+	var/static/list/automated_extra = typecacheof(list(
 		/obj/item/bombcore,
-		/obj/item/disk/nuclear, // round-critical, tracked globally
 		/obj/item/grenade,
-		/obj/item/hand_item, // abstract hand gestures
-		/obj/item/hilbertshotel, // creates map levels
-		/obj/item/mmi, // brain holders
-		/obj/item/mob_holder, // holds a mob
+		/obj/item/mmi,
 		/obj/item/transfer_valve,
-		// Lewd items (modular_skyrat lewd_items, _erp_disabled_item_enforcement.dm).
-		/obj/item/bdsm_bed_kit,
-		/obj/item/bdsm_candle,
-		/obj/item/breastpump,
-		/obj/item/clicker,
-		/obj/item/clothing/ears/kinky_headphones,
-		/obj/item/clothing/erp_leash,
-		/obj/item/clothing/glasses/blindfold/kinky,
-		/obj/item/clothing/glasses/hypno,
-		/obj/item/clothing/gloves/ball_mittens,
-		/obj/item/clothing/head/domina_cap,
-		/obj/item/clothing/mask/ballgag,
-		/obj/item/clothing/mask/gas/bdsm_mask,
-		/obj/item/clothing/mask/leatherwhip,
-		/obj/item/clothing/neck/kink_collar,
-		/obj/item/clothing/neck/mind_collar,
-		/obj/item/clothing/sextoy,
-		/obj/item/clothing/shoes/latex_heels/domina_heels,
-		/obj/item/clothing/strapon,
-		/obj/item/clothing/suit/corset,
-		/obj/item/clothing/suit/straight_jacket/kinky_sleepbag,
-		/obj/item/clothing/under/stripper_outfit,
-		/obj/item/condom_pack,
-		/obj/item/key/kink_collar,
-		/obj/item/kinky_shocker,
-		/obj/item/lustwish_discount,
-		/obj/item/milking_machine/constructionkit,
-		/obj/item/mind_controller,
-		/obj/item/paper/shibari_kit_instructions,
-		/obj/item/polepack,
-		/obj/item/reagent_containers/cup/lewd_filter,
-		/obj/item/restraints/handcuffs/lewd,
-		/obj/item/restraints/handcuffs/milker,
-		/obj/item/spanking_pad,
-		/obj/item/storage/belt/erpbelt,
-		/obj/item/storage/box/bdsmbed_kit,
-		/obj/item/storage/box/milking_kit,
-		/obj/item/storage/box/shibari_stand,
-		/obj/item/storage/box/strippole_kit,
-		/obj/item/storage/box/xstand_kit,
-		/obj/item/strapon_dildo,
-		/obj/item/tickle_feather,
-		/obj/item/vending_refill/lustwish,
-		/obj/item/x_stand_kit,
 	))
-	return is_type_in_typecache(item_type, blocked) || findtext("[item_type]", "lewd")
+	return babylon_creative_spawn_blocked(item_type) || is_type_in_typecache(item_type, automated_extra)
 
-/// Items a creative disposal source may produce: concrete /obj/item types only, no abstract
-/// types or abstract (non-physical) items, nothing babylon_creative_item_blocked().
+/// Items a creative disposal source may produce: /obj/item types only (the panel's blocklist
+/// already refuses abstract types and ABSTRACT items), nothing babylon_creative_item_blocked().
 /proc/babylon_creative_item_allowed(item_type)
-	if(!ispath(item_type, /obj/item))
-		return FALSE
-	var/obj/item/item_path = item_type
-	if(initial(item_path.abstract_type) == item_type || (initial(item_path.item_flags) & ABSTRACT))
-		return FALSE
-	return !babylon_creative_item_blocked(item_type)
+	return ispath(item_type, /obj/item) && !babylon_creative_item_blocked(item_type)
 
 /// "[name] ([path])" entries of the allowed items whose name or path contains the search, sorted,
 /// at most limit of them.
@@ -677,7 +623,7 @@ GLOBAL_VAR(babylon_creative_test_answers)
 	for(var/atom/movable/inner as anything in made.get_all_contents())
 		if(inner == made || QDELETED(inner))
 			continue
-		if(ismob(inner) || babylon_creative_item_blocked(inner.type))
+		if(ismob(inner) || (isitem(inner) && babylon_creative_item_blocked(inner.type)))
 			qdel(inner)
 	creative_outputs += WEAKREF(made)
 	return made

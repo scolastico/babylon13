@@ -614,7 +614,14 @@ admins, ghosts and the new-player lobby get neither. The panel's tabs:
   grenades, endless mob nests, singularities, tesla balls and the singularity beacon,
   spreading cores (mold, fleshmind, vines, xeno weed nodes), shuttle consoles and
   dockers, CentCom/ERT/deathsquad IDs, mobs that make more mobs (legions, regal rats,
-  broodmothers, eggs, positronic brains), and the circuit board of anything blocked.
+  broodmothers, eggs, positronic brains), everything that asks ghosts to take a body or a
+  role, hand gestures, mob holders, the Hilbert's hotel sphere, and the circuit board of
+  anything blocked. Simple bots (cleanbots, medbots and the like) can be spawned: a spawned
+  bot asks no ghost to take it over; that only becomes possible once a player switches on its
+  personality setting. This is the one spawn blocklist: the creative disposal unit and the
+  tutorial wand's item fields and Give item action use it too, each with a few extra
+  restrictions of its own (the disposal unit and Give item never make grenades, bombs or brain
+  holders).
 - **Teleport**: to coordinates, an area, another player in this world, a tutorial
   marker, or back to where you were before the last teleport; only this world's own
   levels (never CentCom or transit space). Without noclip you land on the nearest free

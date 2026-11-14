@@ -148,8 +148,25 @@
 	result["blocked_ghost_pollers"] = babylon_creative_spawn_blocked(/obj/item/guardian_creator) && babylon_creative_spawn_blocked(/obj/item/slimepotion/sentience) \
 		&& babylon_creative_spawn_blocked(/obj/item/clothing/head/helmet/monkey_sentience) && babylon_creative_spawn_blocked(/obj/item/soulscythe) \
 		&& babylon_creative_spawn_blocked(/obj/item/aicard/syndie/loaded) && babylon_creative_spawn_blocked(/obj/machinery/experimental_cloner) \
-		&& babylon_creative_spawn_blocked(/obj/item/clothing/neck/tie/disco) && babylon_creative_spawn_blocked(/mob/living/basic/bot/cleanbot) \
+		&& babylon_creative_spawn_blocked(/obj/item/clothing/neck/tie/disco) \
 		&& babylon_creative_spawn_blocked(/obj/item/organ/zombie_infection) && babylon_creative_spawn_blocked(/obj/machinery/computer/communications)
+	// Simple bots poll nobody when spawned (possession needs their personality setting): spawnable,
+	// and the Mobs category offers the cleanbot and the medbot.
+	var/list/mob_paths = list()
+	for(var/list/category as anything in babylon_creative_categories())
+		if(category["id"] == "mobs")
+			for(var/list/entry as anything in category["entries"])
+				mob_paths += entry["path"]
+	result["bots_spawnable"] = !babylon_creative_spawn_blocked(/mob/living/basic/bot/cleanbot) && !babylon_creative_spawn_blocked(/mob/living/basic/bot/medbot) \
+		&& ("[/mob/living/basic/bot/cleanbot]" in mob_paths) && ("[/mob/living/basic/bot/medbot]" in mob_paths)
+	// One spawn blocklist: the creative disposal unit and the tutorial's item fields refuse what the
+	// panel refuses, and add only their own extras (grenades there, not in the panel).
+	result["one_blocklist"] = !babylon_creative_item_allowed(/obj/item/soulstone) && !babylon_tutorial_type_allowed(/obj/item/soulstone, null) \
+		&& !babylon_creative_item_allowed(/obj/item/clothing/sextoy/dildo) && !babylon_tutorial_type_allowed(/obj/item/clothing/sextoy/dildo, null) \
+		&& !babylon_creative_item_allowed(/obj/item/hilbertshotel) && babylon_creative_spawn_blocked(/obj/item/hilbertshotel) \
+		&& !babylon_creative_spawn_blocked(/obj/item/grenade/flashbang) && !babylon_creative_item_allowed(/obj/item/grenade/flashbang) \
+		&& !babylon_tutorial_type_allowed(/obj/item/grenade/flashbang, null) \
+		&& babylon_creative_item_allowed(/obj/item/wrench) && babylon_tutorial_type_allowed(/obj/item/wrench, null)
 
 	// Mob cap: a world full of creative mobs refuses more.
 	var/list/mobs_before = GLOB.babylon_creative_mobs.Copy()

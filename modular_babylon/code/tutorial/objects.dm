@@ -517,16 +517,9 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /// Type paths a builder may pick for a typepath field.
 /proc/babylon_tutorial_type_allowed(path, list/field)
 	if(ispath(path, /obj/item))
-		var/obj/item/item_path = path
-		if(initial(item_path.item_flags) & ABSTRACT)
-			return FALSE
-		if(initial(item_path.abstract_type) == path)
-			return FALSE
-		// Kept in step with the Creative panel's spawn blocklist (merged into one check later).
-		var/static/list/blocked = typecacheof(list(/obj/item/hand_item, /obj/item/antag_spawner, /obj/item/bombcore, /obj/item/disk/nuclear, /obj/item/grenade, /obj/item/transfer_valve, /obj/item/mmi, /obj/item/mob_holder, /obj/item/hilbertshotel))
-		if(blocked[path])
-			return FALSE
-		if(findtext("[path]", "lewd") || findtext("[path]", "/erp"))
+		// The Creative panel's spawn blocklist plus the creative disposal unit's extras
+		// (grenades, bomb cores, transfer valves, brain holders): babylon_creative_item_allowed.
+		if(!babylon_creative_item_allowed(path))
 			return FALSE
 	if(ispath(path, /datum/reagent))
 		if(babylon_erp_reagents()[path])
