@@ -11,6 +11,12 @@
 	result["creative_from_params"] = flags.creative == (world.params["babylon-creative"] == "1") && babylon_creative_enabled() == flags.creative
 	result["kind_from_params"] = flags.kind == (world.params["babylon-kind"] || "world")
 	result["owner_from_params"] = flags.owner_ckey == ckey(world.params["babylon-owner"]) && owner_ckey == flags.owner_ckey
+	var/real_creative = flags.creative
+	flags.creative = TRUE
+	var/creative_capable = babylon_tutorial_capable()
+	flags.creative = FALSE
+	result["tutorial_capable_with_creative"] = creative_capable && !babylon_tutorial_capable()
+	flags.creative = real_creative
 	result["unsafe_ids_rejected"] = !babylon_safe_id("../x") && !babylon_safe_id("") && babylon_safe_id("creative_plane_m")
 	result["ready"] = babylon_world_ready() && ready
 	result["map_loaded"] = SSmapping.current_map?.map_name == "MetaStation" || flags.map_id != "metastation"
@@ -137,9 +143,16 @@
 	result["nobody_may_not"] = !babylon_round_starter_allowed(null, "admin", TRUE, FALSE)
 	result["clientless_start_refused"] = !babylon_start_round(null) && babylon_round_on_hold()
 	// Tutorials start at once, resumed rounds too; Creative Plane worlds keep the owner's hold.
-	result["tutorial_starts_at_once"] = babylon_choose_round_mode("tutorial", FALSE) == "auto" && babylon_choose_round_mode("tutorial_edit", FALSE) == "auto"
-	result["world_kind_holds"] = babylon_choose_round_mode("world", FALSE) == "hold"
-	result["saved_round_resumes"] = babylon_choose_round_mode("world", TRUE) == "resume" && babylon_choose_round_mode("tutorial", TRUE) == "resume"
+	var/datum/babylon_world/flags = GLOB.babylon_world
+	var/real_kind = flags.kind
+	var/list/modes = list()
+	for(var/kind in list("world", "tutorial", "tutorial_edit"))
+		flags.kind = kind
+		modes[kind] = babylon_choose_round_mode(flags.is_tutorial(), FALSE)
+	flags.kind = real_kind
+	result["tutorial_starts_at_once"] = modes["tutorial"] == "auto" && modes["tutorial_edit"] == "auto"
+	result["world_kind_holds"] = modes["world"] == "hold"
+	result["saved_round_resumes"] = babylon_choose_round_mode(FALSE, TRUE) == "resume" && babylon_choose_round_mode(TRUE, TRUE) == "resume"
 	result["saved_round_flag_read_defensively"] = babylon_state_round_started(list("round" = list("started" = TRUE))) \
 		&& !babylon_state_round_started(null) && !babylon_state_round_started(list()) \
 		&& !babylon_state_round_started(list("round" = "yes")) && !babylon_state_round_started(list("round" = list("started" = FALSE))) \

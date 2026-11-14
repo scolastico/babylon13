@@ -41,11 +41,11 @@
 	/// The Start round verb is currently given to this client.
 	var/babylon_start_verb_shown = FALSE
 
-/// The round's mode for a world of this kind whose save does (not) contain a started round.
-/proc/babylon_choose_round_mode(kind, saved_round_started)
+/// The round's mode for a (tutorial) world whose save does (not) contain a started round.
+/proc/babylon_choose_round_mode(tutorial, saved_round_started)
 	if(saved_round_started)
 		return "resume"
-	if(kind == "tutorial" || kind == "tutorial_edit")
+	if(tutorial)
 		return "auto"
 	return "hold"
 
@@ -74,7 +74,7 @@
 
 /// Called from SSbabylon_station.Initialize, before the world reports ready.
 /datum/babylon_save/proc/setup_round_control()
-	round_mode = babylon_choose_round_mode(GLOB.babylon_world.kind, babylon_state_round_started(saved_state()))
+	round_mode = babylon_choose_round_mode(GLOB.babylon_world.is_tutorial(), babylon_state_round_started(saved_state()))
 	if(round_mode == "hold")
 		// The master sets timeLeft from start_at once initialization ends: no countdown at all.
 		SSticker.SetTimeLeft(-1)

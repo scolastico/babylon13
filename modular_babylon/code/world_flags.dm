@@ -77,6 +77,10 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_persistence_enabled()
 	return !!GLOB.babylon_world?.persistent
 
+/// Tutorials can be played and edited here: the station build with Creative enabled.
+/proc/babylon_tutorial_capable()
+	return babylon_is_station_build() && babylon_creative_enabled()
+
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has
 /// initialized everything, the visitor/spectator spawn point is set and the ticker reached the
