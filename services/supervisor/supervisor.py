@@ -161,7 +161,8 @@ class Driver:
         return entry
 
     def build_of(self, world):
-        return build_of(self.loaded_catalog(), self.field(world, "map", "babylon"))
+        map_id = self.field(world, "map", "babylon")
+        return build_of({} if map_id == "babylon" else self.loaded_catalog(), map_id)
 
     def data_root(self):
         return Path(self.config["data_directory"]).resolve()
