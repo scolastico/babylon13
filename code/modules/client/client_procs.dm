@@ -158,8 +158,7 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 			if(!SSmapping.current_map.mapping_url)
 				return
 			// The atlas addresses a tile as t=x,y,z with z counted within the station map, not the world.
-			var/list/station_levels = SSmapping.levels_by_trait(ZTRAIT_STATION)
-			var/station_z = station_levels.Find(mob.z)
+			var/station_z = atlas_station_z(mob.z)
 			if(station_z)
 				src << link("[SSmapping.current_map.mapping_url]&t=[mob.x],[mob.y],[station_z]")
 			else
