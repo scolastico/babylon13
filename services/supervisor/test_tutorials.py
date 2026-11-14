@@ -221,13 +221,10 @@ class NoCharacters(TutorialFixture):
         # Everything else is kept.
         self.assertEqual((state["generation"], len(state["records"])), (GENERATION, 3))
 
-    def test_kinds_rule_matches_the_dm(self):
-        from constants import SAVES_CHARACTERS, TUTORIAL_KINDS, WORLD_KINDS
+    def test_kinds_rule(self):
+        # The DM side is checked against world_policy() by test_contracts.WorldPolicy.
+        from constants import SAVES_CHARACTERS
         self.assertEqual(SAVES_CHARACTERS, {"world": True, "tutorial": False, "tutorial_edit": False})
-        self.assertEqual(set(SAVES_CHARACTERS), set(WORLD_KINDS))
-        text = (Path(__file__).resolve().parents[2] / "modular_babylon/code/world_flags.dm").read_text()
-        self.assertIn("/proc/babylon_world_saves_characters(for_tutorial = FALSE)\n\treturn !for_tutorial && !GLOB.babylon_world?.is_tutorial()", text)
-        self.assertTrue(all(SAVES_CHARACTERS[kind] is False for kind in TUTORIAL_KINDS))
 
     def test_submit_save_back_and_copy_strip_characters(self):
         world = self.make()

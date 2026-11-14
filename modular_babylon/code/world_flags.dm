@@ -132,6 +132,12 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /datum/babylon_world/proc/plays_tutorial_on_join()
 	return kind == "tutorial"
 
+/// A checkpoint keeps the players' characters (bodies, inventories) and per-player records
+/// (station_characters.dm, state.dm): every world but tutorial instances. A forced tutorial
+/// snapshot never keeps them either (babylon_world_saves_characters(for_tutorial)).
+/datum/babylon_world/proc/saves_characters()
+	return !is_tutorial()
+
 /// The stop message says the world is a tutorial, which is never saved (admission.dm).
 /datum/babylon_world/proc/unsaved_as_tutorial()
 	return is_tutorial()
@@ -162,13 +168,12 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_stop_saves()
 	return !!GLOB.babylon_world?.stop_saves()
 
-/// A checkpoint keeps the players' characters (bodies, inventories) and per-player records: never
-/// in a tutorial or tutorial_edit world, and never in a forced tutorial snapshot (for_tutorial: a
-/// submission or save-back, from any world). The one rule for "tutorial snapshots carry no
-/// characters"; the supervisor's copy is constants.SAVES_CHARACTERS (per kind), and tutorials.py
-/// blanks them again in every snapshot it copies.
+/// The policy table's saves_characters(), and never for a forced tutorial snapshot (for_tutorial: a
+/// submission or save-back, from any world): the one rule for "tutorial snapshots carry no
+/// characters". The supervisor's copy is world_policy()["saves_characters"] (constants.py), and
+/// tutorials.py blanks them again in every snapshot it copies.
 /proc/babylon_world_saves_characters(for_tutorial = FALSE)
-	return !for_tutorial && !GLOB.babylon_world?.is_tutorial()
+	return !for_tutorial && !!GLOB.babylon_world?.saves_characters()
 
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has
