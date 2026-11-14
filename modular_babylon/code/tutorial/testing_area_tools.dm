@@ -32,6 +32,7 @@
 		if(!QDELETED(thing))
 			qdel(thing)
 	GLOB.babylon_area_busy = 0
+	GLOB.babylon_area_lock_owner = null
 	setup?.undo(null)
 	for(var/key in GLOB.babylon_area_sessions)
 		if(findtext(key, "areatest_") == 1)
@@ -125,6 +126,18 @@
 		// A lock that outlived its timeout blocks nobody.
 		GLOB.babylon_area_busy = world.time - 1
 		result["stale_lock_ignored"] = session.copy(null)["ok"]
+		// An operation that lost its (expired) lock does not release the next one's lock.
+		var/datum/babylon_area_session/other = babylon_area_test_session("other")
+		GLOB.babylon_area_busy = world.time + 100
+		GLOB.babylon_area_lock_owner = other
+		session.finish()
+		result["finish_keeps_others_lock"] = babylon_area_locked_by_other() && GLOB.babylon_area_lock_owner == other
+		// A running operation keeps its lock while it makes progress.
+		GLOB.babylon_area_busy = world.time + 1
+		babylon_area_keepalive()
+		result["progress_extends_lock"] = GLOB.babylon_area_busy >= world.time + BABYLON_AREA_LOCK_TIMEOUT
+		other.finish()
+		result["owner_releases_lock"] = !babylon_area_locked_by_other() && !GLOB.babylon_area_lock_owner
 		GLOB.babylon_area_busy = 0
 	catch(var/exception/error)
 		result["no_error"] = FALSE
@@ -273,6 +286,9 @@
 		result["structure_fill_and_undo"] = grilles == length(room) && !left
 
 		var/obj/item/storage/toolbox/toolbox = new(locate(x1, y1, z))
+		// The test area can border space: air rushing out would blow loose things off the area
+		// while the tools pause. Anchored, test objects stay put.
+		toolbox.anchored = TRUE
 		session.set_option("only_empty", TRUE)
 		session.fill(null, "[/turf/open/floor/iron]")
 		result["only_empty_skips"] = istype(get_turf(toolbox), /turf/open/floor/plating) && istype(locate(x1 + 1, y1, z), /turf/open/floor/iron)
@@ -286,6 +302,8 @@
 		new /obj/item/stack/sheet/iron(closet, 7)
 		var/obj/item/reagent_containers/cup/beaker/beaker = new(locate(x1 + 2, y1, z))
 		beaker.reagents.add_reagent(/datum/reagent/water, 15)
+		closet.anchored = TRUE
+		beaker.anchored = TRUE
 		var/mob/living/carbon/human/npc = new(locate(x1 + 3, y1 + 1, z))
 		made += npc
 		var/mob/living/carbon/human/player = new(locate(x1 + 2, y1 + 2, z))
@@ -299,8 +317,16 @@
 		var/mob/living/carbon/human/stored = new(locker)
 		made += stored
 		stored.mind_initialize()
+		// A protected item inside the closet survives the closet.
+		var/obj/item/screwdriver/guarded = new(closet)
+		made += guarded
+		guarded.resistance_flags |= INDESTRUCTIBLE
 		result["clear_ok"] = session.clear(null)["ok"]
-		result["clear_removed_objects"] = QDELETED(toolbox) && QDELETED(closet) && QDELETED(beaker)
+		result["clear_removed_objects"] = !!(QDELETED(toolbox) && QDELETED(closet) && QDELETED(beaker))
+		for(var/obj/survivor as anything in list(toolbox, closet, beaker))
+			if(!QDELETED(survivor))
+				var/turf/survivor_tile = get_turf(survivor)
+				result["survivor [survivor.type] at [survivor_tile?.x],[survivor_tile?.y] in [survivor.loc?.type] (room [x1],[y1])"] = FALSE
 		result["clear_removed_npc"] = QDELETED(npc)
 		result["clear_player_not_deleted"] = !QDELETED(player)
 		var/turf/player_tile = get_turf(player)
@@ -308,32 +334,64 @@
 		result["clear_keeps_ghosted_body"] = !QDELETED(ghosted) && !(get_turf(ghosted) in room)
 		result["clear_keeps_body_in_closet"] = !QDELETED(stored) && !(get_turf(stored) in room)
 		result["clear_to_plating"] = babylon_area_test_all(room, /turf/open/floor/plating)
+		result["clear_keeps_protected_item_in_container"] = !QDELETED(guarded) && isturf(guarded.loc)
 		session.undo(null)
 		var/obj/structure/closet/restored_closet = locate() in locate(x1 + 1, y1, z)
 		var/obj/item/stack/sheet/iron/restored_stack = restored_closet && (locate() in restored_closet)
 		var/item_count = 0
+		// (The protected screwdriver lay on the closet's tile, so the reloaded closet takes it in.)
 		for(var/obj/item/item in restored_closet)
-			item_count++
+			if(item != guarded)
+				item_count++
 		result["undo_restores_objects"] = !!(locate(/obj/item/storage/toolbox) in locate(x1, y1, z))
 		result["undo_restores_closet_contents"] = restored_stack?.amount == 7 && item_count == 1
 		var/obj/item/reagent_containers/cup/beaker/restored_beaker = locate() in locate(x1 + 2, y1, z)
 		result["undo_restores_reagents"] = restored_beaker?.reagents.get_reagent_amount(/datum/reagent/water) == 15
+		if(!result["undo_restores_reagents"] || !result["undo_restores_closet_contents"])
+			var/list/seen_here = list()
+			for(var/turf/tile as anything in babylon_area_tiles(x1, y1, x1 + 2, y1, z))
+				for(var/obj/thing in tile)
+					seen_here += "[thing.type]@[tile.x - x1]"
+			result["after undo: [jointext(seen_here, " ")]; closet items [item_count]; stack [restored_stack?.amount]; water [restored_beaker?.reagents?.get_reagent_amount(/datum/reagent/water)]"] = FALSE
 		session.clear(null)
 
 		// Paste: a cable, a pipe and air; a player stands where the copy goes.
 		var/obj/structure/cable/cable = new(locate(x1 + 1, y1 + 1, z))
 		made += cable
-		var/obj/machinery/atmospherics/pipe/smart/simple/general/visible/pipe = new(locate(x1 + 2, y1 + 1, z))
+		// The pipe sits on the copy's west edge; at the target a pipe already waits next to it.
+		var/obj/machinery/atmospherics/pipe/smart/simple/general/visible/pipe = new(locate(x1, y1 + 1, z))
 		made += pipe
+		var/obj/machinery/atmospherics/pipe/smart/simple/general/visible/outside = new(locate(x1 + 7, y1 + 1, z))
+		made += outside
+		outside.on_construction(null, outside.pipe_color, outside.piping_layer)
+		var/failures_before = GLOB.babylon_area_link_failures
 		session.copy(null)
 		player.forceMove(locate(x1 + 10, y1 + 1, z))
 		session.arm_paste()
 		session.click(locate(x1 + 8, y1, z))
 		result["paste_ok"] = session.paste(null)["ok"]
 		var/obj/structure/cable/pasted_cable = locate() in locate(x1 + 9, y1 + 1, z)
-		var/obj/machinery/atmospherics/pipe/pasted_pipe = locate() in locate(x1 + 10, y1 + 1, z)
+		var/obj/machinery/atmospherics/pipe/pasted_pipe = locate() in locate(x1 + 8, y1 + 1, z)
 		result["paste_cable_in_powernet"] = !!pasted_cable?.powernet
-		result["paste_pipe_in_pipenet"] = !!pasted_pipe?.parent
+		// One live pipenet across the paste edge once the air subsystem rebuilt it.
+		for(var/wait in 1 to 100)
+			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent)
+				break
+			sleep(1)
+		var/datum/pipeline/net = pasted_pipe?.parent
+		result["paste_pipe_in_pipenet"] = !!net && !QDELETED(net) && (net in SSair.networks)
+		result["paste_edge_one_pipenet"] = !!net && outside.parent == net
+		var/consistent = !!net
+		for(var/obj/machinery/atmospherics/pipe/member as anything in net?.members)
+			if(member.parent != net)
+				consistent = FALSE
+		result["paste_pipenet_consistent"] = consistent
+		var/leaked = 0
+		for(var/datum/pipeline/other_net as anything in SSair.networks)
+			if(other_net != net && ((pasted_pipe in other_net.members) || (outside in other_net.members)))
+				leaked++
+		result["paste_no_leaked_pipenet"] = !leaked
+		result["paste_edge_no_link_errors"] = GLOB.babylon_area_link_failures == failures_before
 		var/turf/open/pasted_floor = locate(x1 + 11, y1 + 2, z)
 		result["paste_air_sane"] = istype(pasted_floor) && pasted_floor.return_air().return_pressure() > 50
 		player_tile = get_turf(player)
@@ -341,6 +399,15 @@
 		session.undo(null)
 		result["paste_undone"] = !(locate(/obj/structure/cable) in locate(x1 + 9, y1 + 1, z))
 		result["no_one_way_pipes"] = !babylon_area_one_way_nodes(list(x1 + 8, y1, x1 + 13, y1 + 4, z))
+		// Clear to a wall material: a player in the area ends up beside it, not inside a wall.
+		session.set_option("material", "[/turf/closed/wall]")
+		session.set_option("clear_to", "material")
+		player.forceMove(locate(x1 + 3, y1 + 2, z))
+		session.clear(null)
+		player_tile = get_turf(player)
+		result["clear_to_wall_moves_player"] = !QDELETED(player) && !isclosedturf(player_tile) && !(player_tile in room)
+		session.undo(null)
+		session.set_option("clear_to", "plating")
 
 		// The wand: Select mode, two clicks, outlines for the holder.
 		var/was_creative = GLOB.babylon_world.creative

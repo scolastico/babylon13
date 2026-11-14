@@ -30,11 +30,29 @@
 /// ckey => /datum/babylon_area_session
 GLOBAL_LIST_EMPTY(babylon_area_sessions)
 /// While an area operation runs (map loading may pause it): the world.time its lock expires.
+/// The running operation pushes it on while it makes progress (BABYLON_AREA_TICK).
 GLOBAL_VAR_INIT(babylon_area_busy, 0)
+/// The session whose operation holds the lock: only it releases the lock.
+GLOBAL_DATUM(babylon_area_lock_owner, /datum/babylon_area_session)
+/// Pipe links on paste edges that threw (tests check it stays unchanged).
+GLOBAL_VAR_INIT(babylon_area_link_failures, 0)
+
+/// Keeps the running operation's lock and yields when the tick is used up.
+#define BABYLON_AREA_TICK babylon_area_tick()
 
 /// An area operation holds the world-wide lock right now.
 /proc/babylon_area_locked_by_other()
 	return GLOB.babylon_area_busy > world.time
+
+/// The running operation made progress: its lock lasts another BABYLON_AREA_LOCK_TIMEOUT.
+/proc/babylon_area_keepalive()
+	if(GLOB.babylon_area_lock_owner && GLOB.babylon_area_busy)
+		GLOB.babylon_area_busy = world.time + BABYLON_AREA_LOCK_TIMEOUT
+
+/// Keeps the lock and yields when the tick is used up (a pause here pauses the operation).
+/proc/babylon_area_tick()
+	babylon_area_keepalive()
+	CHECK_TICK
 /// Last tag given to an object written into a clipboard map.
 GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 
@@ -155,14 +173,16 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return null
 
 /// Moves every player on these tiles (or inside something on them) out of the rectangle.
-/proc/babylon_area_evict(list/tiles, list/rect)
+/// may_pause: FALSE when the caller needs the tiles to stay as they are (it clears them next).
+/proc/babylon_area_evict(list/tiles, list/rect, may_pause = TRUE)
 	. = 0
 	for(var/turf/tile as anything in tiles)
 		for(var/mob/living/body in tile.get_all_contents())
 			if(babylon_area_is_player(body))
 				if(babylon_area_move_out(body, rect))
 					.++
-		CHECK_TICK
+		if(may_pause)
+			BABYLON_AREA_TICK
 
 /// Objects the game protects (INDESTRUCTIBLE: vault parts, unique machines ...). The area tools
 /// never remove or copy them. Tutorial objects are flagged too, but only against damage.
@@ -199,10 +219,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 
 /// Removes objects and non-player mobs from tiles; players are moved out of the rectangle first.
 /// Returns counts: list("objects", "tutorial", "mobs", "moved", "kept").
-/proc/babylon_area_clear_tiles(list/tiles, list/rect)
+/// Each tile is handled within one tick: its players (also inside lockers, body bags, mechs) are
+/// moved out, then its contents go, so nobody can step or be put in between.
+/// turf_path: then the tile becomes this turf, in the same tick (Clear).
+/proc/babylon_area_clear_tiles(list/tiles, list/rect, turf_path)
 	var/list/counts = list("objects" = 0, "tutorial" = 0, "mobs" = 0, "moved" = 0, "kept" = 0)
-	counts["moved"] = babylon_area_evict(tiles, rect)
 	for(var/turf/tile as anything in tiles)
+		counts["moved"] += babylon_area_evict(list(tile), rect, FALSE)
 		for(var/mob/living/body in tile)
 			if(babylon_area_is_player(body))
 				continue
@@ -214,11 +237,33 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				continue
 			if(!babylon_area_removable(thing))
 				continue
-			// A tutorial NPC goes with its spawner; anything else with a player inside was emptied above.
+			// Deleting a container deletes what it holds: players (checked again, just before) and
+			// protected items come out first.
+			for(var/mob/living/body in thing.get_all_contents())
+				if(babylon_area_is_player(body) && babylon_area_move_out(body, rect))
+					counts["moved"]++
+			for(var/obj/inner in thing.get_all_contents())
+				if(inner != thing && babylon_area_protected_object(inner))
+					inner.forceMove(tile)
+					counts["kept"]++
+			// A tutorial NPC goes with its spawner.
 			counts[istype(thing, /obj/babylon_tutorial) ? "tutorial" : "objects"]++
 			babylon_area_delete(thing)
-		CHECK_TICK
+		if(turf_path && tile.type != turf_path)
+			babylon_area_change_turf(tile, turf_path, babylon_area_air_flags(tile))
+		BABYLON_AREA_TICK
 	return counts
+
+/// After a map load: players who walked into the footprint while it loaded and now stand in a
+/// wall or a dense object are moved out.
+/proc/babylon_area_rescue(list/rect)
+	. = 0
+	for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
+		if(!isclosedturf(tile) && !tile.is_blocked_turf(TRUE))
+			continue
+		for(var/mob/living/body in tile.get_all_contents())
+			if(babylon_area_is_player(body) && babylon_area_move_out(body, rect))
+				.++
 
 /// Deletes one thing; a runtime in its Destroy is logged and does not stop the operation.
 /proc/babylon_area_delete(datum/thing)
@@ -256,7 +301,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		for(var/atom/movable/thing as anything in tile)
 			if(thing.smoothing_flags)
 				QUEUE_SMOOTH(thing)
-		CHECK_TICK
+		BABYLON_AREA_TICK
 
 /// Smooths at once whatever waits for icon smoothing in and around a rectangle. Before a map
 /// load: the loader pauses between batches, and the smoothing subsystem would then smooth these
@@ -272,6 +317,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// After a map load: pipes and devices on the edge connect both ways to the pipes outside (the
 /// template setup only connects the loaded side), as when a pipe is built by hand.
 /proc/babylon_area_link_pipes(list/rect)
+	var/list/nets = list()
+	var/list/rebuild = list()
 	for(var/turf/tile as anything in babylon_area_edge(rect[1], rect[2], rect[3], rect[4], rect[5]))
 		for(var/obj/machinery/atmospherics/machine in tile)
 			var/linked = FALSE
@@ -282,14 +329,15 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				try
 					node.atmos_init()
 				catch(var/exception/failure)
+					GLOB.babylon_area_link_failures++
 					log_world("BABYLON AREA: connecting [machine.type] to [node.type] failed: [failure] ([failure.file]:[failure.line])")
-				// Only when the outside pipe takes it as a node too (same layer, facing it).
+				// Only when the outside pipe takes it as a node too (same layer, facing it): both
+				// pipenets are dropped and the rebuild queue builds one network across the edge
+				// (a pipeline keeps its gas in its pipes when it is deleted).
 				if(machine in node.nodes)
-					try
-						node.add_member(machine)
-					catch(var/exception/member_failure)
-						log_world("BABYLON AREA: joining [machine.type] to the pipenet of [node.type] failed: [member_failure] ([member_failure.file]:[member_failure.line])")
-					SSair.add_to_rebuild_queue(node)
+					nets |= machine.return_pipenets()
+					nets |= node.return_pipenets()
+					rebuild |= node
 					linked = TRUE
 				else
 					// A one-way link would break both pipes' deletion later (disconnect() finds nothing).
@@ -298,7 +346,17 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 						machine.nodes[index] = null
 						machine.update_appearance()
 			if(linked)
-				SSair.add_to_rebuild_queue(machine)
+				rebuild |= machine
+	for(var/datum/pipeline/net as anything in nets)
+		if(net && !QDELETED(net))
+			try
+				qdel(net)
+			catch(var/exception/failure)
+				GLOB.babylon_area_link_failures++
+				log_world("BABYLON AREA: dropping a pipenet on the paste edge failed: [failure] ([failure.file]:[failure.line])")
+	for(var/obj/machinery/atmospherics/machine as anything in rebuild)
+		if(!QDELETED(machine))
+			SSair.add_to_rebuild_queue(machine)
 
 /// Pipes on a rectangle's edge that list an outside pipe which does not list them back (tests).
 /proc/babylon_area_one_way_nodes(list/rect)
@@ -432,7 +490,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				clip.replaced_turfs++
 				turf_text = "[/turf/open/floor/plating][isopenturf(tile) ? babylon_area_metadata(tile) : ""]"
 			clip.tiles += list(list("turf" = turf_text, "objects" = objects, "space" = isspaceturf(tile)))
-		CHECK_TICK
+		BABYLON_AREA_TICK
 	return clip
 
 /// Objects a copy takes along (not hidden effects, projectiles, holograms or tutorial NPC gear).
@@ -516,6 +574,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	for(var/obj/item/item in container)
 		if(QDELETED(item) || babylon_tutorial_skip_save(item) || (item.flags_1 & HOLOGRAM_1))
 			continue
+		if(babylon_area_protected_object(item))
+			clip.skipped_protected++
+			continue
 		if(clip.nested_count >= BABYLON_AREA_MAX_NESTED)
 			break
 		clip.nested_count++
@@ -545,7 +606,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// Replaces a container's items with copied ones.
 /proc/babylon_area_restore_contents(atom/container, list/entries)
 	for(var/obj/item/item in container)
-		qdel(item)
+		if(!babylon_area_protected_object(item))
+			qdel(item)
 	for(var/list/entry as anything in entries)
 		var/path = text2path(entry["type"])
 		if(!ispath(path, /obj/item))
@@ -687,8 +749,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 
 /// Builds a clip with its south-west corner on origin: clears the tiles it covers (players are
 /// moved aside), loads the copy as a map, restores contents and reagents, then recreates its
-/// tutorial objects. ids: old => new tutorial id (null keeps them). Returns an error or null.
-/proc/babylon_area_place(datum/babylon_area_clip/clip, turf/origin, list/ids, skip_space, file_name, list/counts)
+/// tutorial objects. id_mode/suffix: how tutorial ids are given ("auto", "custom", "keep"); the
+/// map is worked out right before the objects are made, as other builders may have taken ids
+/// while this paused. If the chosen way no longer works it falls back to "auto"; counts gets
+/// "suffix" and "id_note". Returns an error or null.
+/proc/babylon_area_place(datum/babylon_area_clip/clip, turf/origin, id_mode, suffix, skip_space, file_name, list/counts)
 	var/list/rect = list(origin.x, origin.y, origin.x + clip.width - 1, origin.y + clip.height - 1, origin.z)
 	var/list/written = list()
 	for(var/dx in 0 to clip.width - 1)
@@ -711,6 +776,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	if(counts)
 		for(var/key in cleared)
 			counts[key] = cleared[key]
+	else
+		counts = list()
 	// An APC cleared from the footprint frees its area: the copy's APC may take over.
 	for(var/key in no_apc.Copy())
 		var/list/parts = splittext(key, ",")
@@ -734,7 +801,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	if(!loaded)
 		return "The copy could not be placed there."
 	for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
-		CHECK_TICK
+		BABYLON_AREA_TICK
 		for(var/obj/thing in tile)
 			if(!thing.babylon_clip_tag)
 				continue
@@ -751,6 +818,17 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				log_world("BABYLON AREA: restoring the contents of [thing.type] failed: [load_failure] ([load_failure.file]:[load_failure.line])")
 	babylon_area_resmooth(rect)
 	babylon_area_link_pipes(rect)
+	// Nothing pauses from here on: the ids are checked and the objects made in one go.
+	counts["moved"] += babylon_area_rescue(rect)
+	var/list/id_result = babylon_area_id_map(clip, id_mode, suffix, babylon_area_tutorial_in(rect))
+	if(id_result["error"])
+		var/list/fallback = babylon_area_id_map(clip, "auto", null, babylon_area_tutorial_in(rect))
+		if(fallback["error"])
+			return fallback["error"]
+		counts["id_note"] = "Some tutorial ids were taken meanwhile, so these got the suffix [fallback["suffix"]] instead."
+		id_result = fallback
+	var/list/ids = id_result["map"]
+	counts["suffix"] = id_result["suffix"]
 	var/list/spawners = list()
 	for(var/list/entry as anything in clip.tutorial)
 		var/object_path = text2path(entry["type"])
@@ -792,7 +870,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/obj/structure_path = path
 	var/blocks = is_turf ? ispath(path, /turf/closed) : initial(structure_path.density)
 	for(var/turf/tile as anything in tiles)
-		CHECK_TICK
+		BABYLON_AREA_TICK
 		if(babylon_area_locked(tile))
 			counts["locked"]++
 			continue
@@ -883,12 +961,16 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	if(rate_limited && !ignore_cooldown && world.time < next_op)
 		return "Wait [round((next_op - world.time) / 10, 0.1)] more second\s: bigger areas need a longer pause between operations."
 	GLOB.babylon_area_busy = world.time + BABYLON_AREA_LOCK_TIMEOUT
+	GLOB.babylon_area_lock_owner = src
 	return null
 
 /// Ends an operation on tiles tiles: the lock opens, this builder's cooldown starts (2 seconds
 /// plus 1 per 1000 tiles).
 /datum/babylon_area_session/proc/finish(tiles = 0)
-	GLOB.babylon_area_busy = 0
+	// Only this session's own lock: if it expired and another operation took it, that one keeps it.
+	if(GLOB.babylon_area_lock_owner == src)
+		GLOB.babylon_area_busy = 0
+		GLOB.babylon_area_lock_owner = null
 	cooldown_length = BABYLON_AREA_COOLDOWN + round(tiles / 1000) * 1 SECONDS
 	next_op = world.time + cooldown_length
 	changed()
@@ -1096,7 +1178,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		error = babylon_area_too_full(rect)
 		if(!error)
 			before = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5], TRUE)
-			error = babylon_area_place(clipboard, origin, ids["map"], skip_space, "[world.port]-[ckey(key)]-paste", counts)
+			error = babylon_area_place(clipboard, origin, suffix_mode, custom_suffix, skip_space, "[world.port]-[ckey(key)]-paste", counts)
 	catch(var/exception/failure)
 		error = "The paste failed: [failure]"
 		log_world("BABYLON AREA: paste failed: [failure] ([failure.file]:[failure.line])")
@@ -1109,7 +1191,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		return result(error, FALSE)
 	var/size = babylon_area_size_text(clipboard.width, clipboard.height)
 	last_op = list("label" = "Paste [size] at [rect[1]], [rect[2]]", "kind" = "snapshot", "clip" = before, "origin" = list(rect[1], rect[2], rect[5]))
-	log_op(user, "pasted [size] at [rect[1]],[rect[2]],[rect[5]] (copied from [clipboard.origin[1]],[clipboard.origin[2]],[clipboard.origin[3]], id suffix \"[ids["suffix"]]\").")
+	log_op(user, "pasted [size] at [rect[1]],[rect[2]],[rect[5]] (copied from [clipboard.origin[1]],[clipboard.origin[2]],[clipboard.origin[3]], id suffix \"[counts["suffix"]]\").")
 	paste_target = null
 	pasted++
 	finish(tiles)
@@ -1121,7 +1203,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		notes += "kept [counts["kept"]] protected object\s"
 	if(counts["moved"])
 		notes += "moved [counts["moved"]] player\s aside"
-	return result("Pasted [size] at [rect[1]], [rect[2]][tutorial ? "; [tutorial] tutorial object\s[length(ids["suffix"]) ? " got the suffix [ids["suffix"]]" : " kept their ids"]" : ""][length(notes) ? "; [english_list(notes)]" : ""]. Click another tile to paste again, or press Stop pasting.", TRUE)
+	return result("Pasted [size] at [rect[1]], [rect[2]][tutorial ? "; [tutorial] tutorial object\s[length(counts["suffix"]) ? " got the suffix [counts["suffix"]]" : " kept their ids"]" : ""][length(notes) ? "; [english_list(notes)]" : ""].[counts["id_note"] ? " [counts["id_note"]]" : ""] Click another tile to paste again, or press Stop pasting.", TRUE)
 
 /// Tutorial objects inside a rectangle.
 /proc/babylon_area_tutorial_in(list/rect)
@@ -1150,8 +1232,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	catch(var/exception/failure)
 		log_world("BABYLON AREA: fill failed: [failure] ([failure.file]:[failure.line])")
 	var/verb_name = edge_only ? "Border" : "Fill"
-	last_op = list("label" = "[verb_name] [selection_text()] with [material["name"]]", "kind" = "turfs", "turfs" = journal["turfs"], "made" = journal["made"], "rect" = rect)
-	log_op(user, "[edge_only ? "bordered" : "filled"] [selection_text()] at [rect[1]],[rect[2]],[rect[5]] with [path] ([counts?["changed"]] tiles).")
+	var/size = babylon_area_size_text(rect[3] - rect[1] + 1, rect[4] - rect[2] + 1)
+	last_op = list("label" = "[verb_name] [size] with [material["name"]]", "kind" = "turfs", "turfs" = journal["turfs"], "made" = journal["made"], "rect" = rect)
+	log_op(user, "[edge_only ? "bordered" : "filled"] [size] at [rect[1]],[rect[2]],[rect[5]] with [path] ([counts?["changed"]] tiles).")
 	finish(length(tiles))
 	if(!counts)
 		return result("[verb_name] stopped with an error; Undo puts back what changed.", FALSE)
@@ -1190,19 +1273,17 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 					locked++
 				else
 					tiles += tile
-			counts = babylon_area_clear_tiles(tiles, rect)
-			for(var/turf/tile as anything in tiles)
-				if(tile.type != path)
-					babylon_area_change_turf(tile, path, babylon_area_air_flags(tile))
-				CHECK_TICK
+			// Each tile is emptied (players moved out) and turned in one tick.
+			counts = babylon_area_clear_tiles(tiles, rect, path)
 	catch(var/exception/failure)
 		log_world("BABYLON AREA: clear failed: [failure] ([failure.file]:[failure.line])")
 	if(full)
 		finish()
 		return result(full, FALSE)
+	var/size = babylon_area_size_text(rect[3] - rect[1] + 1, rect[4] - rect[2] + 1)
 	if(before)
-		last_op = list("label" = "Clear [selection_text()]", "kind" = "snapshot", "clip" = before, "origin" = list(rect[1], rect[2], rect[5]))
-	log_op(user, "cleared [selection_text()] at [rect[1]],[rect[2]],[rect[5]] to [path] ([counts?["objects"]] objects, [counts?["mobs"]] mobs, [counts?["tutorial"]] tutorial objects).")
+		last_op = list("label" = "Clear [size]", "kind" = "snapshot", "clip" = before, "origin" = list(rect[1], rect[2], rect[5]))
+	log_op(user, "cleared [size] at [rect[1]],[rect[2]],[rect[5]] to [path] ([counts?["objects"]] objects, [counts?["mobs"]] mobs, [counts?["tutorial"]] tutorial objects).")
 	finish(length(tiles) + locked)
 	if(!counts)
 		return result("Clear stopped with an error; Undo puts back what changed.", FALSE)
@@ -1216,7 +1297,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		notes += "[babylon_area_protected_text(locked)] left alone"
 	if(counts["kept"])
 		notes += "[counts["kept"]] protected object\s kept"
-	return result("Cleared [selection_text()]: removed [english_list(parts)][length(notes) ? "; [english_list(notes)]" : ""]. Undo puts the area back approximately (floor markings and machine settings are lost).", TRUE)
+	return result("Cleared [size]: removed [english_list(parts)][length(notes) ? "; [english_list(notes)]" : ""]. Undo puts the area back approximately (floor markings and machine settings are lost).", TRUE)
 
 /// Undoes the last operation. Returns list("text", "ok").
 /datum/babylon_area_session/proc/undo(mob/user)
@@ -1238,7 +1319,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			var/list/records = step["turfs"]
 			tiles = length(records)
 			for(var/index in length(records) to 1 step -1)
-				CHECK_TICK
+				BABYLON_AREA_TICK
 				var/list/record = records[index]
 				var/turf/tile = locate(record[1], record[2], record[3])
 				var/path = text2path(record[4])
@@ -1260,15 +1341,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			var/list/rect = list(origin[1], origin[2], origin[1] + before.width - 1, origin[2] + before.height - 1, origin[3])
 			// Ids taken since then (anywhere outside the area) would be duplicated: the restored
 			// objects get a suffix instead, applied to their links as on a paste.
-			var/list/ids = babylon_area_id_map(before, "keep", null, babylon_area_tutorial_in(rect))
-			if(ids["error"])
-				ids = babylon_area_id_map(before, "auto", null, babylon_area_tutorial_in(rect))
-				if(!ids["error"])
-					note = " Some of its tutorial ids were taken in the meantime, so the restored objects got the suffix [ids["suffix"]]."
-			if(ids["error"])
-				error = ids["error"]
-			else
-				error = babylon_area_place(before, locate(origin[1], origin[2], origin[3]), ids["map"], FALSE, "[world.port]-[ckey(key)]-undo")
+			var/list/counts = list()
+			error = babylon_area_place(before, locate(rect[1], rect[2], rect[5]), "keep", null, FALSE, "[world.port]-[ckey(key)]-undo", counts)
+			if(counts["id_note"])
+				note = " [counts["id_note"]]"
 	catch(var/exception/failure)
 		error = "Undo failed: [failure]"
 		log_world("BABYLON AREA: undo failed: [failure] ([failure.file]:[failure.line])")
