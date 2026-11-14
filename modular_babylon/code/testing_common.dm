@@ -376,7 +376,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	for(var/datum/babylon_tick_listener/listener as anything in tick_listeners)
 		if(listener.step && (COMSIG_BABYLON_WORLD_TICK in listener._signal_procs?[src]))
 			listening++
-	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 2 : 1)
+	result["tick_listeners"] = listening == length(tick_listeners) && listening == (babylon_is_station_build() ? 3 : 2)
 #ifndef BABYLON_STATION
 	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
 #else

@@ -11,15 +11,22 @@ CODE = "modular_babylon/code/"
 
 SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", "showcase", "spectator",
           "sfw", "links", "storyteller", "moderation", "world_players", "interface", "music",
-          "music_loops", "play_time", "testing_common"}
+          "music_loops", "play_time", "testing_common",
+          "creative/machine_types_stub", "creative/powers", "creative/spawning", "creative/teleport",
+          "creative/events", "creative/panel", "creative/testing_creative"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
 STATION_ONLY = {"station_session", "station_round", "testing_station"}
 
 
+def module_name(relative):
+    """A module's name: its path below modular_babylon/code/ without .dm ("creative/panel")."""
+    return Path(relative).with_suffix("").as_posix()
+
+
 def modules(dme):
     text = (ROOT / dme).read_text()
-    return {Path(name).stem for name in re.findall(r'#include "' + CODE + r'([^"]+\.dm)"', text)}
+    return {module_name(name) for name in re.findall(r'#include "' + CODE + r'([^"]+\.dm)"', text)}
 
 
 class BuildSplitTest(unittest.TestCase):
@@ -36,7 +43,7 @@ class BuildSplitTest(unittest.TestCase):
         self.assertEqual(STATION_ONLY - station, set())
 
     def test_every_module_is_classified(self):
-        files = {path.stem for path in (ROOT / CODE).glob("*.dm")}
+        files = {module_name(path.relative_to(ROOT / CODE)) for path in (ROOT / CODE).rglob("*.dm")}
         self.assertEqual(files - SHARED - BABYLON_ONLY - STATION_ONLY, set())
 
     def test_station_build_defines(self):

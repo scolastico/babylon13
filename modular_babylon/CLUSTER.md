@@ -537,6 +537,35 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   Start round again; tutorial worlds show a RETRY TUTORIAL button after three failed
   spawns of a player.
 
+## Creative mode
+
+Worlds with the **Creative** flag (any map) give every player in a body a **Creative**
+action button and a **Creative panel** verb (Babylon tab). Showcase visitors, spectating
+admins, ghosts and the new-player lobby get neither. The panel's tabs:
+
+- **Self**: godmode, noclip (turning it off moves you out of any wall to the nearest
+  free spot) and a full heal that also revives.
+- **Spawn**: curated categories (creative machines, tools, construction materials,
+  machines, structures, items, mobs) and a search over everything spawnable, at your
+  feet or in hand. Stacks spawn as one stack of the chosen amount; anything else up to
+  10 copies. At most 20 spawns every 10 seconds. Debug and admin items, abstract types,
+  the nuke and its disk, the station charter, antagonist summoners, cluster and spawner
+  grenades and endless mob nests can't be spawned
+  (`babylon_creative_spawn_blocked`, `modular_babylon/code/creative/spawning.dm`).
+- **Teleport**: to coordinates, an area, another player in this world or a tutorial
+  marker; only this world's own levels (never CentCom or transit space). Without
+  noclip you land on the nearest free spot.
+- **Events**: tg round events that may run here, at most 3 every 30 seconds. Antagonist,
+  ghost-role and player-targeting events, spreading events (vines, fleshmind, mold),
+  shuttle events and dynamic tweaks are not offered. Babylon worlds never fire events
+  on their own; ones started here still run.
+- **Tools**: a tool kit (toolbelt, insulated gloves, loaded RCD, RPD) and the tutorial
+  wand.
+
+The panel has no VV, proc calls, SDQL, bans or announcements and only acts on the
+player's own body. Every action is in the game log as `BABYLON CREATIVE:` with the
+player's key.
+
 ## Tutorials
 
 Players build a tutorial in a **Creative** world on a **station map** (a Creative

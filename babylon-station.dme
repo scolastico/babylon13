@@ -30,7 +30,14 @@
 #include "modular_babylon/code/music.dm"
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
+#include "modular_babylon/code/creative/machine_types_stub.dm"
+#include "modular_babylon/code/creative/powers.dm"
+#include "modular_babylon/code/creative/spawning.dm"
+#include "modular_babylon/code/creative/teleport.dm"
+#include "modular_babylon/code/creative/events.dm"
+#include "modular_babylon/code/creative/panel.dm"
 #ifdef BABYLON_TESTING
 #include "modular_babylon/code/testing_common.dm"
+#include "modular_babylon/code/creative/testing_creative.dm"
 #include "modular_babylon/code/testing_station.dm"
 #endif
