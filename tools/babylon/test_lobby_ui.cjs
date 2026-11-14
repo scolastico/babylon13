@@ -461,7 +461,7 @@ context.lobbyClose();
     tutorial('p1'),
     tutorial('p2', { title: '<img src=x onerror=alert(1)>', description: '"quoted" & <b>bold</b>', author: 'evil"author', map: 'creative_plane_m', map_name: 'Creative Plane M', playing: 'running' }),
   ];
-  const pending = [tutorial('q2', { status: 'pending', created: 1794660000 }), tutorial('q1', { status: 'pending', created: 1794650000, editing: 'running' })];
+  const pending = [tutorial('q2', { status: 'pending', created: 1794660000, based_on: { id: 'p1', title: 'Tutorial p1', author: 'builder' } }), tutorial('q1', { status: 'pending', created: 1794650000, editing: 'running' })];
   const renderTutorials = (list, extra) => context.renderLobby(JSON.stringify({
     html: '<h2>Tutorials</h2>' + placeholder, view: 'tutorials', revision: revision++, complete: true,
     state: state(worlds, null, Object.assign({ tutorials: list }, extra || {})),
@@ -471,7 +471,7 @@ context.lobbyClose();
   // Cards render from the state, every value escaped; a preview image when the map has one.
   renderTutorials(published.concat(pending));
   assert.doesNotMatch(page(), /lobby-tutorials'><\/div>/, 'the placeholder is filled');
-  assert.match(page(), /<h2>Published tutorials<\/h2><span class="section-count">2<\/span>/);
+  assert.doesNotMatch(page(), /Published tutorials|section-count/, 'players get the list without a second heading');
   assert.equal((page().match(/class="tutorial-card/g) || []).length, 2, 'players see the published cards only');
   assert.doesNotMatch(page(), /Pending tutorials|Tutorial q1|Tutorial q2|Accept/, 'no pending section for players');
   assert.match(page(), /<h3>Tutorial p1<\/h3><div class="tutorial-meta">by <b>builder<\/b>/);
@@ -502,7 +502,7 @@ context.lobbyClose();
   // Copy: a confirmation that explains the saved, creative world and the limits.
   expectNoRequest(() => context.lobbyOpenTutorial('copy', button({ 'data-tutorial': 'p1' })), 'opening the dialog sends nothing');
   assert.match(modalHtml(), /Copy to my worlds\?/);
-  assert.match(modalHtml(), /<b>Creative<\/b>, <b>saved<\/b> and private/);
+  assert.match(modalHtml(), /This creates a new world of your own from the tutorial: <b>Creative<\/b>, <b>saved<\/b> and private, on IceBoxStation\. It is a fresh copy, so nothing you build changes the original\./);
   assert.match(modalHtml(), /counts against your world limits/);
   assert.match(modalHtml(), /<b>2 of 4<\/b> saved worlds/);
   expectNoRequest(() => context.lobbySubmit(), 'Enter never confirms');
@@ -522,14 +522,19 @@ context.lobbyClose();
   const full = [1, 2, 3, 4].map(n => world(hex(n)));
   context.renderLobby(JSON.stringify({ html: placeholder, view: 'tutorials', revision: revision++, complete: true, state: state(full, null, { tutorials: published }) }));
   context.lobbyOpenTutorial('copy', button({ 'data-tutorial': 'p1' }));
-  assert.match(modalHtml(), /class="callout">You already have 4 of 4 saved worlds/);
-  assert.match(modalHtml(), /id="modal-confirm"[^>]* disabled>Copy to my worlds</);
+  assert.match(modalHtml(), /class="callout" id="copy-limit">You already have 4 of 4 saved worlds/);
+  assert.match(modalHtml(), /id="modal-confirm"[^>]* title="You already have 4 of 4 saved worlds[^"]*" aria-describedby="copy-limit" disabled>Copy to my worlds</);
+  assert.match(modalHtml(), /<div class="callout" id="copy-limit">/);
   expectNoRequest(() => context.lobbyTutorialConfirm(), 'a copy over the limit is not sent');
   context.lobbyClose();
 
   // Admins: the pending section (oldest first, before the published ones), review buttons and Delete.
   renderTutorials(published.concat(pending), { admin: 1 });
   assert.match(page(), /<h2>Pending tutorials<\/h2><span class="section-count">2<\/span><span class="badge">Administrators only<\/span>/);
+  assert.match(page(), /<h2>Published tutorials<\/h2><span class="section-count">2<\/span><\/div><div class="tutorial-grid">/, 'admins keep the headings, no second help text');
+  assert.match(page(), /Submitted 2026-/);
+  assert.match(page(), /Based on <b>Tutorial p1<\/b> by <b>builder<\/b>/, 'a pending copy credits its original');
+  assert.match(page(), /<span class="badges"><span class="badge review"[^>]*>Being edited<\/span><\/span>/, 'status badges share one wrapper');
   assert.ok(page().indexOf('Pending tutorials') < page().indexOf('Published tutorials'), 'the review queue comes first');
   assert.ok(page().indexOf('Tutorial q1') < page().indexOf('Tutorial q2'), 'oldest submission first');
   assert.match(page(), /Being edited/, 'an open edit world is shown');
@@ -539,6 +544,7 @@ context.lobbyClose();
   assert.match(page(), /data-tutorial="p1" onclick="return lobbyOpenTutorial\('delete', this\)"/);
   assert.doesNotMatch(page(), /data-tutorial="q2" onclick="return lobbyOpenTutorial\('copy'/, 'pending tutorials cannot be copied');
   renderTutorials(published, { admin: 1 });
+  assert.match(page(), /<h2>Pending tutorials<\/h2><span class="badge">/, 'no count pill on an empty section');
   assert.match(page(), /No tutorials are waiting for review\./);
   assert.ok(page().indexOf('Published tutorials') < page().indexOf('Pending tutorials'), 'an empty queue goes last');
   renderTutorials(published.concat(pending), { admin: 1 });
@@ -566,12 +572,41 @@ context.lobbyClose();
   context.lobbyOpenTutorial('edit', button({ 'data-tutorial': 'q2' }));
   assert.match(modalHtml(), /Save back to pending tutorial/, 'the edit dialog says how changes are kept');
   context.lobbyClose();
+  context.lobbyOpenTutorial('accept', button({ 'data-tutorial': 'q1' }));
+  assert.match(modalHtml(), /An admin is editing this tutorial right now; unsaved changes in that edit world will be lost\./);
+  context.lobbyClose();
+  context.lobbyOpenTutorial('accept', button({ 'data-tutorial': 'q2' }));
+  assert.doesNotMatch(modalHtml(), /An admin is editing/);
+  context.lobbyClose();
 
   // Empty states and a failed list.
   renderTutorials([]);
-  assert.match(page(), /No tutorials yet — build one in a Creative world on a station map and submit it from the Creative panel\./);
-  renderTutorials([], { tutorials_error: 'The world manager isn\'t responding.' });
-  assert.match(page(), /class="notice" role="alert">The world manager isn&#39;t responding\./);
+  assert.match(page(), /No tutorials have been published yet\. Want to be the first\? Build something in a Creative world on a station map, then submit it from the Creative panel\./);
+  renderTutorials([], { tutorials_error: 'The tutorials could not be loaded. Please try again in a moment.' });
+  assert.match(page(), /class="notice" role="alert">The tutorials could not be loaded\. Please try again in a moment\./);
+  assert.match(page(), /class="empty">Press the Tutorials tab again to retry\./);
+  // A failed Play shows its notice at the top: the page comes back scrolled up.
+  context.renderLobby(JSON.stringify({ html: placeholder, view: 'tutorials', revision: revision++, complete: true, state: state(worlds, null, { tutorials: published }) }));
+  context.lobbyScroll.tutorials = 800;
+  context.lobbyPlayTutorial(button({ 'data-tutorial': 'p1' }));
+  assert.equal(context.lobbyScroll.tutorials, 0);
+  renderTutorials([]);
+  // Tutorial runs are stopped with their own confirmation.
+  context.renderLobby(JSON.stringify({ html: '<p>runs</p>', view: 'mine', revision: revision++, complete: true,
+    state: state([world(hex(8), { kind: 'tutorial', persistent: 0, state: 'running', name: 'Power run' }),
+      world(hex(9), { kind: 'tutorial_edit', persistent: 0, state: 'error', name: 'Editing: X' })]) }));
+  context.lobbyOpenWorld('stop', button({ 'data-id': hex(8) }));
+  assert.match(modalHtml(), /Stop this tutorial\?/);
+  assert.match(modalHtml(), /Press Play in Tutorials to start it fresh/);
+  context.lobbyConfirm();
+  assert.deepEqual([lastRequest().action, lastRequest().payload], ['stop', { world: hex(8), confirm: 1 }]);
+  context.lobbyClose();
+  context.lobbyOpenWorld('stop', button({ 'data-id': hex(9) }));
+  assert.match(modalHtml(), /Changes not saved back to the pending tutorial are lost/);
+  context.lobbyClose();
+  const lobbyDm = fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/lobby.dm'), 'utf8');
+  assert.match(lobbyDm, />Stop tutorial\.\.\.</, 'tutorial runs get a Stop button in the world list');
+  assert.match(lobbyDm, /Open Tutorials and press Play again\./, 'tutorials have their own startup timeout notice');
   // Other tabs have no placeholder and are left alone.
   render(worlds);
   assert.equal(page(), '<p>list ' + (revision - 1) + '</p>');

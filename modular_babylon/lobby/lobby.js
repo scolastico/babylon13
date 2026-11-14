@@ -764,7 +764,8 @@ function lobbyButtons(modal, buttons) {
     var label = modal.busy && b.busy ? '<span class="spinner inline" aria-hidden="true"></span>' + lobbyEsc(modal.busyLabel) : lobbyEsc(b.label);
     html += '<button type="' + (b.submit ? 'submit' : 'button') + '" class="button ' + (b.kind || '') + '"' +
       (b.id ? ' id="' + b.id + '"' : '') + (b.onclick ? ' onclick="' + b.onclick + '"' : '') +
-      (b.autofocus ? ' data-autofocus="1"' : '') + (disabled ? ' disabled' : '') + '>' + label + '</button>';
+      (b.autofocus ? ' data-autofocus="1"' : '') + (b.title ? ' title="' + lobbyEsc(b.title) + '"' : '') +
+      (b.describedby ? ' aria-describedby="' + lobbyEsc(b.describedby) + '"' : '') + (disabled ? ' disabled' : '') + '>' + label + '</button>';
   }
   return html;
 }
@@ -1101,6 +1102,18 @@ function lobbyConfirmHtml(modal) {
   }
   var world = lobbyWorld(modal.world) || { name: '', persistent: 1 };
   var name = '<b>' + lobbyEsc(world.name) + '</b>';
+  if (modal.action === 'stop' && world.kind && world.kind !== 'world') {
+    return lobbyDialog(modal, {
+      title: 'Stop this tutorial?', danger: true,
+      body: '<div class="consequence"><p>' + name + ' ends and is deleted. Everyone in it returns to the lobby.' +
+        (world.kind === 'tutorial_edit' ? ' <b>Changes not saved back to the pending tutorial are lost.</b>' : ' Press Play in Tutorials to start it fresh.') +
+        '</p></div>',
+      footer: lobbyButtons(modal, [
+        { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true, autofocus: true },
+        { label: 'Stop tutorial', kind: 'danger solid', onclick: 'return lobbyConfirm()', busy: true, id: 'modal-confirm' }
+      ])
+    });
+  }
   if (modal.action === 'stop') {
     var saved = world.persistent !== 0;
     return lobbyDialog(modal, {
@@ -1137,7 +1150,7 @@ function lobbyConfirmHtml(modal) {
 // lobbyState.tutorials (every value escaped). Their dialogs work like the world dialogs.
 
 var LOBBY_TUTORIALS_PLACEHOLDER = "<div id='lobby-tutorials'></div>";
-var LOBBY_TUTORIALS_EMPTY = 'No tutorials yet — build one in a Creative world on a station map and submit it from the Creative panel.';
+var LOBBY_TUTORIALS_EMPTY = 'No tutorials have been published yet. Want to be the first? Build something in a Creative world on a station map, then submit it from the Creative panel.';
 
 function lobbyExpandSections(html) {
   html = String(html === null || html === undefined ? '' : html);
@@ -1173,13 +1186,15 @@ function lobbyTutorialCard(tutorial, admin) {
   var editing = pending && (tutorial.editing === 'running' || tutorial.editing === 'starting');
   var html = '<article class="tutorial-card' + (pending ? ' pending' : '') + '">' +
     '<div class="tutorial-preview">' + lobbyTutorialPreview(tutorial) +
-    '<span class="badge map">' + lobbyEsc(tutorial.map_name || tutorial.map) + '</span>' +
+    '<span class="badge map">' + lobbyEsc(tutorial.map_name || tutorial.map) + '</span><span class="badges">' +
     (editing ? '<span class="badge review" title="An administrator has an edit world of it open">Being edited</span>'
       : (pending ? '<span class="badge review">Pending review</span>' : '')) +
     (playing ? '<span class="badge running">' + (tutorial.playing === 'starting' ? 'Starting' : 'You are playing') + '</span>' : '') +
-    '</div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
+    '</span></div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
     '<div class="tutorial-meta">by <b>' + lobbyEsc(tutorial.author) + '</b>' +
-    (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
+    (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'Submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
+    (pending && tutorial.based_on ? '<div class="tutorial-meta based-on">Based on <b>' + lobbyEsc(tutorial.based_on.title) + '</b> by <b>' +
+      lobbyEsc(tutorial.based_on.author) + '</b></div>' : '') +
     (tutorial.description ? '<p class="tutorial-desc">' + lobbyEsc(tutorial.description) + '</p>' : '<p class="tutorial-desc none">No description.</p>') +
     '<div class="actions">';
   html += lobbyTutorialButton(playing ? 'Rejoin' : 'Play', 'lobbyPlayTutorial(this)', id, 'primary',
@@ -1195,9 +1210,15 @@ function lobbyTutorialCard(tutorial, admin) {
   return html + '</div></div></article>';
 }
 
+/// A section of cards. Without a title (players see one list) there is no heading; the count pill
+/// only shows when there is something to count.
 function lobbyTutorialSection(title, help, list, empty, admin, extra) {
-  var html = '<section class="tutorial-section" aria-label="' + lobbyEsc(title) + '"><div class="section-head"><h2>' + lobbyEsc(title) + '</h2>' +
-    '<span class="section-count">' + list.length + '</span>' + (extra || '') + '</div><p class="muted">' + lobbyEsc(help) + '</p>';
+  var html = '<section class="tutorial-section" aria-label="' + lobbyEsc(title || 'Tutorials') + '">';
+  if (title) {
+    html += '<div class="section-head"><h2>' + lobbyEsc(title) + '</h2>' +
+      (list.length ? '<span class="section-count">' + list.length + '</span>' : '') + (extra || '') + '</div>' +
+      (help ? '<p class="muted">' + lobbyEsc(help) + '</p>' : '');
+  }
   if (!list.length) return html + '<div class="empty">' + lobbyEsc(empty) + '</div></section>';
   html += '<div class="tutorial-grid">';
   for (var i = 0; i < list.length; i++) html += lobbyTutorialCard(list[i], admin);
@@ -1217,9 +1238,9 @@ function lobbyTutorialsHtml() {
   pending.sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
   var html = '';
   if (lobbyState.tutorials_error) html += '<p class="notice" role="alert">' + lobbyEsc(lobbyState.tutorials_error) + '</p>';
-  var publishedHtml = lobbyTutorialSection('Published tutorials',
-    'Play starts a private copy just for you; it is gone when you leave. Copy to my worlds makes it a Creative world of your own to build on.',
-    published, lobbyState.tutorials_error ? 'The tutorials could not be loaded right now.' : LOBBY_TUTORIALS_EMPTY, admin);
+  // The page description above already explains Play and Copy; players get the list alone.
+  var publishedHtml = lobbyTutorialSection(admin ? 'Published tutorials' : '', '',
+    published, lobbyState.tutorials_error ? 'Press the Tutorials tab again to retry.' : LOBBY_TUTORIALS_EMPTY, admin);
   if (!admin) return html + publishedHtml;
   var pendingHtml = lobbyTutorialSection('Pending tutorials',
     'Submitted by players and waiting for review. Play or edit one to check it, then accept or reject it. Only administrators see this.',
@@ -1237,6 +1258,8 @@ function lobbyPlayTutorial(button) {
   }
   if (typeof lobbyPending !== 'undefined' && (lobbyPending || lobbyLost)) return false;
   var rejoin = tutorial.playing === 'running' || tutorial.playing === 'starting';
+  // If it fails, the notice is at the top of the page: come back there, not to the card.
+  if (typeof lobbyScroll !== 'undefined') lobbyScroll[lobbyView] = 0;
   showLobbyLoading(tutorial.title, rejoin ? 'Back to your tutorial...' : 'Preparing your tutorial...');
   lobbySend('tutorial_play', { tutorial: tutorial.id });
   return false;
@@ -1290,11 +1313,12 @@ function lobbyTutorialHtml(modal) {
     var full = info.totalFull || info.savedFull;
     return lobbyDialog(modal, {
       title: 'Copy to my worlds?', body: summary +
-        '<p>This makes a new world of your own from the tutorial: <b>Creative</b>, <b>saved</b> and private, on ' + map +
-        '. It starts where the tutorial starts, and everything you build in it is kept.</p>' +
-        '<p class="muted">The copy counts against your world limits like any saved world. The tutorial itself does not change.</p>' +
-        lobbyLimitsHtml(info) + (full ? '<div class="callout">' + lobbyEsc(lobbyCopyLimitText(info)) + '</div>' : ''),
-      footer: lobbyButtons(modal, [cancel, { label: 'Copy to my worlds', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: full }])
+        '<p>This creates a new world of your own from the tutorial: <b>Creative</b>, <b>saved</b> and private, on ' + map +
+        '. It is a fresh copy, so nothing you build changes the original.</p>' +
+        '<p class="muted">The copy counts against your world limits like any saved world.</p>' +
+        lobbyLimitsHtml(info) + (full ? '<div class="callout" id="copy-limit">' + lobbyEsc(lobbyCopyLimitText(info)) + '</div>' : ''),
+      footer: lobbyButtons(modal, [cancel, { label: 'Copy to my worlds', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: full,
+        title: full ? lobbyCopyLimitText(info) : '', describedby: full ? 'copy-limit' : '' }])
     });
   }
   if (action === 'edit') {
@@ -1312,7 +1336,9 @@ function lobbyTutorialHtml(modal) {
   if (action === 'accept') {
     return lobbyDialog(modal, {
       title: 'Publish this tutorial?', body: summary +
-        '<div class="callout info"><p>' + title + by + ' becomes visible to every player in the Tutorials tab. Players can play it and copy it into their worlds.</p></div>',
+        '<div class="callout info"><p>' + title + by + ' becomes visible to every player in the Tutorials tab. Players can play it and copy it into their worlds.</p></div>' +
+        (tutorial.editing === 'running' || tutorial.editing === 'starting'
+          ? '<div class="callout">An admin is editing this tutorial right now; unsaved changes in that edit world will be lost.</div>' : ''),
       footer: lobbyButtons(modal, [cancel, { label: 'Accept and publish', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
     });
   }

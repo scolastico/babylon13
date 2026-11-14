@@ -281,10 +281,10 @@ var/global/list/lobby_config
 	var/pending_tutorials = lobby_number(result["pending_tutorials"])
 	for(var/tab in tabs)
 		var/selected = view_filter == tab
-		var/tab_count = tab == "tutorials" && pending_tutorials ? " <span class='tab-count' title='Tutorials waiting for your review'>[pending_tutorials]</span>" : ""
+		var/tab_count = tab == "tutorials" && pending_tutorials ? " <span class='tab-count' title='Tutorials waiting for your review' aria-label='[pending_tutorials] tutorial[pending_tutorials == 1 ? "" : "s"] waiting for review'>[pending_tutorials]</span>" : ""
 		content += "<a class='[selected ? "active" : ""]' aria-current='[selected ? "page" : "false"]' data-stage='[tab == "tutorials" ? "Loading tutorials..." : "Loading worlds..."]' onclick='return beginAction(this)' href='?src=\ref[src];action=filter;payload=[lobby_payload(list("filter" = tab))]'>[tabs[tab]][tab_count]</a>"
 	content += "</nav><h2 class='page-heading'>[tabs[view_filter]]</h2>"
-	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these worlds even when the owner is away. On station maps the round itself waits for the owner.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.", "tutorials" = "Guided tutorials built by players. Play one in a private copy that is gone when you leave, or copy it into your worlds to build on it.")
+	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these worlds even when the owner is away. On station maps the round itself waits for the owner.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.", "tutorials" = "Guided tutorials built by players. <b>Play</b> opens a private copy that disappears when you leave. <b>Copy to my worlds</b> makes a Creative world of your own to build on.")
 	content += "<p class='muted'>[descriptions[view_filter]]</p>"
 	if(result["admin"])
 		content += "<p><span class='badge'>Server administrator</span> <small>Your account can see private worlds, bypass their admission restrictions and the per-owner world limits, and spectate worlds as an invisible ghost without a drone.</small></p>"
@@ -411,6 +411,9 @@ var/global/list/lobby_config
 			text += "<button type='button' class='button danger' data-id='[id]' onclick='return lobbyOpenWorld(\"delete\", this)'>Delete world</button>"
 		else if(!changing)
 			text += "<button type='button' class='button danger push' data-id='[id]' onclick='return lobbyOpenWorld(\"stop\", this)'>[saved ? "Save and stop..." : "Stop world..."]</button>"
+	// A tutorial run (or an edit world) can only be stopped; it is deleted once it has.
+	else if(manager && !stopped && !changing)
+		text += "<button type='button' class='button danger push' data-id='[id]' onclick='return lobbyOpenWorld(\"stop\", this)'>Stop tutorial...</button>"
 	if(card["error"])
 		text += "<p class='card-error' role='alert'>[html_encode(card["error"])]</p>"
 	return text + "</div></section>"
@@ -764,7 +767,9 @@ var/global/list/lobby_config
 	var/list/result = api("tutorials")
 	tutorial_cards = list()
 	if(result["error"] || !islist(result["tutorials"]))
-		return list("tutorials" = list(), "error" = result["error"] || "The tutorials could not be loaded.")
+		if(result["error"])
+			world.log << "Listing tutorials for [ckey] failed: [result["error"]]"
+		return list("tutorials" = list(), "error" = "The tutorials could not be loaded. Please try again in a moment.")
 	var/list/items = list()
 	for(var/list/item in result["tutorials"])
 		var/list/clean = lobby_tutorial_item(item)
@@ -796,8 +801,9 @@ var/global/list/lobby_config
 			return
 		respond(request, list("ok" = 1))
 		var/world_name = istext(result["name"]) ? result["name"] : title
-		show_loading(world_name, action == "tutorial_edit" ? "Starting the edit world from the pending copy..." : "Preparing your tutorial...")
-		join_world(world_id, world_name, list("world" = world_id))
+		var/stage = action == "tutorial_edit" ? "Starting the edit world from the pending copy..." : "Preparing your tutorial..."
+		show_loading(world_name, stage)
+		join_world(world_id, world_name, list("world" = world_id), 0, stage, "Startup is taking longer than expected. Open Tutorials and press Play again.")
 		return
 	var/list/notices = list(
 		"tutorial_copy" = "[title] was copied to My worlds. Start it there to keep building.",
@@ -811,7 +817,8 @@ var/global/list/lobby_config
 
 /// Asks the supervisor for a ticket until the world runs, then sends the player there.
 /// A dialog's request is answered after the first reply; later problems become the page notice.
-/mob/lobby/proc/join_world(id, world_name, list/join, request = 0)
+/// A tutorial passes its own loading stage and timeout notice.
+/mob/lobby/proc/join_world(id, world_name, list/join, request = 0, stage = "Starting world and restoring its checkpoint...", timeout_notice = "Startup is taking longer than expected. Check the world status and try Join again.")
 	var/deadline = world.time + 3600
 	while(client && world.time < deadline)
 		var/list/result = api("join", join)
@@ -826,9 +833,9 @@ var/global/list/lobby_config
 			src << link(result["address"])
 			notice = "Connection offered. If you cancelled it, click Join again."
 			return
-		show_loading(world_name, "Starting world and restoring its checkpoint...")
+		show_loading(world_name, stage)
 		sleep(20)
-	notice = "Startup is taking longer than expected. Check the world status and try Join again."
+	notice = timeout_notice
 
 /mob/lobby/verb/open_lobby()
 	set name = "Open Babylon lobby"
