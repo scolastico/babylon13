@@ -590,3 +590,163 @@
 	if(!result["stopped_between_stations"])
 		result["tram_state"] = "operational [tram.controller_operational], cabinet [!!tram.paired_cabinet], status [tram.controller_status], active [tram.controller_active], moved [get_dist(tram.nav_beacon, start)], trip [get_dist(start, destination)]"
 	return result
+
+// --- Characters (station_characters.dm) -----------------------------------------------------
+
+/// A number given to a test proc over the control API (a number or its text).
+/proc/babylon_test_number(value)
+	return isnum(value) ? value : text2num(value)
+
+/// A tile for a test character: a late-join point, else the observer start.
+/datum/babylon_save/proc/test_character_tile()
+	if(length(SSjob.latejoin_trackers))
+		return get_turf(pick(SSjob.latejoin_trackers))
+	return respawn_turf
+
+/// A running round: a damaged lizard "Smoke Character" (Cargo Technician) with a jumpsuit, a
+/// backpack holding a wrench and a crowbar and a screwdriver in hand, kept for the ckey
+/// smokecharacter without a client, and a dead "Smoke Ghost" whose player watches as a ghost
+/// (smokeghost). Checks their capture: apart from the levels, never in a tutorial snapshot.
+/// Returns facts the restored world compares (the smoke reads them with values()).
+/datum/babylon_save/proc/test_character_roundtrip()
+	var/list/result = list()
+	result["round_running"] = SSticker.HasRoundStarted()
+	var/turf/tile = test_character_tile()
+	var/mob/living/carbon/human/body = new(tile)
+	body.set_species(/datum/species/lizard)
+	body.real_name = "Smoke Character"
+	body.name = body.real_name
+	body.dna.real_name = body.real_name
+	body.mind_initialize()
+	body.mind.set_assigned_role(SSjob.get_job(JOB_CARGO_TECHNICIAN))
+	result["uniform_worn"] = body.equip_to_slot_if_possible(new /obj/item/clothing/under/color/grey(tile), ITEM_SLOT_ICLOTHING, disable_warning = TRUE)
+	var/obj/item/storage/backpack/pack = new(tile)
+	result["backpack_worn"] = body.equip_to_slot_if_possible(pack, ITEM_SLOT_BACK, disable_warning = TRUE)
+	new /obj/item/wrench(pack)
+	new /obj/item/crowbar(pack)
+	result["screwdriver_held"] = body.put_in_hand(new /obj/item/screwdriver(tile), 1, forced = TRUE)
+	body.apply_damage(20, BRUTE, BODY_ZONE_CHEST)
+	body.apply_damage(15, BURN, BODY_ZONE_L_ARM)
+	body.set_tox_loss(5)
+	var/obj/item/bodypart/chest = body.get_bodypart(BODY_ZONE_CHEST)
+	var/obj/item/bodypart/arm = body.get_bodypart(BODY_ZONE_L_ARM)
+	result["chest_brute"] = chest.brute_dam
+	result["arm_burn"] = arm.burn_dam
+	result["damaged"] = chest.brute_dam > 0 && arm.burn_dam > 0 && body.stat != DEAD
+	ensure_station_player("smokecharacter").set_character(body)
+	var/mob/living/carbon/human/ghost_body = new(tile)
+	ghost_body.real_name = "Smoke Ghost"
+	ghost_body.name = ghost_body.real_name
+	ghost_body.dna.real_name = ghost_body.real_name
+	ghost_body.mind_initialize()
+	ghost_body.death()
+	ensure_station_player("smokeghost").set_character(ghost_body, TRUE)
+	var/list/characters = capture_characters()
+	var/list/entry = characters["smokecharacter"]
+	result["captured"] = islist(entry) && islist(characters["smokeghost"])
+	var/list/types = list()
+	for(var/list/record in entry?["records"])
+		types += record["type"]
+	result["captured_items"] = ("/obj/item/wrench" in types) && ("/obj/item/crowbar" in types) && ("/obj/item/screwdriver" in types) && ("/obj/item/storage/backpack" in types) && ("/obj/item/clothing/under/color/grey" in types)
+	result["captured_job"] = entry?["job"] == JOB_CARGO_TECHNICIAN
+	result["ghost_captured_as_ghost"] = characters["smokeghost"]?["ghost"] && characters["smokeghost"]?["stat"] == DEAD
+	// Characters are never one of the levels' mobs.
+	var/in_level_mobs = FALSE
+	var/list/mobs_by_turf = checkpoint_mobs()
+	for(var/turf/where in mobs_by_turf)
+		var/list/creatures = mobs_by_turf[where]
+		if((body in creatures) || (ghost_body in creatures))
+			in_level_mobs = TRUE
+	result["not_a_level_mob"] = !in_level_mobs
+	// Arch M1: a tutorial snapshot holds no characters and no per-player records.
+	result["tutorial_snapshot_policy"] = !babylon_world_saves_characters(TRUE) && babylon_world_saves_characters()
+	var/list/tutorial_state = list()
+	capture_session_state(tutorial_state, TRUE)
+	result["tutorial_snapshot_empty"] = islist(tutorial_state["characters"]) && !length(tutorial_state["characters"]) && islist(tutorial_state["players"]) && !length(tutorial_state["players"])
+	var/list/world_state = list()
+	capture_session_state(world_state)
+	result["world_save_has_them"] = length(world_state["characters"]) >= 2 && islist(world_state["players"]["smokecharacter"])
+	result["x"] = body.x
+	result["y"] = body.y
+	return result
+
+/// The character's level stays unchanged (nobody is connected), but the character moves a tile and
+/// gets a multitool in its backpack: the next save must still capture that.
+/datum/babylon_save/proc/test_character_change()
+	var/list/result = list()
+	var/mob/living/carbon/human/body = ensure_station_player("smokecharacter").character()
+	result["body"] = !!body
+	if(!body)
+		return result
+	var/turf/destination
+	for(var/direction in GLOB.cardinals)
+		var/turf/candidate = get_step(body, direction)
+		if(candidate && !candidate.is_blocked_turf(TRUE))
+			destination = candidate
+			break
+	result["moved"] = !!destination
+	if(destination)
+		body.forceMove(destination)
+	var/obj/item/storage/backpack/pack = body.back
+	if(istype(pack))
+		new /obj/item/multitool(pack)
+	result["multitool_added"] = istype(pack) && !!(locate(/obj/item/multitool) in pack)
+	result["x"] = body.x
+	result["y"] = body.y
+	return result
+
+/// After the restart from the save: the characters came back for their ckeys, once, as saved,
+/// with their jobs registered for the resumed round.
+/datum/babylon_save/proc/test_character_roundtrip_restored(x, y, chest_brute, arm_burn)
+	var/list/result = list()
+	result["round_resumed"] = round_mode == "resume" && SSticker.HasRoundStarted()
+	var/datum/babylon_player/player = player_sessions["smokecharacter"]
+	var/mob/living/carbon/human/body = player?.character()
+	result["body_kept_for_ckey"] = !!body
+	if(!body)
+		return result
+	result["no_client_yet"] = !body.client && !body.ckey
+	result["name"] = body.real_name == "Smoke Character"
+	result["species"] = istype(body.dna.species, /datum/species/lizard)
+	result["at_saved_place"] = body.x == babylon_test_number(x) && body.y == babylon_test_number(y)
+	var/obj/item/bodypart/chest = body.get_bodypart(BODY_ZONE_CHEST)
+	var/obj/item/bodypart/arm = body.get_bodypart(BODY_ZONE_L_ARM)
+	result["chest_brute"] = abs(chest?.brute_dam - babylon_test_number(chest_brute)) < 0.01
+	result["arm_burn"] = abs(arm?.burn_dam - babylon_test_number(arm_burn)) < 0.01
+	result["toxins"] = abs(body.get_tox_loss() - 5) < 0.01
+	result["alive"] = body.stat != DEAD
+	result["uniform"] = istype(body.w_uniform, /obj/item/clothing/under/color/grey)
+	var/obj/item/storage/backpack/pack = body.back
+	result["backpack"] = istype(pack)
+	result["backpack_items"] = istype(pack) && !!((locate(/obj/item/wrench) in pack) && (locate(/obj/item/crowbar) in pack) && (locate(/obj/item/multitool) in pack))
+	result["held"] = istype(body.get_item_for_held_index(1), /obj/item/screwdriver)
+	var/copies = 0
+	for(var/mob/living/carbon/human/human as anything in GLOB.human_list)
+		if(human.real_name == "Smoke Character")
+			copies++
+	result["no_duplicate"] = copies == 1
+	result["job"] = body.mind?.assigned_role?.title == JOB_CARGO_TECHNICIAN
+	result["job_slot_counted"] = SSjob.get_job(JOB_CARGO_TECHNICIAN)?.current_positions >= 1
+	result["on_manifest"] = !!find_record("Smoke Character")
+	result["no_client_no_reattach"] = reattach_saved_character(null) == FALSE
+	var/datum/babylon_player/ghost_player = player_sessions["smokeghost"]
+	var/mob/living/carbon/human/ghost_body = ghost_player?.character()
+	result["ghost_body_dead"] = ghost_body?.stat == DEAD && ghost_body.real_name == "Smoke Ghost"
+	result["ghost_rejoins_as_ghost"] = !!ghost_player?.character_ghosted
+	return result
+
+/// In a tutorial world (arch M1): a checkpoint keeps no characters and no per-player records.
+/datum/babylon_save/proc/test_tutorial_checkpoint_has_no_characters()
+	var/list/result = list()
+	var/mob/living/carbon/human/body = new(babylon_tutorial_start_turf() || respawn_turf)
+	body.mind_initialize()
+	ensure_station_player("smoketutorial").set_character(body)
+	result["policy"] = !babylon_world_saves_characters()
+	result["nothing_captured"] = !length(capture_characters())
+	var/list/state = list()
+	capture_session_state(state)
+	result["no_characters"] = islist(state["characters"]) && !length(state["characters"])
+	result["no_players"] = islist(state["players"]) && !length(state["players"])
+	player_sessions -= "smoketutorial"
+	qdel(body)
+	return result

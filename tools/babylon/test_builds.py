@@ -18,7 +18,7 @@ SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", 
           "tutorial/area_tools", "tutorial/wand", "tutorial/testing_tutorial", "tutorial/testing_area_tools"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
-STATION_ONLY = {"station_session", "station_round", "persistence_levels", "testing_station", "creative/plane",
+STATION_ONLY = {"station_session", "station_round", "station_characters", "persistence_levels", "testing_station", "creative/plane",
                 "creative/testing_plane"}
 
 

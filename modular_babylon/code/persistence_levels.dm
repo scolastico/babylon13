@@ -4,8 +4,8 @@
 // A save writes every persistent level as z<N>.dmm: the station's levels, the map's own extra
 // levels (mining, wilderness), lavaland and the space ruin levels. CentCom, transit/reserved
 // levels and the Interlink are rebuilt on every start and never saved. state.json gets each
-// level's traits as loaded ("levels"), the map json ("map_config"), the round ("round") and,
-// from Task D2, the players' characters ("characters").
+// level's traits as loaded ("levels"), the map json ("map_config"), the round ("round"), the
+// per-player records ("players") and the players' characters ("characters", station_characters.dm).
 //
 // The supervisor (Driver.prepare_station) stages the saved levels in _maps/babylon/saved and
 // writes data/next_map.json naming them. A restoring world then loads exactly those levels with
@@ -13,8 +13,9 @@
 // ruins, no cave or river generation, no minor mapping (mice, trash, weakpoints).
 //
 // Shuttles are not saved: their tiles are written as what lies beneath them and every shuttle
-// loads again at its roundstart dock, idle. Players' own bodies are not saved yet (Task D2);
-// other living things (animals, monsters, bots, monkeys; not NPC humans yet) are saved by type and core fields.
+// loads again at its roundstart dock, idle. Players' bodies are saved apart from the levels, as
+// their characters (station_characters.dm); other living things (animals, monsters, bots,
+// monkeys; not NPC humans) are saved by type and core fields.
 
 /// _maps/<path> of the levels the supervisor stages from a save (Driver.prepare_station).
 #define BABYLON_SAVED_MAP_PATH "babylon/saved"
@@ -184,8 +185,8 @@
 	return beneath
 
 /// Living things without a player, on their tile: animals, monsters, bots, monkeys. Players'
-/// bodies (a ckey or a mind with a key) are Task D2's; silicons carry laws and links, and
-/// holograms vanish with their projector.
+/// bodies (a ckey or a mind with a key) are saved as characters (station_characters.dm), never
+/// with a level; silicons carry laws and links, and holograms vanish with their projector.
 /datum/babylon_save/checkpoint_mobs()
 	var/list/mobs_by_turf = list()
 	var/list/levels = persisted_levels()
@@ -194,7 +195,7 @@
 			continue
 		// NPC humans (ruin corpses) are left out: a human rebuilt from the map has no DNA yet when
 		// the level loads (runtimes in gravity checks), and without its outfit it is only a naked
-		// "Unknown". Characters come with Task D2.
+		// "Unknown". Players' humans are characters (station_characters.dm).
 		if(creature.ckey || creature.mind?.key || issilicon(creature) || ishuman(creature) || (creature.flags_1 & HOLOGRAM_1) || creature.babylon_skip_save())
 			continue
 		var/turf/tile = creature.loc
@@ -223,7 +224,7 @@
 		REMOVE_TRAIT(body, TRAIT_UI_BLOCKED, "babylon_checkpoint")
 	checkpoint_frozen = list()
 
-/datum/babylon_save/capture_session_state(list/state)
+/datum/babylon_save/capture_session_state(list/state, for_tutorial = FALSE)
 	var/list/levels = list()
 	for(var/z in persisted_levels())
 		var/datum/space_level/level = SSmapping.z_list[z]
@@ -233,8 +234,8 @@
 	state["map_config"] = saved_map_config()
 	var/started = SSticker.HasRoundStarted()
 	state["round"] = list("started" = started ? TRUE : FALSE, "station_time" = started ? STATION_TIME_PASSED() : 0)
-	// Task D2 saves the players' characters here.
-	state["characters"] = list()
+	capture_players(state, for_tutorial)
+	state["characters"] = capture_characters(for_tutorial)
 
 /// The map's tg map json as this world was first started from it (a restored world keeps the
 /// one its save had; data/next_map.json then names the saved levels instead).
@@ -292,18 +293,21 @@
 		else
 			creature.updatehealth()
 		CHECK_TICK
-	var/list/round_state = state["round"]
-	if(babylon_state_round_started(state) && islist(round_state) && isnum(round_state["station_time"]))
-		resumed_station_time = max(0, round_state["station_time"])
-		RegisterSignal(SSticker, COMSIG_TICKER_ROUND_STARTING, PROC_REF(resume_station_time))
+	restore_players(state["players"])
+	if(babylon_state_round_started(state))
+		var/list/round_state = state["round"]
+		if(isnum(round_state["station_time"]))
+			resumed_station_time = max(0, round_state["station_time"])
+		RegisterSignal(SSticker, COMSIG_TICKER_ROUND_STARTING, PROC_REF(resumed_round_starting))
 
-/// The resumed round's clock goes on from the saved station time.
-/datum/babylon_save/proc/resume_station_time(datum/source, start_time)
+/// The resumed round starts: its clock goes on from the saved station time, and the restored
+/// characters take their jobs again (station_characters.dm).
+/datum/babylon_save/proc/resumed_round_starting(datum/source, start_time)
 	SIGNAL_HANDLER
-	if(isnull(resumed_station_time))
-		return
-	SSticker.round_start_time = world.time - resumed_station_time
 	UnregisterSignal(SSticker, COMSIG_TICKER_ROUND_STARTING)
+	if(!isnull(resumed_station_time))
+		SSticker.round_start_time = world.time - resumed_station_time
+	INVOKE_ASYNC(src, PROC_REF(register_restored_characters))
 
 // A restoring world loads exactly its saved levels, with their saved traits, and generates
 // nothing on top of them. Each override falls through to tg's proc in every other world.

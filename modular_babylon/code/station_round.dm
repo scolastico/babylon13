@@ -7,7 +7,7 @@
 //   spawned as an Assistant at the tutorial's start (babylon_tutorial_start_turf()).
 // - A restored world whose save says the round had started resumes it at once, without roundstart
 //   job assignment or antagonist rolls; returning players get their saved body back
-//   (reattach_saved_character, Task D2) or the normal late-join menu.
+//   (reattach_saved_character, station_characters.dm) or the normal late-join menu.
 // - When the round ends, players read the round-end report (the normal restart delay, at most a
 //   minute), are sent back to the Babylon lobby and the world stops WITHOUT a save. Whether the next
 //   start resumes an autosave or begins fresh is told truthfully (babylon_next_start_text()).
@@ -333,18 +333,10 @@
 /datum/babylon_save/proc/return_to_resumed_round(client/player)
 	if(!player || player.babylon_showcase_visitor || player.babylon_admin_spectator)
 		return
-	var/mob/dead/new_player/menu = player.mob
-	if(!istype(menu))
+	if(!istype(player.mob, /mob/dead/new_player))
 		return
-	if(reattach_saved_character(player))
-		menu.hide_title_screen()
-		return
-	// No saved body: the normal late-join menu (the title screen's JOIN GAME).
-
-/// Puts a returning player into the character they had when this world was saved (Task D2).
-/// TRUE when the client now controls that character.
-/datum/babylon_save/proc/reattach_saved_character(client/player)
-	return FALSE
+	// A saved body (station_characters.dm), else the normal late-join menu (JOIN GAME).
+	reattach_saved_character(player)
 
 /mob/dead/get_status_tab_items()
 	. = ..()

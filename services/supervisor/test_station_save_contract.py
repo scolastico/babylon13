@@ -17,7 +17,9 @@ FIXTURE = HERE / "fixtures/station_state.json"
 README = HERE / "fixtures/README.md"
 DEFINES = ROOT / "modular_babylon/__DEFINES/babylon.dm"
 KEYS = {"version", "generation", "next_id", "save_count", "records", "turfs", "levels", "map_config", "round",
-        "characters", "sun", "play_time"}
+        "players", "characters", "sun", "play_time"}
+CHARACTER_KEYS = {"id", "type", "x", "y", "z", "real_name", "gender", "physique", "age", "species", "dna", "job", "stat",
+                  "ghost", "bodyparts", "tox", "oxy", "records"}
 CATALOG = {"maps": [
     {"id": "babylon", "name": "Babylon", "description": "d", "group": "babylon", "size": None, "build": "babylon",
      "map_json": None, "preview": None, "multiz": False},
@@ -95,6 +97,23 @@ class FixtureShape(unittest.TestCase):
         state = load_fixture()
         self.assertEqual(set(state["round"]), {"started", "station_time"})
         self.assertIsInstance(state["characters"], dict)
+        self.assertIsInstance(state["players"], dict)
+        record_ids = {record["id"] for record in state["records"]}
+        ids = set(record_ids)
+        for ckey, character in state["characters"].items():
+            self.assertEqual(set(character), CHARACTER_KEYS)
+            self.assertIn(ckey, state["players"])
+            # A character and its items are kept apart from the levels' records (a reused level
+            # must never carry them), in the same id space.
+            own = {character["id"]} | {record["id"] for record in character["records"]}
+            self.assertEqual(own & ids, set())
+            ids |= own
+            self.assertTrue(all(int(i[2:]) < state["next_id"] for i in own))
+            parents = {character["id"]} | {record["id"] for record in character["records"]}
+            for record in character["records"]:
+                self.assertIn(record["parent"], parents)
+            worn = [record for record in character["records"] if record["parent"] == character["id"]]
+            self.assertTrue(all(("slot" in record) != ("hand" in record) for record in worn))
 
     def test_map_config_is_a_tg_map_json(self):
         config = load_fixture()["map_config"]

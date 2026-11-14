@@ -23,6 +23,10 @@ tutorial-kind world on the first map checks that its round starts by itself and 
 save. Finally the multi-z map (icebox) starts its round, places markers on the station level and on
 a level without the station trait, saves, stops, starts again from the save and checks that the
 markers, an emptied locker, an animal, the levels' traits and the running round came back.
+On the first map, a running round also gets two players' characters (a damaged one with a backpack
+and a dead one watched as a ghost), saves them twice (the second time on an unchanged level),
+stops and checks after the restart that both are back for their ckeys, once, with their items,
+damage and job.
 """
 import argparse
 import json
@@ -56,7 +60,11 @@ def main():
     parser.add_argument("--restore-maps", nargs="*", default=["tramstation"],
                         help="maps saved, restarted and checked for their transports and links")
     parser.add_argument("--only-multiz", action="store_true", help="skip the --maps checks and the tutorial world")
+    parser.add_argument("--only-characters", action="store_true",
+                        help="only the characters' save and restore on the first --maps map")
     args = parser.parse_args()
+    if args.only_characters:
+        args.only_multiz, args.no_multiz, args.restore_maps = True, True, []
     root = Path(__file__).resolve().parents[2]
     for ext in ("dmb", "rsc"):
         if not (root / f"babylon-station-test.{ext}").is_file():
@@ -324,6 +332,56 @@ def main():
         stop(world)
         return entry
 
+    def saved_state(world, generation):
+        return json.loads((data / "worlds" / world / "data/babylon/saves" / generation / "state.json").read_text())
+
+    def character_ids(state):
+        """The ids of the characters and their items; asserts none is one of the levels' records."""
+        ids = set()
+        for character in state["characters"].values():
+            ids |= {character["id"]} | {record["id"] for record in character["records"]}
+        assert not ids & {record["id"] for record in state["records"]}, "a character is in the level records"
+        assert all(int(i[2:]) < state["next_id"] for i in ids), "a character id is past next_id"
+        return ids
+
+    def run_characters(map_id):
+        """A client-less character with a ckey (test helper), damaged, with backpack items, and a dead
+        one whose player watches as a ghost: saved, changed on an unchanged level, saved again, stopped
+        (saved), restarted and found again for their ckeys with jobs, items and damage."""
+        world = api("create", dict(name="Station smoke characters", visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+        wait_round_running(run)
+        entry = {}
+        setup = values(run, "test_character_roundtrip")
+        assert all(value for key, value in setup.items() if key not in ("x", "y")), ("test_character_roundtrip", setup)
+        entry["test_character_roundtrip"] = setup
+        first = topic(run["port"], run["secret"], "save", timeout=600)
+        assert first.get("ok"), first
+        state = saved_state(world, first["generation"])
+        assert set(state["characters"]) == {"smokecharacter", "smokeghost"}, list(state["characters"])
+        assert "smokecharacter" in state["players"], list(state["players"])
+        character_ids(state)
+        level = str(state["characters"]["smokecharacter"]["z"])
+        # The character's level is unchanged (no client), the character is not: it is captured anyway.
+        changed = checks(run, "test_character_change")
+        entry["test_character_change"] = changed
+        second = topic(run["port"], run["secret"], "save", timeout=600)
+        assert second.get("ok"), second
+        assert second["level_costs"][level][1] == "reused", ("the character's level was captured again", second["level_costs"])
+        state = saved_state(world, second["generation"])
+        character = state["characters"]["smokecharacter"]
+        assert (character["x"], character["y"]) == (changed["x"], changed["y"]), (character["x"], character["y"], changed)
+        assert "/obj/item/multitool" in [record["type"] for record in character["records"]], "the new item was not saved"
+        character_ids(state)
+        entry["unchanged_level_reused"] = dict(level=level, saves=[first["generation"], second["generation"]])
+        stop(world)
+        run = wait_ready(world)
+        entry["test_character_roundtrip_restored"] = checks(
+            run, "test_character_roundtrip_restored", [changed["x"], changed["y"], setup["chest_brute"], setup["arm_burn"]])
+        stop(world)
+        return entry
+
     def run_restore(map_id):
         """Saves a world on a map with transports (tram, lifts), restarts it and compares the links."""
         world = api("create", dict(name="Station smoke restore %s" % map_id, visibility="private", map=map_id))["id"]
@@ -472,7 +530,7 @@ def main():
             # Every test reports before any failure is raised, so one run shows all problems.
             for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
                          "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
-                         "test_area_tools_copy_settings"):
+                         "test_area_tools_copy_settings", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
                 tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
             for proc, got in tutorial.items():
@@ -483,6 +541,9 @@ def main():
             tutorial["stopped_without_save"] = True
             report["tutorial"] = tutorial
             print(json.dumps({"tutorial": tutorial}), flush=True)
+        if not args.only_multiz or args.only_characters:
+            report["characters"] = {args.maps[0]: run_characters(args.maps[0])}
+            print(json.dumps({"characters": report["characters"]}), flush=True)
         for map_id in args.restore_maps:
             report.setdefault("restore", {})[map_id] = run_restore(map_id)
             print(json.dumps({"restore": {map_id: report["restore"][map_id]}}), flush=True)

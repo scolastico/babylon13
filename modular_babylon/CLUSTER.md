@@ -525,8 +525,9 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   the run behind the supervisor's back).
 - **Resumed rounds.** A world whose save contains a started round resumes it at once,
   without roundstart job assignment or antagonist rolls, and the station clock goes on
-  from the saved station time. Returning players will get their saved character back
-  once characters are saved; until then everyone uses the normal late-join menu.
+  from the saved station time. A returning player who had a character when the world was
+  saved is put straight back into it (or back as its ghost, if it was dead or they were
+  watching as a ghost); everyone else uses the normal late-join menu.
 - **Tutorials** (play instances and admin edits) start their round at once. The joining
   player spawns as their preferences character, job Assistant, without antagonists, at
   the tutorial's start.
@@ -578,8 +579,16 @@ What a save keeps and what it does not:
   idle; whatever was aboard is lost. Shuttles players built themselves are saved where
   they are. Antagonists, ongoing events, the crew manifest
   beyond names and jobs, and bank balances are not saved either.
-- Players' characters are not saved yet (a later update adds them): after a restart
-  everyone uses the normal late-join menu.
+- Players' characters: each player's body is kept in its world, by account, with its
+  name, species and look, job, injuries and lost limbs, where it stood, and everything it
+  wore, held or carried (backpack contents included). Bodies are saved on every save, also
+  when nothing else on their deck changed. They come back only when the save's round had
+  started; the restored characters keep their job (counted in its slots) and are on the crew
+  manifest again. A dead body comes back dead, and its player rejoins as its ghost. Bodies
+  stay in their world: the character editor's preferences are shared between worlds, bodies
+  are not. Implants, ID access changes and items' attachments (such as a jumpsuit's
+  accessories) are not kept. Tutorials never contain characters: a submitted or saved-back
+  tutorial and every copy made from one start without anyone's body.
 
 A save pauses the world's simulation while it is captured; the time is logged as
 `Babylon saved <generation>: ... capture <ms> ms, total <ms> ms` in the world's log.
