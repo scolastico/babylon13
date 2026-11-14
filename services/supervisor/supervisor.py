@@ -403,16 +403,23 @@ class Driver:
     def status(self, run):
         return topic(run["port"], run["secret"], "status")
 
-    def kill(self, run):
-        """Ends a child's process at once, without a save (a tutorial instance stuck in error)."""
+    def kill(self, run, timeout=30):
+        """Ends a child's process at once, without a save (a tutorial instance stuck in error), and
+        returns once it has exited, so its port and files are free. Raises if it is still alive
+        after ``timeout`` seconds."""
         process = self.processes.pop(run["id"], None)
         if process:
             if process.poll() is None:
                 process.kill()
-                process.wait(timeout=30)
+                process.wait(timeout=timeout)
             return
         if run["pid"] and self.alive(run):
             os.kill(run["pid"], getattr(signal, "SIGKILL", signal.SIGTERM))
+            deadline = time.monotonic() + timeout
+            while self.alive(run):
+                if time.monotonic() > deadline:
+                    raise TimeoutError("process %s did not exit after SIGKILL" % run["pid"])
+                time.sleep(0.1)
 
     def stop(self, run):
         # The final save of a station world (every level) can take minutes.
@@ -1562,7 +1569,9 @@ class Supervisor:
                             self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
                         log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
                     elif run["state"] == "error":
-                        # It does not answer, so nobody can be playing in it.
+                        # It does not answer: whoever is still connected to it cannot play, so the
+                        # grace period runs from the first silent tick even if the last answered
+                        # status had players (reclaim_errored_instance tells them first).
                         empty = run["empty_since"] or self.clock()
                         if not run["empty_since"]:
                             with self.lock, self.db:
@@ -1619,10 +1628,14 @@ class Supervisor:
                 self.reclaim_errored_instance(run, empty)
 
     def reclaim_errored_instance(self, run, empty_since):
-        """A tutorial instance (play or edit) in error that stayed empty for empty_grace_seconds is
-        killed and deleted (on_run_exited): it is throwaway, and kept it would hold its port, count
-        against the running-world limits and block its player from playing anything. Ordinary
-        worlds in error keep their process for inspection."""
+        """A tutorial instance (play or edit) in error is killed and deleted (on_run_exited) once it
+        has been empty, or silent, for empty_grace_seconds: it is throwaway, and kept it would hold
+        its port, count against the running-world limits and block its player from playing anything.
+
+        An instance in error that still answers and has players is left alone (tick() passes no
+        empty_since then): they may still be playing, and it ends normally when they leave. A silent
+        one is ended after the grace period; its last known players are told first, as far as it
+        still answers. Ordinary worlds in error keep their process for inspection."""
         if self.clock() - empty_since < self.config["empty_grace_seconds"]:
             return
         with self.lock:
@@ -1630,7 +1643,13 @@ class Supervisor:
             current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
         if not world or world["kind"] not in TUTORIAL_KINDS or not current or current["state"] != "error":
             return
-        log("%s stayed in error with nobody in it; ending the tutorial instance" % self.describe(run["world"]))
+        log("%s stayed in error with nobody playing in it; ending the tutorial instance" % self.describe(run["world"]))
+        if json.loads(current["players"] or "[]"):
+            try:
+                self.driver.announce(current, "This tutorial ran into a problem and is being closed. "
+                                              "Return to the lobby to start it again.")
+            except Exception:
+                pass
         try:
             self.driver.kill(current)
         except Exception as error:

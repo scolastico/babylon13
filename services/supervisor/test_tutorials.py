@@ -577,6 +577,40 @@ class Robustness(TutorialFixture):
         self.assertEqual(self.driver.killed, [run["id"]])
         self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE id=?", (world,)))
 
+    def test_a_silent_instance_with_players_is_told_then_ended(self):
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        run = self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+        self.s.db.execute("UPDATE runs SET state='error',players='[\"player\"]' WHERE id=?", (run["id"],))
+        self.s.db.commit()
+        status = self.driver.status
+
+        def silent(r):
+            if r["id"] == run["id"]:
+                raise OSError("no answer")
+            return status(r)
+        self.driver.status = silent
+        self.s.tick()
+        self.now += self.config["empty_grace_seconds"]
+        self.s.tick()
+        self.assertEqual([r for r, _ in self.driver.announced], [run["id"]])
+        self.assertEqual(self.driver.killed, [run["id"]])
+
+    def test_an_answering_instance_in_error_with_players_is_kept(self):
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.s.tick()
+        run = self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+        self.driver.runs[run["id"]]["error"] = "boom"
+        self.driver.runs[run["id"]]["players"] = ["player"]
+        status = self.driver.status
+        self.driver.status = lambda r: dict(status(r), error=self.driver.runs[r["id"]].get("error"))
+        self.s.tick()
+        self.now += self.config["empty_grace_seconds"] * 10
+        self.s.tick()
+        self.assertTrue(self.s.row("SELECT * FROM runs WHERE world=?", (world,)))
+        self.assertFalse(getattr(self.driver, "killed", []))
+
     def test_an_ordinary_world_in_error_keeps_its_process(self):
         world, run = self.creative_run()
         self.driver.runs[run["id"]]["error"] = "boom"

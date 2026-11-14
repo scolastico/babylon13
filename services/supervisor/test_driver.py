@@ -164,6 +164,22 @@ class StationPrepare(DriverFixture):
         self.assertEqual((self.root() / "data/next_map.json").read_text(), BOX_JSON)
 
 
+class Kill(DriverFixture):
+    def test_kill_by_pid_waits_for_the_exit(self):
+        alive = iter([True, True, True, False])
+        with patch.object(self.driver, "alive", side_effect=lambda run: next(alive)), \
+                patch("supervisor.os.kill") as kill, patch("supervisor.time.sleep"):
+            self.driver.kill(dict(id="r", pid=4242))
+        kill.assert_called_once()
+        self.assertEqual(next(alive, "done"), "done")
+
+    def test_kill_by_pid_gives_up_after_the_timeout(self):
+        with patch.object(self.driver, "alive", return_value=True), patch("supervisor.os.kill"), \
+                patch("supervisor.time.sleep"), patch("supervisor.time.monotonic", side_effect=[0, 0, 5, 40]):
+            with self.assertRaises(TimeoutError):
+                self.driver.kill(dict(id="r", pid=4242), timeout=30)
+
+
 class BabylonPrepare(DriverFixture):
     def test_prepare_non_persistent_ignores_saves(self):
         self.save_generation({"save_count": 1}, ["map.dmm"])
