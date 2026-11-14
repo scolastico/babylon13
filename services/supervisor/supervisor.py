@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlsplit
 from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
-from world_storage import delete_world_data, reset_world_data
+from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
@@ -159,14 +159,12 @@ class Driver:
         tutorial = self.field(world, "tutorial", "")
         data = self.data_root()
         if kind in ("tutorial", "tutorial_edit"):
-            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(tutorial)):
+            try:
+                snapshot = tutorial_snapshot_dir(data, tutorial)
+            except ValueError:
                 raise Denied("Invalid tutorial id")
-            # The Driver has no database; the status directories are authoritative (published first).
-            statuses = ("published", "pending")
-            for status in statuses:
-                snapshot = data / "tutorials" / status / str(tutorial) / "save"
-                if snapshot.is_dir():
-                    return snapshot
+            if snapshot:
+                return snapshot
             raise Denied("The tutorial snapshot is missing")
         if not self.field(world, "persistent", 1):
             return None
