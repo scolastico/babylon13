@@ -65,6 +65,29 @@ def copy_snapshot(source, target):
             raise TutorialError("The save contains an unexpected file")
 
 
+def strip_characters(save):
+    """A tutorial snapshot never carries characters (players' bodies and items) or per-player
+    records: blanks state.json "characters" and "players" in a copied snapshot. The DM already
+    writes tutorial snapshots without them (babylon_world_saves_characters(), world_flags.dm);
+    this is the defence in depth for any snapshot that still has some."""
+    path = walk(save, "state.json")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise TutorialError("The save has no readable state.json") from None
+    if not isinstance(state, dict):
+        raise TutorialError("The save's state.json is not an object")
+    if not state.get("characters") and not state.get("players"):
+        return
+    if "characters" in state:
+        state["characters"] = {}
+    if "players" in state:
+        state["players"] = {}
+    temporary = path.with_name("." + path.name + ".tmp")
+    temporary.write_text(json.dumps(state), encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def snapshot_state(save):
     """The state.json of a snapshot directory as a dict with a valid generation name."""
     try:
@@ -111,6 +134,7 @@ class TutorialStore:
         shutil.rmtree(staging, ignore_errors=True)
         try:
             copy_snapshot(source, staging / "save")
+            strip_characters(staging / "save")
             snapshot_state(staging / "save")
             write_json(staging / "meta.json", meta)
             staging.rename(final)
@@ -131,6 +155,7 @@ class TutorialStore:
         shutil.rmtree(old, ignore_errors=True)
         try:
             copy_snapshot(source, staging)
+            strip_characters(staging)
             snapshot_state(staging)
         except (OSError, TutorialError):
             shutil.rmtree(staging, ignore_errors=True)
@@ -199,6 +224,7 @@ def seed_first_save(snapshot, saves):
     if target.exists():
         raise TutorialError("The world already has this checkpoint")
     copy_snapshot(snapshot, target)
+    strip_characters(target)
     records = state.get("records")
     stamp = re.fullmatch(r"save-(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)-\d+", generation).groups()
     saved_at = "%s-%s-%s %s:%s:%s" % stamp

@@ -29,13 +29,18 @@ class TutorialFixture(unittest.TestCase):
         data = dict(dict(name="Builder", map="creative_plane_m", creative=1, persistent=0), **data)
         return self.s.dispatch(owner, "create", data)["id"]
 
-    def save(self, world, generation=GENERATION, records=3):
-        """A checkpoint generation as the DM save writes it."""
+    def save(self, world, generation=GENERATION, records=3, characters=None):
+        """A checkpoint generation as the DM save writes it (characters: state "characters" and
+        "players", as an ordinary world's save has them)."""
         directory = self.data / "worlds" / world / "data/babylon/saves" / generation
         directory.mkdir(parents=True)
         (directory / "map.dmm").write_text("map of " + world)
         (directory / "z2.dmm").write_text("level 2")
-        (directory / "state.json").write_text(json.dumps({"generation": generation, "records": [{}] * records}))
+        state = {"generation": generation, "records": [{}] * records}
+        if characters:
+            state["characters"] = {ckey: {"id": "bb90", "records": [{"id": "bb91", "parent": "bb90"}]} for ckey in characters}
+            state["players"] = {ckey: {"play_time": 600} for ckey in characters}
+        (directory / "state.json").write_text(json.dumps(state))
         return directory
 
     def creative_run(self, owner="owner"):
@@ -201,6 +206,54 @@ class Submit(TutorialFixture):
             with self.assertRaisesRegex(Denied, "credentials"):
                 CHILD_ACTIONS[action](self.s, dict(action=action, run=run["id"], secret="wrong", actor="owner",
                                                    title="T", generation=GENERATION))
+
+
+class NoCharacters(TutorialFixture):
+    """A tutorial snapshot never carries players' characters or per-player records (arch M1): every
+    copy into or out of the tutorial store blanks them, whatever the DM wrote."""
+
+    def state(self, save):
+        return json.loads((save / "state.json").read_text())
+
+    def assert_no_characters(self, save):
+        state = self.state(save)
+        self.assertEqual((state["characters"], state["players"]), ({}, {}))
+        # Everything else is kept.
+        self.assertEqual((state["generation"], len(state["records"])), (GENERATION, 3))
+
+    def test_kinds_rule_matches_the_dm(self):
+        from constants import SAVES_CHARACTERS, TUTORIAL_KINDS, WORLD_KINDS
+        self.assertEqual(SAVES_CHARACTERS, {"world": True, "tutorial": False, "tutorial_edit": False})
+        self.assertEqual(set(SAVES_CHARACTERS), set(WORLD_KINDS))
+        text = (Path(__file__).resolve().parents[2] / "modular_babylon/code/world_flags.dm").read_text()
+        self.assertIn("/proc/babylon_world_saves_characters(for_tutorial = FALSE)\n\treturn !for_tutorial && !GLOB.babylon_world?.is_tutorial()", text)
+        self.assertTrue(all(SAVES_CHARACTERS[kind] is False for kind in TUTORIAL_KINDS))
+
+    def test_submit_save_back_and_copy_strip_characters(self):
+        world = self.make()
+        run = self.start(world, "owner")
+        self.save(world, characters=["owner", "friend"])
+        tid = self.submit(run)
+        pending = self.data / "tutorials/pending" / tid / "save"
+        self.assert_no_characters(pending)
+        # The world's own save keeps them.
+        own = self.state(self.data / "worlds" / world / "data/babylon/saves" / GENERATION)
+        self.assertEqual(set(own["characters"]), {"owner", "friend"})
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        edit_run = self.s.row("SELECT * FROM runs WHERE world=?", (edit,))
+        self.save(edit, GENERATION, characters=["admin"])
+        self.child("tutorial_save_back", edit_run, actor="admin", generation=GENERATION)
+        self.assert_no_characters(pending)
+        self.s.dispatch("admin", "tutorial_accept", {"tutorial": tid})
+        # Even a published snapshot that somehow holds characters is copied without them.
+        published = self.data / "tutorials/published" / tid / "save"
+        state = self.state(published)
+        state["characters"] = {"admin": {"id": "bb90", "records": []}}
+        state["players"] = {"admin": {"play_time": 1}}
+        (published / "state.json").write_text(json.dumps(state))
+        copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        self.assert_no_characters(self.data / "worlds" / copied["id"] / "data/babylon/saves" / GENERATION)
 
 
 class Review(TutorialFixture):

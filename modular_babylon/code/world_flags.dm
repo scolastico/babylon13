@@ -162,6 +162,14 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_stop_saves()
 	return !!GLOB.babylon_world?.stop_saves()
 
+/// A checkpoint keeps the players' characters (bodies, inventories) and per-player records: never
+/// in a tutorial or tutorial_edit world, and never in a forced tutorial snapshot (for_tutorial: a
+/// submission or save-back, from any world). The one rule for "tutorial snapshots carry no
+/// characters"; the supervisor's copy is constants.SAVES_CHARACTERS (per kind), and tutorials.py
+/// blanks them again in every snapshot it copies.
+/proc/babylon_world_saves_characters(for_tutorial = FALSE)
+	return !for_tutorial && !GLOB.babylon_world?.is_tutorial()
+
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has
 /// initialized everything, the visitor/spectator spawn point is set and the ticker reached the

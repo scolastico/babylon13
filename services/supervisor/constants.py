@@ -6,6 +6,11 @@ WORLD_KINDS = ("world", "tutorial", "tutorial_edit")
 WORLD_KIND = WORLD_KINDS[0]
 # Kinds whose world starts from a tutorial snapshot instead of a player save.
 TUTORIAL_KINDS = ("tutorial", "tutorial_edit")
+# Whether a checkpoint of a world of each kind keeps the players' characters and per-player records:
+# the supervisor's copy of babylon_world_saves_characters() (world_flags.dm). A forced tutorial
+# snapshot (a submission or save-back) never keeps them, whatever the kind; tutorials.py blanks them
+# in every snapshot it copies.
+SAVES_CHARACTERS = {kind: kind not in TUTORIAL_KINDS for kind in WORLD_KINDS}
 
 
 
