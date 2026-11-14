@@ -42,7 +42,8 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
         if not re.fullmatch(r'\d+', raw):
             raise ValueError('BABYLON_' + name.upper() + ' must be an integer')
         number = int(raw)
-        minimum = 0 if name in ('delete_unused_worlds_after_days', 'afk_timeout_seconds', 'restart_warning_seconds') else 1
+        minimum = 0 if name in ('delete_unused_worlds_after_days', 'afk_timeout_seconds', 'restart_warning_seconds',
+                                'tutorial_submit_cooldown_hours') else 1
         if number < minimum or ('port' in name and number > 65535):
             raise ValueError('Invalid BABYLON_' + name.upper())
         values[name] = number
@@ -88,7 +89,7 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
         'max_running_worlds_per_player', 'kept_save_points_per_world', 'max_total_worlds_per_player',
         'delete_unused_worlds_after_days', 'empty_grace_seconds',
         'startup_timeout_seconds', 'station_startup_timeout_seconds', 'ticket_lifetime_seconds',
-        'afk_timeout_seconds')}
+        'afk_timeout_seconds', 'tutorial_submit_cooldown_hours')}
     discord = discord_settings(env, address, env.get('BABYLON_DATA_DIRECTORY', '/data'))
     config['discord'] = public_discord(discord)
     config.update(listen_host='127.0.0.1', listen_port=values['api_port'], public_host=host,
@@ -109,7 +110,7 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
 
 DISCORD_FEATURES = ('link', 'roles', 'voice', 'logs', 'status', 'gamelog', 'tickets', 'ahelp')
 DISCORD_CHANNELS = ('status', 'voice_lobby', 'mod_log', 'member_log', 'message_log', 'voice_log', 'game_log', 'bot_log',
-                    'ticket_panel', 'ticket_log', 'ahelp')
+                    'ticket_panel', 'ticket_log', 'ahelp', 'tutorial_review')
 
 
 def flag(env, name, default='false'):

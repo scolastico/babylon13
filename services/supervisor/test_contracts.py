@@ -15,6 +15,11 @@ from supervisor import CHILD_ACTIONS, Denied, Supervisor
 
 DM = Path(__file__).resolve().parents[2] / "modular_babylon/code"
 
+# Child actions the supervisor offers before any world code calls them. The tutorial submit and
+# save-back actions are built and unit-tested on the supervisor side first; the DM side lands in
+# G1b, which removes them from this list.
+NOT_YET_CALLED = {"tutorial_submit_check", "tutorial_submit", "tutorial_save_back"}
+
 # Child parameters a world is given on purpose even though no world code reads them by name.
 # (empty: every parameter the Driver writes is read by the DM code, and vice versa)
 WRITTEN_NOT_READ = set()
@@ -47,7 +52,12 @@ class ChildActions(unittest.TestCase):
         self.assertEqual({a: f for a, f in found.items() if a not in CHILD_ACTIONS}, {})
 
     def test_every_child_action_is_called_by_the_dm_code(self):
-        self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()), set())
+        self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()) - NOT_YET_CALLED, set())
+
+    def test_actions_awaiting_their_dm_side_are_not_called_yet(self):
+        # Once the DM code calls one, it must leave NOT_YET_CALLED (and so be checked above).
+        self.assertTrue(NOT_YET_CALLED <= set(CHILD_ACTIONS))
+        self.assertEqual(NOT_YET_CALLED & set(dm_actions()), set())
 
     def test_every_child_action_rejects_bad_credentials(self):
         with tempfile.TemporaryDirectory() as temp:

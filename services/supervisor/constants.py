@@ -18,4 +18,6 @@ DEFAULTS = {
     # Station-build worlds boot a full tg round (several z-levels); measured 77-167 s.
     "station_startup_timeout_seconds": 600,
     "ticket_lifetime_seconds": 60,
+    # Hours a player waits between two tutorial submissions (0 turns the cooldown off).
+    "tutorial_submit_cooldown_hours": 6,
 }

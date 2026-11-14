@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import html
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,7 @@ from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
 from constants import DEFAULTS, TUTORIAL_KINDS, WORLD_KIND
+from tutorials import SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, seed_first_save, walk
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
@@ -397,7 +399,7 @@ class Driver:
 class Supervisor:
     def __init__(self, config, driver=None, clock=time.time):
         self.config = config
-        for key in ("max_total_worlds_per_player", "station_startup_timeout_seconds"):
+        for key in ("max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours"):
             config.setdefault(key, DEFAULTS[key])
         self.clock = clock
         self.lock = threading.RLock()
@@ -432,7 +434,7 @@ class Supervisor:
             CREATE TABLE IF NOT EXISTS discord_codes (hash TEXT PRIMARY KEY, ckey TEXT NOT NULL, expires REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS world_bans (world TEXT NOT NULL, ckey TEXT NOT NULL, by TEXT NOT NULL,
               reason TEXT NOT NULL, at REAL NOT NULL, PRIMARY KEY(world, ckey));
-        """)
+        """ + TUTORIAL_SCHEMA)
         columns = {row[1] for row in self.db.execute("PRAGMA table_info(worlds)")}
         if "last_used" not in columns:
             self.db.execute("ALTER TABLE worlds ADD COLUMN last_used REAL")
@@ -463,6 +465,16 @@ class Supervisor:
         # Returns how many admins are online on Discord (or None), for the player's ahelp notice.
         self.ahelp_admins_online = None
         self.checkpoints = Checkpoints(config["data_directory"], config.get("kept_save_points_per_world", 4))
+        self.tutorials = TutorialStore(config["data_directory"])
+        # Set by the Discord bot: called with a submitted tutorial (a dict) to tell the reviewers.
+        self.tutorial_notify = None
+        self.tutorials.clean_trash()
+        # Tutorial instances end with their run. One without a run is left from a supervisor that
+        # stopped while it ran; tick's cleanup deletes it.
+        with self.db:
+            for row in self.db.execute("SELECT id FROM worlds WHERE kind<>? AND id NOT IN (SELECT world FROM runs)",
+                                       (WORLD_KIND,)).fetchall():
+                self.queue_world_deletion(row[0], "supervisor", "tutorial_instance_ended")
         # Running children are reconciled by tick; stopped worlds have no writers.
         for row in self.db.execute("SELECT id FROM worlds WHERE id NOT IN (SELECT world FROM runs)"):
             self.maintain_checkpoints(row[0])
@@ -822,6 +834,8 @@ class Supervisor:
             return self.discord_code(actor)
         if action == "discord_unlink":
             return {"ok": True, "unlinked": bool(self.unlink_discord(actor))}
+        if action in self.TUTORIAL_LOBBY_ACTIONS:
+            return self.tutorial_lobby(actor, action, data)
         with self.lock, self.db:
             if action == "list":
                 worlds = []
@@ -851,10 +865,14 @@ class Supervisor:
                             "SELECT ckey FROM members WHERE world=? ORDER BY ckey", (world["id"],))]
                 if self.shutting_down:
                     self.restart_screen_shown.add(actor)
-                return {"ok": True, "worlds": worlds, "maps": public_catalog(self.catalog), "admin": actor in self.admins, "server_notice": self.server_notice,
+                result = {"ok": True, "worlds": worlds, "maps": public_catalog(self.catalog), "admin": actor in self.admins, "server_notice": self.server_notice,
                         "restarting": self.shutting_down, "discord": self.discord_state(actor),
                         "delete_unused_worlds_after_days": self.config.get("delete_unused_worlds_after_days", DEFAULTS["delete_unused_worlds_after_days"]),
                         "limits": {k: v for k, v in self.config.items() if k.startswith("max_")}}
+                # Admins see how many tutorials wait for their review (the lobby's Tutorials tab).
+                if actor in self.admins:
+                    result["pending_tutorials"] = self.row("SELECT count(*) n FROM tutorials WHERE status='pending'")["n"]
+                return result
             if action in ("create", "join") and self.shutting_down:
                 raise Denied("The server is restarting. Try again in a minute.")
             if action == "create":
@@ -973,6 +991,318 @@ class Supervisor:
             self.db.execute("UPDATE runs SET empty_since=NULL WHERE id=?", (run["id"],))
             self.audit(actor, "ticket", world["id"])
             return {"ok": True, "address": f"byond://{self.config['public_host']}:{run['port']}?babylon_ticket={token}"}
+
+    # --- Tutorials -------------------------------------------------------------------
+    # Submitted from a running creative station world (child actions), reviewed by admins and played
+    # or copied by everyone from the lobby. Storage: tutorials.py.
+
+    TUTORIAL_LOBBY_ACTIONS = ("tutorials", "tutorial_play", "tutorial_copy", "tutorial_edit", "tutorial_accept",
+                              "tutorial_reject", "tutorial_delete")
+
+    @staticmethod
+    def duration(seconds):
+        """3 h 20 min as "3 hours 20 minutes"; below a minute "less than a minute"."""
+        minutes = math.ceil(seconds / 60)
+        hours, minutes = divmod(minutes, 60)
+        parts = ["%d hour%s" % (hours, "" if hours == 1 else "s")] if hours else []
+        if minutes:
+            parts.append("%d minute%s" % (minutes, "" if minutes == 1 else "s"))
+        return " ".join(parts) or "less than a minute"
+
+    def tutorial_row(self, tid):
+        row = self.row("SELECT * FROM tutorials WHERE id=?", (tid,)) if isinstance(tid, str) else None
+        if not row:
+            raise Denied("This tutorial does not exist or is no longer available")
+        return row
+
+    def tutorial_capable(self, world):
+        """Tutorials come from normal creative worlds on the station build (spec 10)."""
+        if world["kind"] != WORLD_KIND:
+            raise Denied("A tutorial can't be submitted from a tutorial run")
+        try:
+            station = build_of(self.catalog, world["map"]) == "station"
+        except Denied:
+            station = False
+        if not station or not world["creative"]:
+            raise Denied("Tutorials can only be submitted from a Creative world on a station map "
+                         "(a Creative Plane or a station). Babylon worlds can build, but not submit.")
+
+    def submit_wait(self, author):
+        """Seconds until ``author`` may submit another tutorial (0: now)."""
+        hours = self.config.get("tutorial_submit_cooldown_hours", DEFAULTS["tutorial_submit_cooldown_hours"])
+        row = self.row("SELECT submitted FROM tutorial_cooldowns WHERE author=?", (author,))
+        if not hours or not row:
+            return 0
+        return max(0, math.ceil(row["submitted"] + hours * 3600 - self.clock()))
+
+    def submitter(self, run_id, secret, data):
+        """The run's world and the in-world actor, who must own it. Call under the lock."""
+        run = self.child(run_id, secret)
+        world = self.world(run["world"])
+        actor = ckey(str(data.get("actor", "")))
+        if not actor or actor != world["owner"]:
+            raise Denied("Only the world's owner can submit it as a tutorial")
+        self.tutorial_capable(world)
+        return world, actor
+
+    def generation_source(self, world_id, generation):
+        """The checkpoint directory worlds/<world>/data/babylon/saves/<generation>, with no link on the way."""
+        if not isinstance(generation, str) or not GENERATION_RE.fullmatch(generation):
+            raise Denied("Invalid checkpoint generation")
+        try:
+            source = walk(Path(self.config["data_directory"]).resolve(), "worlds", world_id, "data", "babylon",
+                          "saves", generation)
+        except TutorialError:
+            raise Denied("The saved snapshot is not usable") from None
+        if not source.is_dir():
+            raise Denied("The saved snapshot %s does not exist" % generation)
+        return source
+
+    def tutorial_submit_check(self, run_id, secret, data):
+        """Whether the world's owner may submit now: {ok, wait_seconds}; refused for worlds that can't."""
+        with self.lock, self.db:
+            world, actor = self.submitter(run_id, secret, data)
+            return {"ok": True, "wait_seconds": self.submit_wait(actor)}
+
+    def tutorial_submit(self, run_id, secret, data):
+        """Copies a snapshot generation of the world into pending/<id>/ for review.
+
+        The cooldown starts only once the tutorial is stored: a failed copy can be retried at once."""
+        with self.lock, self.db:
+            world, actor = self.submitter(run_id, secret, data)
+            title = clean_text(str(data.get("title", "")))
+            description = clean_text(str(data.get("description", "")), multiline=True)
+            if not 1 <= len(title) <= 60 or len(description) > 500:
+                raise Denied("Use a title of 1–60 characters and a description up to 500 characters")
+            wait = self.submit_wait(actor)
+            if wait:
+                raise Denied("You can submit another tutorial in %s" % self.duration(wait))
+            source = self.generation_source(world["id"], data.get("generation"))
+            tid = secrets.token_hex(16)
+            now = self.clock()
+            tutorial = dict(id=tid, title=title, description=description, author=actor, status="pending",
+                            map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
+                            reviewed_by=None, source_world=world["id"])
+            try:
+                self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"]))
+            except (OSError, TutorialError) as error:
+                log("Storing the tutorial from %s failed: %s" % (self.describe(world["id"]), error))
+                raise Denied("The tutorial could not be stored: %s" % (
+                    error if isinstance(error, TutorialError) else "the save could not be copied")) from None
+            try:
+                self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world)"
+                                " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world)",
+                                tutorial)
+                self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, now))
+                self.audit(actor, "tutorial_submit:" + tid, world["id"])
+            except Exception:
+                self.tutorials.remove("pending", tid)
+                raise
+        self.notify_tutorial(tutorial)
+        return {"ok": True, "tutorial": tid}
+
+    def notify_tutorial(self, tutorial):
+        log("Tutorial submitted for review: %s by %s (%s)" % (tutorial["title"], tutorial["author"], tutorial["id"]))
+        callback = self.tutorial_notify
+        if callback:
+            try:
+                callback(dict(tutorial, map_name=self.catalog.get(tutorial["map"], {}).get("name", tutorial["map"])))
+            except Exception as error:
+                log(f"Telling the reviewers about a tutorial failed: {error}")
+
+    def tutorial_save_back(self, run_id, secret, data):
+        """An admin in an edit world overwrites the pending tutorial's snapshot with a new generation."""
+        with self.lock, self.db:
+            run = self.child(run_id, secret)
+            world = self.world(run["world"])
+            if world["kind"] != "tutorial_edit":
+                raise Denied("Only a world that edits a pending tutorial can save back to it")
+            actor = ckey(str(data.get("actor", "")))
+            if actor not in self.admins:
+                raise Denied("Only server administrators can save back to a pending tutorial")
+            tutorial = self.tutorial_row(world["tutorial"])
+            if tutorial["status"] != "pending":
+                raise Denied("This tutorial is no longer pending, so it can't be changed from here")
+            source = self.generation_source(world["id"], data.get("generation"))
+            try:
+                self.tutorials.replace_save(tutorial["id"], source)
+                self.tutorials.update_meta("pending", tutorial["id"], updated=self.clock(), generation=data["generation"])
+            except (OSError, TutorialError) as error:
+                log("Saving back tutorial %s failed: %s" % (tutorial["id"], error))
+                raise Denied("The tutorial could not be saved back; the pending copy is unchanged") from None
+            self.db.execute("UPDATE tutorials SET updated=? WHERE id=?", (self.clock(), tutorial["id"]))
+            self.audit(actor, "tutorial_save_back:" + tutorial["id"], world["id"])
+            return {"ok": True, "tutorial": tutorial["id"]}
+
+    def tutorial_list(self, actor):
+        admin = actor in self.admins
+        items = []
+        for row in self.db.execute("SELECT * FROM tutorials ORDER BY created DESC").fetchall():
+            if row["status"] != "published" and not admin:
+                continue
+            item = {key: row[key] for key in ("id", "title", "description", "author", "map", "status", "created", "updated")}
+            item["map_name"] = self.catalog.get(row["map"], {}).get("name", row["map"])
+            # The player's own play instance of it (state), so the lobby can say "Rejoin".
+            mine = self.row("SELECT r.state FROM worlds w JOIN runs r ON r.world=w.id WHERE w.kind='tutorial' "
+                            "AND w.owner=? AND w.tutorial=?", (actor, row["id"]))
+            item["playing"] = mine["state"] if mine else None
+            if admin:
+                editing = self.row("SELECT r.state FROM worlds w JOIN runs r ON r.world=w.id WHERE w.kind='tutorial_edit' "
+                                   "AND w.tutorial=?", (row["id"],))
+                item["editing"] = editing["state"] if editing else None
+            items.append(item)
+        return items
+
+    def tutorial_lobby(self, actor, action, data):
+        """The lobby's tutorial actions: list, play, copy, and the admins' review."""
+        admin = actor in self.admins
+        cleanup = []
+        try:
+            with self.lock, self.db:
+                if action == "tutorials":
+                    return {"ok": True, "tutorials": self.tutorial_list(actor), "admin": admin}
+                if action in ("tutorial_play", "tutorial_copy", "tutorial_edit") and self.shutting_down:
+                    raise Denied("The server is restarting. Try again in a minute.")
+                tutorial = self.tutorial_row(data.get("tutorial"))
+                pending = tutorial["status"] == "pending"
+                if pending and not admin:
+                    # Pending tutorials are invisible to players.
+                    raise Denied("This tutorial does not exist or is no longer available")
+                if action == "tutorial_play":
+                    return self.play_tutorial(actor, tutorial, cleanup)
+                if action == "tutorial_copy":
+                    if pending:
+                        raise Denied("Only published tutorials can be copied")
+                    return self.copy_tutorial(actor, tutorial)
+                if not admin:
+                    raise Denied("Only server administrators can review tutorials")
+                if action == "tutorial_edit":
+                    if not pending:
+                        raise Denied("Only pending tutorials can be edited")
+                    return self.edit_tutorial(actor, tutorial, cleanup)
+                if action in ("tutorial_reject", "tutorial_delete") and data.get("confirm") not in (True, 1, "1"):
+                    raise Denied("Confirm that the tutorial will be permanently deleted")
+                if action == "tutorial_accept":
+                    if not pending:
+                        raise Denied("This tutorial is already published")
+                    try:
+                        self.tutorials.publish(tutorial["id"])
+                    except (OSError, TutorialError) as error:
+                        log("Publishing tutorial %s failed: %s" % (tutorial["id"], error))
+                        raise Denied("The tutorial could not be published") from None
+                    self.db.execute("UPDATE tutorials SET status='published',reviewed_by=?,updated=? WHERE id=?",
+                                    (actor, self.clock(), tutorial["id"]))
+                elif action == "tutorial_reject" and not pending:
+                    raise Denied("Only pending tutorials can be rejected; delete a published one instead")
+                else:
+                    # Running play or edit instances keep going: their world was prepared from a copy.
+                    self.db.execute("DELETE FROM tutorials WHERE id=?", (tutorial["id"],))
+                    try:
+                        self.tutorials.remove(tutorial["status"], tutorial["id"])
+                    except (OSError, TutorialError) as error:
+                        log("Removing the files of tutorial %s failed: %s" % (tutorial["id"], error))
+                self.audit(actor, "%s:%s" % (action, tutorial["id"]), None)
+                return {"ok": True, "title": tutorial["title"]}
+        finally:
+            for world in cleanup:
+                self.finish_world_deletion(world)
+
+    def tutorial_instance(self, owner, kind, tutorial, name, creative, max_players):
+        world = dict(id=secrets.token_hex(16), owner=owner, name=clean_text(name)[:60] or "Tutorial",
+                     description=tutorial["description"], visibility="private", password=None, max_players=max_players,
+                     created=self.clock(), last_used=self.clock(), map=tutorial["map"], creative=creative, persistent=0,
+                     kind=kind, tutorial=tutorial["id"])
+        self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,"
+                        "creative,persistent,kind,tutorial) VALUES(:id,:owner,:name,:description,:visibility,:password,"
+                        ":max_players,:created,:last_used,:map,:creative,:persistent,:kind,:tutorial)", world)
+        return world
+
+    def start_instance(self, world, actor, cleanup):
+        """Starts a tutorial instance; one that can't start is deleted again (row and files)."""
+        try:
+            self.start(world, actor)
+        except Denied:
+            self.queue_world_deletion(world["id"], "supervisor", "tutorial_instance_failed")
+            self.db.commit()
+            cleanup.append(world["id"])
+            raise
+        self.audit(actor, "tutorial_instance:" + world["tutorial"], world["id"])
+        return {"ok": True, "world": world["id"], "name": world["name"], "pending": True}
+
+    def stale_instance(self, world, cleanup):
+        """A tutorial instance without a run is left over (its start failed half-way): delete it.
+        Committed at once, so a later refusal in the same request does not bring it back."""
+        self.queue_world_deletion(world["id"], "supervisor", "tutorial_instance_ended")
+        self.db.commit()
+        cleanup.append(world["id"])
+
+    def play_tutorial(self, actor, tutorial, cleanup):
+        """A private, unsaved instance for the player. Their running one is reused for the same
+        tutorial; a different tutorial waits until that one has ended."""
+        self.require_discord(actor, "join")
+        if tutorial["map"] not in self.catalog:
+            raise Denied("This tutorial's map is no longer available")
+        for world in [dict(r) for r in self.db.execute("SELECT * FROM worlds WHERE kind='tutorial' AND owner=?", (actor,))]:
+            run = self.row("SELECT state FROM runs WHERE world=?", (world["id"],))
+            if not run:
+                self.stale_instance(world, cleanup)
+            elif world["tutorial"] != tutorial["id"]:
+                raise Denied("Finish or leave your current tutorial first")
+            elif run["state"] in ("starting", "running"):
+                return {"ok": True, "world": world["id"], "name": world["name"], "pending": run["state"] == "starting",
+                        "reused": True}
+            else:
+                raise Denied("Your last run of this tutorial is still ending. Try again in a moment.")
+        world = self.tutorial_instance(actor, "tutorial", tutorial, tutorial["title"], 0, 1)
+        return self.start_instance(world, actor, cleanup)
+
+    def edit_tutorial(self, actor, tutorial, cleanup):
+        """An admin-owned creative world started from the pending snapshot. There is one per tutorial,
+        so two admins never save back over each other; others join the running one."""
+        if tutorial["map"] not in self.catalog:
+            raise Denied("This tutorial's map is no longer available")
+        for world in [dict(r) for r in self.db.execute("SELECT * FROM worlds WHERE kind='tutorial_edit' AND tutorial=?",
+                                                       (tutorial["id"],))]:
+            run = self.row("SELECT state FROM runs WHERE world=?", (world["id"],))
+            if not run:
+                self.stale_instance(world, cleanup)
+            elif run["state"] in ("starting", "running"):
+                return {"ok": True, "world": world["id"], "name": world["name"], "pending": run["state"] == "starting",
+                        "reused": True}
+            else:
+                raise Denied("The last edit session of this tutorial is still ending. Try again in a moment.")
+        world = self.tutorial_instance(actor, "tutorial_edit", tutorial, "Editing: " + tutorial["title"], 1,
+                                       self.config["max_players_per_world"])
+        return self.start_instance(world, actor, cleanup)
+
+    def copy_tutorial(self, actor, tutorial):
+        """A new creative, saved world of the player's own whose first checkpoint is the tutorial."""
+        self.require_discord(actor, "create")
+        if tutorial["map"] not in self.catalog:
+            raise Denied("This tutorial's map is no longer available")
+        if actor not in self.admins:
+            self.check_world_limits(actor, 1)
+        try:
+            snapshot = self.tutorials.directory("published", tutorial["id"]) / "save"
+            if not snapshot.is_dir() or snapshot.is_symlink():
+                raise TutorialError("The tutorial's snapshot is missing")
+        except TutorialError as error:
+            raise Denied(str(error)) from None
+        world_id = secrets.token_hex(16)
+        root = Path(self.config["data_directory"]) / "worlds" / world_id
+        try:
+            seed_first_save(snapshot, root / "data/babylon/saves")
+        except (OSError, TutorialError) as error:
+            log("Copying tutorial %s failed: %s" % (tutorial["id"], error))
+            shutil.rmtree(root, ignore_errors=True)
+            raise Denied("The tutorial could not be copied") from None
+        name = clean_text(tutorial["title"])[:60] or "Tutorial copy"
+        self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,creative,persistent)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
+                         self.clock(), self.clock(), tutorial["map"], 1, 1))
+        self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
+        return {"ok": True, "id": world_id, "name": name}
 
     def check_world_limits(self, owner, persistent, ignore=None):
         """Persistent worlds count against max_worlds_per_player, all normal worlds against the total."""
@@ -1115,7 +1445,8 @@ class Supervisor:
     def on_run_exited(self, run):
         """The single place a run's end is handled: its process is gone (a stop, a round end or a crash).
 
-        Drops the run with its tickets and sessions and refreshes the world's checkpoints. Anything that
+        Drops the run with its tickets and sessions and refreshes the world's checkpoints. A tutorial
+        instance (play or edit) is deleted with its files: it only lives while it runs. Anything that
         must happen once a world instance has ended belongs here."""
         if run["state"] == "stopping":
             log("%s stopped (port %s)" % (self.describe(run["world"]), run["port"]))
@@ -1125,7 +1456,15 @@ class Supervisor:
             self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
             self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
             self.db.execute("DELETE FROM sessions WHERE run=?", (run["id"],))
-            self.maintain_checkpoints(run["world"])
+            world = self.row("SELECT kind FROM worlds WHERE id=?", (run["world"],))
+            instance = bool(world) and world["kind"] in TUTORIAL_KINDS
+            if instance:
+                self.queue_world_deletion(run["world"], "supervisor", "tutorial_instance_ended")
+            else:
+                self.maintain_checkpoints(run["world"])
+        if instance:
+            # The files can take a moment; never under the lock. A failure is retried by cleanup.
+            self.finish_world_deletion(run["world"])
 
     def tick(self):
         self.cleanup_unused_worlds()
@@ -1181,8 +1520,10 @@ class Supervisor:
 def load_config(path):
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     for key in ("kept_save_points_per_world", "delete_unused_worlds_after_days", "afk_timeout_seconds",
-                "max_total_worlds_per_player", "station_startup_timeout_seconds"):
+                "max_total_worlds_per_player", "station_startup_timeout_seconds", "tutorial_submit_cooldown_hours"):
         config.setdefault(key, DEFAULTS[key])
+    if type(config["tutorial_submit_cooldown_hours"]) is not int or config["tutorial_submit_cooldown_hours"] < 0:
+        raise ValueError("tutorial_submit_cooldown_hours must be a nonnegative integer (0 disables the cooldown)")
     if type(config["max_total_worlds_per_player"]) is not int or config["max_total_worlds_per_player"] < 1:
         raise ValueError("max_total_worlds_per_player must be a positive integer")
     if type(config["afk_timeout_seconds"]) is not int or config["afk_timeout_seconds"] < 0:
@@ -1217,6 +1558,9 @@ CHILD_ACTIONS = {
     "ahelp": lambda service, data: service.relay_ahelp(data.get("run"), data.get("secret", ""), data),
     "world_manage": lambda service, data: service.manage_world(data.get("run"), data.get("secret", ""), data),
     "round_ended": lambda service, data: service.round_ended(data.get("run"), data.get("secret", "")),
+    "tutorial_submit_check": lambda service, data: service.tutorial_submit_check(data.get("run"), data.get("secret", ""), data),
+    "tutorial_submit": lambda service, data: service.tutorial_submit(data.get("run"), data.get("secret", ""), data),
+    "tutorial_save_back": lambda service, data: service.tutorial_save_back(data.get("run"), data.get("secret", ""), data),
 }
 
 
