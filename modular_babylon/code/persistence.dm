@@ -1058,6 +1058,7 @@
 		CHECK_TICK
 	restore_portable_connections(records)
 	reconnect_creative_canisters()
+	restore_bot_possession(records)
 	SSmachines.makepowernets()
 	restore_airlock_configuration(state)
 	// Door animations and their sleeping procs cannot survive a process restart.
@@ -1167,6 +1168,25 @@
 			continue
 		if(portable.connect(port) && !("portable_port" in record))
 			migration_notes |= "Recovered anchored portable-atmos connector attachment from legacy save."
+
+/// A saved level loads as a map, so every restored bot initializes with mapload on a station level,
+/// where upstream switches ghost possession on for mapped bots (_bots.dm). A restored bot takes the
+/// saved can_be_possessed instead: on only if a player had switched its personality on (or it was a
+/// mapped bot that still had it on). Saves from before the field was kept leave it off.
+/datum/babylon_save/proc/restore_bot_possession(list/records)
+	for(var/list/record as anything in records)
+		var/mob/living/basic/bot/bot = restored_atoms[record["id"]]
+		if(!istype(bot) || QDELETED(bot))
+			continue
+		var/list/fields = record["fields"]
+		var/wanted = ("can_be_possessed" in fields) ? !!decode_value(fields["can_be_possessed"]) : FALSE
+		var/datum/component/ghost_direct_control/control = bot.GetComponent(/datum/component/ghost_direct_control)
+		if(wanted && !control && (bot.bot_mode_flags & BOT_MODE_CAN_BE_SAPIENT))
+			bot.enable_possession(mapload = TRUE)
+		else if(!wanted)
+			bot.can_be_possessed = FALSE
+			// No longer offered in the ghosts' joinable mob list either.
+			qdel(control)
 
 /datum/babylon_save/proc/restore_cycle_pump(obj/machinery/atmospherics/components/unary/airlock_pump/pump, list/record)
 	var/list/settings = record["cycle_settings"]

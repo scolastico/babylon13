@@ -285,8 +285,9 @@
 	return locate(start, start, station_z)
 
 /// Before a Creative Plane save: a tutorial NPC spawner with its NPC, one of the NPC's outfit
-/// items dropped on another tile next to an ordinary wrench, and a changed creative canister
-/// setting. test_creative_plane_restored checks what came back.
+/// items dropped on another tile next to an ordinary wrench, a changed creative canister
+/// setting and two spawned cleanbots (possession off and on). test_creative_plane_restored checks
+/// what came back.
 /datum/babylon_save/proc/test_creative_plane_save_setup()
 	var/list/result = list()
 	var/turf/origin = creative_plane_origin()
@@ -314,6 +315,17 @@
 	if(nitrogen)
 		nitrogen.creative_pressure = 3210
 	result["canister_setting_changed"] = nitrogen?.creative_pressure == 3210
+	// Two spawned cleanbots (as the Creative panel spawns them): one as spawned, without ghost
+	// possession, and one whose personality setting a player switched on.
+	var/mob/living/basic/bot/cleanbot/bot_off = new(locate(origin.x + 28, origin.y + 20, origin.z))
+	bot_off.name = "babylon test bot off"
+	bot_off.real_name = bot_off.name
+	var/mob/living/basic/bot/cleanbot/bot_on = new(locate(origin.x + 30, origin.y + 20, origin.z))
+	bot_on.name = "babylon test bot on"
+	bot_on.real_name = bot_on.name
+	bot_on.enable_possession(mapload = TRUE)
+	result["bots_spawned"] = !bot_off.can_be_possessed && !bot_off.GetComponent(/datum/component/ghost_direct_control) \
+		&& bot_on.can_be_possessed && !!bot_on.GetComponent(/datum/component/ghost_direct_control)
 	result["spawner_id"] = spawner?.tutorial_id
 	result["outfit_type"] = "[outfit_item?.type]"
 	return result
@@ -351,4 +363,14 @@
 	var/outfit_path = text2path(outfit_type)
 	result["dropped_outfit_not_saved"] = !!outfit_path && !(locate(outfit_path) in drop_tile)
 	result["control_item_saved"] = !!(locate(/obj/item/wrench) in drop_tile)
+	// The restored bots load as mapped station bots; they keep their saved possession setting.
+	var/mob/living/basic/bot/cleanbot/bot_off
+	var/mob/living/basic/bot/cleanbot/bot_on
+	for(var/mob/living/basic/bot/cleanbot/bot in GLOB.mob_living_list)
+		if(bot.name == "babylon test bot off")
+			bot_off = bot
+		else if(bot.name == "babylon test bot on")
+			bot_on = bot
+	result["bot_possession_off_kept"] = !!bot_off && !bot_off.can_be_possessed && !bot_off.GetComponent(/datum/component/ghost_direct_control)
+	result["bot_possession_on_kept"] = !!bot_on && bot_on.can_be_possessed && !!bot_on.GetComponent(/datum/component/ghost_direct_control)
 	return result

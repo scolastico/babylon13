@@ -618,7 +618,7 @@ admins, ghosts and the new-player lobby get neither. The panel's tabs:
   role, hand gestures, mob holders, the Hilbert's hotel sphere, and the circuit board of
   anything blocked. Simple bots (cleanbots, medbots and the like) can be spawned: a spawned
   bot asks no ghost to take it over; that only becomes possible once a player switches on its
-  personality setting. This is the one spawn blocklist: the creative disposal unit and the
+  personality setting. A saved world keeps that setting for every bot across restarts. This is the one spawn blocklist: the creative disposal unit and the
   tutorial wand's item fields and Give item action use it too, each with a few extra
   restrictions of its own (the disposal unit and Give item never make grenades, bombs or brain
   holders).
