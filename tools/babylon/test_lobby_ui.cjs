@@ -447,8 +447,138 @@ context.lobbyClose();
   context.lobbyClose();
 }
 
+// --- Tutorials tab -------------------------------------------------------------------------------
+{
+  revision = 2000; // after the shell test's revision 1000
+  const placeholder = "<div id='lobby-tutorials'></div>";
+  const dm = fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/lobby.dm'), 'utf8');
+  assert.ok(dm.includes('content += "' + placeholder + '"'), 'lobby.dm leaves the placeholder lobby.js fills');
+  const tutorial = (id, extra) => Object.assign({
+    id, title: 'Tutorial ' + id, description: 'Learn something.', author: 'builder', map: 'icebox', map_name: 'IceBoxStation',
+    status: 'published', created: 1794650000, playing: null, editing: null,
+  }, extra);
+  const published = [
+    tutorial('p1'),
+    tutorial('p2', { title: '<img src=x onerror=alert(1)>', description: '"quoted" & <b>bold</b>', author: 'evil"author', map: 'creative_plane_m', map_name: 'Creative Plane M', playing: 'running' }),
+  ];
+  const pending = [tutorial('q2', { status: 'pending', created: 1794660000 }), tutorial('q1', { status: 'pending', created: 1794650000, editing: 'running' })];
+  const renderTutorials = (list, extra) => context.renderLobby(JSON.stringify({
+    html: '<h2>Tutorials</h2>' + placeholder, view: 'tutorials', revision: revision++, complete: true,
+    state: state(worlds, null, Object.assign({ tutorials: list }, extra || {})),
+  }));
+  const page = () => elements['browser-content'].innerHTML;
+
+  // Cards render from the state, every value escaped; a preview image when the map has one.
+  renderTutorials(published.concat(pending));
+  assert.doesNotMatch(page(), /lobby-tutorials'><\/div>/, 'the placeholder is filled');
+  assert.match(page(), /<h2>Published tutorials<\/h2><span class="section-count">2<\/span>/);
+  assert.equal((page().match(/class="tutorial-card/g) || []).length, 2, 'players see the published cards only');
+  assert.doesNotMatch(page(), /Pending tutorials|Tutorial q1|Tutorial q2|Accept/, 'no pending section for players');
+  assert.match(page(), /<h3>Tutorial p1<\/h3><div class="tutorial-meta">by <b>builder<\/b>/);
+  assert.match(page(), /<span class="badge map">IceBoxStation<\/span>/, 'the map badge');
+  assert.match(page(), /<img src="babylon_map_icebox.png"/, 'the map preview image');
+  assert.match(page(), /class="map-initials">CP</, 'maps without a preview get the generated placeholder');
+  assert.doesNotMatch(page(), /<img src=x|<b>bold<\/b>|evil"author/, 'player text never becomes markup');
+  assert.match(page(), /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(page(), /&quot;quoted&quot; &amp; &lt;b&gt;bold&lt;\/b&gt;/);
+  assert.match(page(), /data-tutorial="p2" onclick="return lobbyPlayTutorial\(this\)"[^>]*>Rejoin</, 'a running copy is rejoined');
+  assert.match(page(), /data-tutorial="p1" onclick="return lobbyPlayTutorial\(this\)"[^>]*>Play</);
+  assert.match(page(), /data-tutorial="p1" onclick="return lobbyOpenTutorial\('copy', this\)"[^>]*>Copy to my worlds\.\.\.</);
+  assert.doesNotMatch(page(), /lobbyOpenTutorial\('delete'/, 'players cannot delete tutorials');
+
+  // Play: the full-page loading screen and a plain request, like Join.
+  let before = navigations.length;
+  context.lobbyPlayTutorial(button({ 'data-tutorial': 'p1' }));
+  let sent = lastRequest();
+  assert.equal(navigations.length, before + 1);
+  assert.deepEqual([sent.action, sent.payload, sent.request], ['tutorial_play', { tutorial: 'p1' }, 0]);
+  assert.equal(elements['action-loading'].style.display, 'block');
+  assert.equal(elements['loading-world'].textContent, 'Tutorial p1');
+  expectNoRequest(() => context.lobbyPlayTutorial(button({ 'data-tutorial': 'p2' })), 'no second request while one loads');
+  renderTutorials(published);
+  expectNoRequest(() => context.lobbyPlayTutorial(button({ 'data-tutorial': 'gone' })), 'an unknown tutorial sends nothing');
+  assert.match(toastHtml(), /no longer available/);
+
+  // Copy: a confirmation that explains the saved, creative world and the limits.
+  expectNoRequest(() => context.lobbyOpenTutorial('copy', button({ 'data-tutorial': 'p1' })), 'opening the dialog sends nothing');
+  assert.match(modalHtml(), /Copy to my worlds\?/);
+  assert.match(modalHtml(), /<b>Creative<\/b>, <b>saved<\/b> and private/);
+  assert.match(modalHtml(), /counts against your world limits/);
+  assert.match(modalHtml(), /<b>2 of 4<\/b> saved worlds/);
+  expectNoRequest(() => context.lobbySubmit(), 'Enter never confirms');
+  context.lobbyTutorialConfirm();
+  sent = lastRequest();
+  assert.deepEqual([sent.action, sent.payload], ['tutorial_copy', { tutorial: 'p1', confirm: 1 }]);
+  assert.ok(sent.request > 0, 'a dialog request');
+  context.lobbyResult(JSON.stringify({ request: sent.request, error: 'Your world limit has been reached' }));
+  assert.match(modalHtml(), /modal-error">Your world limit has been reached/, 'errors stay in the dialog');
+  context.lobbyTutorialConfirm();
+  sent = lastRequest();
+  context.lobbyResult(JSON.stringify({ request: sent.request, ok: 1, notice: 'Tutorial p1 was copied to My worlds.' }));
+  assert.equal(modal(), null);
+  assert.match(toastHtml(), /Tutorial p1 was copied to My worlds\./);
+
+  // At the saved-world limit the copy is refused before anything is sent.
+  const full = [1, 2, 3, 4].map(n => world(hex(n)));
+  context.renderLobby(JSON.stringify({ html: placeholder, view: 'tutorials', revision: revision++, complete: true, state: state(full, null, { tutorials: published }) }));
+  context.lobbyOpenTutorial('copy', button({ 'data-tutorial': 'p1' }));
+  assert.match(modalHtml(), /class="callout">You already have 4 of 4 saved worlds/);
+  assert.match(modalHtml(), /id="modal-confirm"[^>]* disabled>Copy to my worlds</);
+  expectNoRequest(() => context.lobbyTutorialConfirm(), 'a copy over the limit is not sent');
+  context.lobbyClose();
+
+  // Admins: the pending section (oldest first, before the published ones), review buttons and Delete.
+  renderTutorials(published.concat(pending), { admin: 1 });
+  assert.match(page(), /<h2>Pending tutorials<\/h2><span class="section-count">2<\/span><span class="badge">Administrators only<\/span>/);
+  assert.ok(page().indexOf('Pending tutorials') < page().indexOf('Published tutorials'), 'the review queue comes first');
+  assert.ok(page().indexOf('Tutorial q1') < page().indexOf('Tutorial q2'), 'oldest submission first');
+  assert.match(page(), /Being edited/, 'an open edit world is shown');
+  for (const action of ['edit', 'accept', 'reject']) {
+    assert.match(page(), new RegExp('data-tutorial="q2" onclick="return lobbyOpenTutorial\\(\'' + action + '\', this\\)"'), action);
+  }
+  assert.match(page(), /data-tutorial="p1" onclick="return lobbyOpenTutorial\('delete', this\)"/);
+  assert.doesNotMatch(page(), /data-tutorial="q2" onclick="return lobbyOpenTutorial\('copy'/, 'pending tutorials cannot be copied');
+  renderTutorials(published, { admin: 1 });
+  assert.match(page(), /No tutorials are waiting for review\./);
+  assert.ok(page().indexOf('Published tutorials') < page().indexOf('Pending tutorials'), 'an empty queue goes last');
+  renderTutorials(published.concat(pending), { admin: 1 });
+
+  const review = [
+    ['edit', 'q2', 'Edit this tutorial?', 'Start editing', 'tutorial_edit', { tutorial: 'q2' }, false],
+    ['edit', 'q1', 'Join the edit session?', 'Join edit session', 'tutorial_edit', { tutorial: 'q1' }, false],
+    ['accept', 'q2', 'Publish this tutorial?', 'Accept and publish', 'tutorial_accept', { tutorial: 'q2', confirm: 1 }, false],
+    ['reject', 'q2', 'Reject this tutorial?', 'Reject and delete', 'tutorial_reject', { tutorial: 'q2', confirm: 1 }, true],
+    ['delete', 'p1', 'Delete this tutorial?', 'Delete permanently', 'tutorial_delete', { tutorial: 'p1', confirm: 1 }, true],
+  ];
+  for (const [action, id, title, label, request, payload, danger] of review) {
+    context.lobbyOpenTutorial(action, button({ 'data-tutorial': id }));
+    assert.match(modalHtml(), new RegExp('<h2 id="modal-title">' + title.replace('?', '\\?') + '</h2>'), title);
+    assert.match(modalHtml(), new RegExp('>' + label + '</button>'), label);
+    assert.equal(/role="alertdialog"/.test(modalHtml()), danger, title + ' danger style');
+    assert.match(modalHtml(), /data-autofocus="1"[^>]*>Cancel</, 'focus starts on Cancel');
+    expectNoRequest(() => context.lobbySubmit(), 'Enter never confirms ' + action);
+    context.lobbyTutorialConfirm();
+    sent = lastRequest();
+    assert.deepEqual([sent.action, sent.payload], [request, payload], action);
+    context.lobbyResult(JSON.stringify({ request: sent.request, ok: 1 }));
+    assert.equal(modal(), null, action + ' closes on success');
+  }
+  context.lobbyOpenTutorial('edit', button({ 'data-tutorial': 'q2' }));
+  assert.match(modalHtml(), /Save back to pending tutorial/, 'the edit dialog says how changes are kept');
+  context.lobbyClose();
+
+  // Empty states and a failed list.
+  renderTutorials([]);
+  assert.match(page(), /No tutorials yet — build one in a Creative world on a station map and submit it from the Creative panel\./);
+  renderTutorials([], { tutorials_error: 'The world manager isn\'t responding.' });
+  assert.match(page(), /class="notice" role="alert">The world manager isn&#39;t responding\./);
+  // Other tabs have no placeholder and are left alone.
+  render(worlds);
+  assert.equal(page(), '<p>list ' + (revision - 1) + '</p>');
+}
+
 // Losing the connection removes every dialog.
 context.lobbyOpenCreate();
 context.lobbyHideOverlays();
 assert.equal(modalHtml(), '');
-console.log('Lobby dialog, wizard payload, confirmation, escape, limit and poll-preservation checks passed.');
+console.log('Lobby dialog, wizard payload, confirmation, escape, limit, poll-preservation and tutorial checks passed.');

@@ -5,7 +5,7 @@
 // the form helpful. Answers come back through lobbyResult().
 // Plain ES5 like loading.js, for BYOND's embedded browser.
 
-var lobbyState = { ref: '', ckey: '', admin: 0, worlds: [], maps: [], limits: {}, player_limit: 1, discord: {} };
+var lobbyState = { ref: '', ckey: '', admin: 0, worlds: [], maps: [], limits: {}, player_limit: 1, discord: {}, tutorials: null };
 var lobbyModal = null;
 var lobbyRequestCounter = 0;
 var lobbyToasts = [];
@@ -793,6 +793,7 @@ function lobbyModalHtml(modal) {
   if (modal.type === 'checkpoints') return lobbyCheckpointsHtml(modal);
   if (modal.type === 'discord') return lobbyDiscordHtml(modal);
   if (modal.type === 'confirm') return lobbyConfirmHtml(modal);
+  if (modal.type === 'tutorial') return lobbyTutorialHtml(modal);
   return '';
 }
 
@@ -1128,5 +1129,201 @@ function lobbyConfirmHtml(modal) {
       { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true },
       { label: reset ? 'Reset world' : 'Delete permanently', kind: 'danger solid', onclick: 'return lobbyConfirm()', busy: true, id: 'modal-confirm', disabled: !matches }
     ])
+  });
+}
+
+// --- Tutorials tab --------------------------------------------------------------------------
+// lobby.dm leaves a placeholder in the Tutorials tab; the cards are drawn here from
+// lobbyState.tutorials (every value escaped). Their dialogs work like the world dialogs.
+
+var LOBBY_TUTORIALS_PLACEHOLDER = "<div id='lobby-tutorials'></div>";
+var LOBBY_TUTORIALS_EMPTY = 'No tutorials yet — build one in a Creative world on a station map and submit it from the Creative panel.';
+
+function lobbyExpandSections(html) {
+  html = String(html === null || html === undefined ? '' : html);
+  if (html.indexOf(LOBBY_TUTORIALS_PLACEHOLDER) < 0) return html;
+  return html.replace(LOBBY_TUTORIALS_PLACEHOLDER, '<div id="lobby-tutorials">' + lobbyTutorialsHtml() + '</div>');
+}
+
+function lobbyTutorial(id) { return lobbyFind(lobbyState.tutorials, 'id', id); }
+
+/// "2026-11-14" from the supervisor's timestamp (seconds), in the player's time zone.
+function lobbyDate(seconds) {
+  var date = new Date(Number(seconds) * 1000);
+  if (!seconds || isNaN(date.getTime())) return '';
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+}
+
+/// The map preview of a tutorial: the catalog image, or the map's generated placeholder.
+function lobbyTutorialPreview(tutorial) {
+  var map = lobbyMap(tutorial.map) || { id: tutorial.map, name: tutorial.map_name || tutorial.map, group: 'station' };
+  return lobbyPreviewHtml({ key: map.id, name: map.name || tutorial.map_name, group: map.group, maps: [map] });
+}
+
+function lobbyTutorialButton(label, onclick, id, kind, title) {
+  return '<button type="button" class="button ' + (kind || '') + '" data-tutorial="' + lobbyEsc(id) + '" onclick="return ' + onclick + '"' +
+    (title ? ' title="' + lobbyEsc(title) + '"' : '') + '>' + lobbyEsc(label) + '</button>';
+}
+
+function lobbyTutorialCard(tutorial, admin) {
+  var pending = tutorial.status === 'pending';
+  var id = tutorial.id;
+  var playing = tutorial.playing === 'running' || tutorial.playing === 'starting';
+  var editing = pending && (tutorial.editing === 'running' || tutorial.editing === 'starting');
+  var html = '<article class="tutorial-card' + (pending ? ' pending' : '') + '">' +
+    '<div class="tutorial-preview">' + lobbyTutorialPreview(tutorial) +
+    '<span class="badge map">' + lobbyEsc(tutorial.map_name || tutorial.map) + '</span>' +
+    (editing ? '<span class="badge review" title="An administrator has an edit world of it open">Being edited</span>'
+      : (pending ? '<span class="badge review">Pending review</span>' : '')) +
+    (playing ? '<span class="badge running">' + (tutorial.playing === 'starting' ? 'Starting' : 'You are playing') + '</span>' : '') +
+    '</div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
+    '<div class="tutorial-meta">by <b>' + lobbyEsc(tutorial.author) + '</b>' +
+    (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
+    (tutorial.description ? '<p class="tutorial-desc">' + lobbyEsc(tutorial.description) + '</p>' : '<p class="tutorial-desc none">No description.</p>') +
+    '<div class="actions">';
+  html += lobbyTutorialButton(playing ? 'Rejoin' : 'Play', 'lobbyPlayTutorial(this)', id, 'primary',
+    playing ? 'Back to your running copy of this tutorial' : 'Start a private copy of this tutorial and join it');
+  if (pending) {
+    html += lobbyTutorialButton('Edit...', 'lobbyOpenTutorial(\'edit\', this)', id, '', editing ? 'An edit world is open: join it' : '');
+    html += lobbyTutorialButton('Accept...', 'lobbyOpenTutorial(\'accept\', this)', id, '');
+    html += lobbyTutorialButton('Reject...', 'lobbyOpenTutorial(\'reject\', this)', id, 'danger push');
+  } else {
+    html += lobbyTutorialButton('Copy to my worlds...', 'lobbyOpenTutorial(\'copy\', this)', id, '');
+    if (admin) html += lobbyTutorialButton('Delete...', 'lobbyOpenTutorial(\'delete\', this)', id, 'danger push');
+  }
+  return html + '</div></div></article>';
+}
+
+function lobbyTutorialSection(title, help, list, empty, admin, extra) {
+  var html = '<section class="tutorial-section" aria-label="' + lobbyEsc(title) + '"><div class="section-head"><h2>' + lobbyEsc(title) + '</h2>' +
+    '<span class="section-count">' + list.length + '</span>' + (extra || '') + '</div><p class="muted">' + lobbyEsc(help) + '</p>';
+  if (!list.length) return html + '<div class="empty">' + lobbyEsc(empty) + '</div></section>';
+  html += '<div class="tutorial-grid">';
+  for (var i = 0; i < list.length; i++) html += lobbyTutorialCard(list[i], admin);
+  return html + '</div></section>';
+}
+
+function lobbyTutorialsHtml() {
+  var tutorials = lobbyState.tutorials || [];
+  var admin = !!lobbyState.admin;
+  var published = [];
+  var pending = [];
+  for (var i = 0; i < tutorials.length; i++) {
+    if (tutorials[i].status === 'published') published.push(tutorials[i]);
+    else if (tutorials[i].status === 'pending' && admin) pending.push(tutorials[i]);
+  }
+  // The review queue reads oldest first; the published list newest first (as listed).
+  pending.sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+  var html = '';
+  if (lobbyState.tutorials_error) html += '<p class="notice" role="alert">' + lobbyEsc(lobbyState.tutorials_error) + '</p>';
+  var publishedHtml = lobbyTutorialSection('Published tutorials',
+    'Play starts a private copy just for you; it is gone when you leave. Copy to my worlds makes it a Creative world of your own to build on.',
+    published, lobbyState.tutorials_error ? 'The tutorials could not be loaded right now.' : LOBBY_TUTORIALS_EMPTY, admin);
+  if (!admin) return html + publishedHtml;
+  var pendingHtml = lobbyTutorialSection('Pending tutorials',
+    'Submitted by players and waiting for review. Play or edit one to check it, then accept or reject it. Only administrators see this.',
+    pending, 'No tutorials are waiting for review.', admin, '<span class="badge">Administrators only</span>');
+  // Tutorials waiting for review come first: they are the admin's to-do list.
+  return html + (pending.length ? pendingHtml + publishedHtml : publishedHtml + pendingHtml);
+}
+
+/// Play: a full-page loading screen, like Join, while the private copy starts.
+function lobbyPlayTutorial(button) {
+  var tutorial = lobbyTutorial(button && button.getAttribute ? button.getAttribute('data-tutorial') : button);
+  if (!tutorial) {
+    lobbyToast('This tutorial is no longer available.', 'error');
+    return false;
+  }
+  if (typeof lobbyPending !== 'undefined' && (lobbyPending || lobbyLost)) return false;
+  var rejoin = tutorial.playing === 'running' || tutorial.playing === 'starting';
+  showLobbyLoading(tutorial.title, rejoin ? 'Back to your tutorial...' : 'Preparing your tutorial...');
+  lobbySend('tutorial_play', { tutorial: tutorial.id });
+  return false;
+}
+
+function lobbyOpenTutorial(action, button) {
+  var tutorial = lobbyTutorial(button && button.getAttribute ? button.getAttribute('data-tutorial') : button);
+  if (!tutorial) {
+    lobbyToast('This tutorial is no longer available.', 'error');
+    return false;
+  }
+  return lobbyOpenModal({ type: 'tutorial', action: action, tutorial: tutorial.id, fields: {} });
+}
+
+var LOBBY_TUTORIAL_REQUESTS = {
+  'copy': ['tutorial_copy', 'Copying...'], 'edit': ['tutorial_edit', 'Starting...'], 'accept': ['tutorial_accept', 'Publishing...'],
+  'reject': ['tutorial_reject', 'Rejecting...'], 'delete': ['tutorial_delete', 'Deleting...']
+};
+
+function lobbyTutorialConfirm() {
+  var modal = lobbyModal;
+  if (!modal || modal.type !== 'tutorial' || modal.busy) return false;
+  var tutorial = lobbyTutorial(modal.tutorial);
+  var request = LOBBY_TUTORIAL_REQUESTS[modal.action];
+  if (!tutorial || !request) return lobbyFail('This tutorial is no longer available.');
+  if (modal.action === 'copy') {
+    var info = lobbyLimitInfo();
+    if (info.totalFull || info.savedFull) return lobbyFail(lobbyCopyLimitText(info));
+  }
+  var payload = { tutorial: tutorial.id };
+  if (modal.action !== 'edit') payload.confirm = 1;
+  return lobbyRequest(request[0], payload, request[1]);
+}
+
+function lobbyCopyLimitText(info) {
+  if (info.totalFull) return 'You have reached your limit of ' + info.maxTotal + ' worlds. Delete a world you no longer need to copy this tutorial.';
+  return 'You already have ' + info.saved + ' of ' + info.maxSaved + ' saved worlds, and a copy is a saved world. Delete one or turn Persistent off on one first.';
+}
+
+function lobbyTutorialHtml(modal) {
+  var tutorial = lobbyTutorial(modal.tutorial) || { title: '', author: '', map_name: '' };
+  var title = '<b>' + lobbyEsc(tutorial.title) + '</b>';
+  var by = ' by <b>' + lobbyEsc(tutorial.author) + '</b>';
+  var map = lobbyEsc(tutorial.map_name || tutorial.map);
+  var summary = '<div class="chosen-map tutorial-summary">' + lobbyTutorialPreview(tutorial) + '<div class="grow"><b>' + lobbyEsc(tutorial.title) +
+    '</b><br><small>by ' + lobbyEsc(tutorial.author) + ' · ' + map + '</small></div></div>';
+  var cancel = { label: 'Cancel', onclick: 'return lobbyClose()', cancel: true, autofocus: true };
+  var action = modal.action;
+  if (action === 'copy') {
+    var info = lobbyLimitInfo();
+    var full = info.totalFull || info.savedFull;
+    return lobbyDialog(modal, {
+      title: 'Copy to my worlds?', body: summary +
+        '<p>This makes a new world of your own from the tutorial: <b>Creative</b>, <b>saved</b> and private, on ' + map +
+        '. It starts where the tutorial starts, and everything you build in it is kept.</p>' +
+        '<p class="muted">The copy counts against your world limits like any saved world. The tutorial itself does not change.</p>' +
+        lobbyLimitsHtml(info) + (full ? '<div class="callout">' + lobbyEsc(lobbyCopyLimitText(info)) + '</div>' : ''),
+      footer: lobbyButtons(modal, [cancel, { label: 'Copy to my worlds', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: full }])
+    });
+  }
+  if (action === 'edit') {
+    var joining = tutorial.editing === 'running' || tutorial.editing === 'starting';
+    return lobbyDialog(modal, {
+      title: joining ? 'Join the edit session?' : 'Edit this tutorial?', body: summary +
+        '<div class="callout info"><p>' + (joining
+          ? 'An administrator is already editing this tutorial. You join their Creative world.'
+          : 'This starts a <b>Creative, unsaved</b> world from the pending copy, owned by you. Other administrators can join it.') +
+        '</p><p>To keep changes, press <b>Save back to pending tutorial</b> in the Creative panel’s Tutorial tab. Only that overwrites the pending copy. ' +
+        'The world is deleted when it stops.</p></div>',
+      footer: lobbyButtons(modal, [cancel, { label: joining ? 'Join edit session' : 'Start editing', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
+    });
+  }
+  if (action === 'accept') {
+    return lobbyDialog(modal, {
+      title: 'Publish this tutorial?', body: summary +
+        '<div class="callout info"><p>' + title + by + ' becomes visible to every player in the Tutorials tab. Players can play it and copy it into their worlds.</p></div>',
+      footer: lobbyButtons(modal, [cancel, { label: 'Accept and publish', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
+    });
+  }
+  var reject = action === 'reject';
+  return lobbyDialog(modal, {
+    title: reject ? 'Reject this tutorial?' : 'Delete this tutorial?', danger: true, body: summary +
+      '<div class="consequence">' + (reject
+        ? '<p>' + title + by + ' is <b>permanently deleted</b>. Its author is not told automatically; let them know on Discord if you want to explain why.</p>'
+        : '<p>' + title + ' disappears from the Tutorials tab for everyone and its files are <b>permanently deleted</b>.</p>' +
+          '<p>Copies players already made stay theirs, and tutorials being played right now finish normally.</p>') +
+      '<p>This cannot be undone.</p></div>',
+    footer: lobbyButtons(modal, [cancel, { label: reject ? 'Reject and delete' : 'Delete permanently', kind: 'danger solid', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
   });
 }

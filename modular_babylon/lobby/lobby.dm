@@ -139,6 +139,8 @@ var/global/list/lobby_config
 	var/responded = 0
 	/// Map preview images already sent to this client with browse_rsc.
 	var/list/sent_previews = list()
+	/// Tutorials from the last list of the Tutorials tab, by id.
+	var/list/tutorial_cards = list()
 
 // BYOND hands a returning player their old mob, so everything tied to the
 // previous client connection (its browser page, a pending action, the poll
@@ -274,12 +276,15 @@ var/global/list/lobby_config
 		render_page(content, revision, complete)
 		return
 	content = "<div class='brand'>BABYLON 13</div><div class='top'><h1>Your station, your next chapter.</h1><button type='button' class='button primary' onclick='return lobbyOpenCreate()'>+ New world</button></div><nav class='tabs' aria-label='World categories'>"
-	var/list/tabs = list("active" = "Active worlds", "mine" = "My worlds", "shared" = "Shared with me", "all" = "Browse worlds")
+	var/list/tabs = list("active" = "Active worlds", "mine" = "My worlds", "shared" = "Shared with me", "all" = "Browse worlds", "tutorials" = "Tutorials")
+	// Admins see how many tutorials wait for their review.
+	var/pending_tutorials = lobby_number(result["pending_tutorials"])
 	for(var/tab in tabs)
 		var/selected = view_filter == tab
-		content += "<a class='[selected ? "active" : ""]' aria-current='[selected ? "page" : "false"]' data-stage='Loading worlds...' onclick='return beginAction(this)' href='?src=\ref[src];action=filter;payload=[lobby_payload(list("filter" = tab))]'>[tabs[tab]]</a>"
+		var/tab_count = tab == "tutorials" && pending_tutorials ? " <span class='tab-count' title='Tutorials waiting for your review'>[pending_tutorials]</span>" : ""
+		content += "<a class='[selected ? "active" : ""]' aria-current='[selected ? "page" : "false"]' data-stage='[tab == "tutorials" ? "Loading tutorials..." : "Loading worlds..."]' onclick='return beginAction(this)' href='?src=\ref[src];action=filter;payload=[lobby_payload(list("filter" = tab))]'>[tabs[tab]][tab_count]</a>"
 	content += "</nav><h2 class='page-heading'>[tabs[view_filter]]</h2>"
-	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these worlds even when the owner is away. On station maps the round itself waits for the owner.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.")
+	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these worlds even when the owner is away. On station maps the round itself waits for the owner.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.", "tutorials" = "Guided tutorials built by players. Play one in a private copy that is gone when you leave, or copy it into your worlds to build on it.")
 	content += "<p class='muted'>[descriptions[view_filter]]</p>"
 	if(result["admin"])
 		content += "<p><span class='badge'>Server administrator</span> <small>Your account can see private worlds, bypass their admission restrictions and the per-owner world limits, and spectate worlds as an invisible ghost without a drone.</small></p>"
@@ -305,11 +310,14 @@ var/global/list/lobby_config
 			maps += list(map)
 		var/rendered = ""
 		var/visible = 0
+		var/list/tutorial_state
 		var/list/states = list("running" = "Online", "stopped" = "Offline", "starting" = "Starting", "stopping" = "Stopping", "error" = "Needs attention")
 		for(var/list/card in result["worlds"])
 			if(!istext(card["id"]))
 				continue
 			cards[card["id"]] = card
+			if(view_filter == "tutorials")
+				continue
 			if(view_filter == "active" && card["state"] == "stopped")
 				continue
 			if(view_filter == "mine" && card["owner"] != ckey)
@@ -318,13 +326,17 @@ var/global/list/lobby_config
 				continue
 			visible++
 			rendered += world_card(card, states)
-		content += "<div class='count'>Showing [visible] world[visible == 1 ? "" : "s"]</div>"
-		if(!visible)
+		if(view_filter == "tutorials")
+			tutorial_state = tutorial_list()
+			// lobby.js draws the tutorial cards from the page state into this placeholder.
+			content += "<div id='lobby-tutorials'></div>"
+		else if(!visible)
+			content += "<div class='count'>Showing 0 worlds</div>"
 			var/list/empty = list("active" = "No worlds are active. Open My worlds or Browse worlds to find a station to start.", "mine" = "You have no worlds yet.", "shared" = "No worlds have been shared with your account yet. Ask an owner to add you as a member.", "all" = "No worlds are available. Create one, or ask an owner for membership.")
 			var/create_button = view_filter == "shared" ? "" : "<p><button type='button' class='button primary' onclick='return lobbyOpenCreate()'>+ Create your first world</button></p>"
 			content += "<div class='empty'>[empty[view_filter]][create_button]</div>"
 		else
-			content += rendered
+			content += "<div class='count'>Showing [visible] world[visible == 1 ? "" : "s"]</div>[rendered]"
 		var/list/limits = result["limits"]
 		if(!islist(limits))
 			limits = list()
@@ -336,6 +348,9 @@ var/global/list/lobby_config
 		var/list/discord = islist(result["discord"]) ? result["discord"] : list()
 		var/list/discord_state = list("link" = discord["link"] ? 1 : 0, "linked" = discord["linked"] ? 1 : 0, "name" = discord["name"], "require_create" = discord["require_create"] ? 1 : 0, "require_join" = discord["require_join"] ? 1 : 0)
 		state = list("ref" = "\ref[src]", "ckey" = ckey, "admin" = result["admin"] ? 1 : 0, "worlds" = result["worlds"], "maps" = maps, "limits" = limits, "player_limit" = player_limit, "discord" = discord_state)
+		if(tutorial_state)
+			state["tutorials"] = tutorial_state["tutorials"]
+			state["tutorials_error"] = tutorial_state["error"]
 	render_page(content, revision, complete, state)
 
 /// One world in the list. Everything from the supervisor is encoded for where it lands:
@@ -578,7 +593,7 @@ var/global/list/lobby_config
 /mob/lobby/proc/handle_action(action, list/payload, request)
 	notice = ""
 	if(action == "filter")
-		if(payload["filter"] in list("active", "mine", "shared", "all"))
+		if(payload["filter"] in list("active", "mine", "shared", "all", "tutorials"))
 			view_filter = payload["filter"]
 		return
 	if(action == "discord_invite")
@@ -618,6 +633,9 @@ var/global/list/lobby_config
 		respond(request, list("ok" = 1))
 		show_loading(clean["name"], "Starting your new world...")
 		join_world(created["id"], clean["name"], list("world" = created["id"]))
+		return
+	if(action in list("tutorial_play", "tutorial_copy", "tutorial_edit", "tutorial_accept", "tutorial_reject", "tutorial_delete"))
+		tutorial_action(action, payload, request)
 		return
 	var/static/regex/world_id = regex(@"^[0-9a-f]{32}$")
 	var/id = payload["world"]
@@ -723,6 +741,73 @@ var/global/list/lobby_config
 				return
 			sleep(10)
 		notice = "Shutdown is still in progress. Check the world status before joining again."
+
+// --- Tutorials ------------------------------------------------------------------------
+// The Tutorials tab: lobby.js draws the cards and dialogs from state["tutorials"]; the actions
+// come back here and go to the supervisor, which checks every permission again.
+
+/// One tutorial from the supervisor with only the fields the page uses; null if it is malformed.
+/proc/lobby_tutorial_item(list/item)
+	var/static/regex/tutorial_id = regex(@"^[A-Za-z0-9_-]{1,64}$")
+	if(!islist(item) || !istext(item["id"]) || !tutorial_id.Find(item["id"]) || !(item["status"] in list("pending", "published")))
+		return null
+	var/list/clean = list("id" = item["id"], "status" = item["status"], "created" = lobby_number(item["created"]))
+	for(var/key in list("title", "description", "author", "map", "map_name"))
+		clean[key] = istext(item[key]) ? item[key] : ""
+	// The state of the player's own run of it, and of an admin edit session.
+	for(var/key in list("playing", "editing"))
+		clean[key] = (item[key] in list("starting", "running", "stopping", "error")) ? item[key] : null
+	return clean
+
+/// The tutorials for the page: list("tutorials" = items) or list("error" = text).
+/mob/lobby/proc/tutorial_list()
+	var/list/result = api("tutorials")
+	tutorial_cards = list()
+	if(result["error"] || !islist(result["tutorials"]))
+		return list("tutorials" = list(), "error" = result["error"] || "The tutorials could not be loaded.")
+	var/list/items = list()
+	for(var/list/item in result["tutorials"])
+		var/list/clean = lobby_tutorial_item(item)
+		if(clean)
+			tutorial_cards[clean["id"]] = clean
+			items += list(clean)
+	return list("tutorials" = items)
+
+/mob/lobby/proc/tutorial_action(action, list/payload, request)
+	var/id = payload["tutorial"]
+	var/list/tutorial = istext(id) ? tutorial_cards[id] : null
+	if(!tutorial)
+		respond(request, list("error" = "This tutorial is no longer available. The list has been refreshed."))
+		return
+	var/title = tutorial["title"]
+	// Copying and the review steps are confirmed in a dialog first; checked here as well.
+	if(action != "tutorial_play" && action != "tutorial_edit" && payload["confirm"] != 1)
+		respond(request, list("error" = "Confirm this first."))
+		return
+	var/list/result = api(action, list("tutorial" = id, "confirm" = 1))
+	if(result["error"])
+		respond(request, list("error" = result["error"]))
+		return
+	if(action == "tutorial_play" || action == "tutorial_edit")
+		var/static/regex/valid_world = regex(@"^[0-9a-f]{32}$")
+		var/world_id = result["world"]
+		if(!istext(world_id) || !valid_world.Find(world_id))
+			respond(request, list("error" = "The tutorial could not be started. Please try again."))
+			return
+		respond(request, list("ok" = 1))
+		var/world_name = istext(result["name"]) ? result["name"] : title
+		show_loading(world_name, action == "tutorial_edit" ? "Starting the edit world from the pending copy..." : "Preparing your tutorial...")
+		join_world(world_id, world_name, list("world" = world_id))
+		return
+	var/list/notices = list(
+		"tutorial_copy" = "[title] was copied to My worlds. Start it there to keep building.",
+		"tutorial_accept" = "[title] is published. Every player can now play it.",
+		"tutorial_reject" = "[title] was rejected and deleted.",
+		"tutorial_delete" = "[title] was deleted.",
+	)
+	if(action == "tutorial_copy")
+		view_filter = "mine"
+	respond(request, list("ok" = 1, "notice" = notices[action]))
 
 /// Asks the supervisor for a ticket until the world runs, then sends the player there.
 /// A dialog's request is answered after the first reply; later problems become the page notice.

@@ -58,7 +58,9 @@ function renderLobby(encoded) {
   // what the player is typing survives every poll.
   if (data.state && typeof lobbyUpdateState === 'function') lobbyUpdateState(data.state);
   var main = document.getElementById('browser-content');
-  if (main.innerHTML !== data.html) main.innerHTML = data.html;
+  // Sections lobby.js draws from the state (the tutorial cards) fill their placeholders here.
+  var html = typeof lobbyExpandSections === 'function' ? lobbyExpandSections(data.html) : data.html;
+  if (main.innerHTML !== html) main.innerHTML = html;
   document.getElementById('action-loading').style.display = 'none';
   main.style.display = 'block';
   lobbyPending = false;
