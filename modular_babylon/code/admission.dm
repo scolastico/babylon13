@@ -25,6 +25,10 @@
 	var/list/result = babylon_supervisor_request(list("action" = "redeem", "ticket" = ticket, "actor" = ckey))
 	if(!result?["ok"] || result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))
 		return FALSE
+	// The redemption blocks; the world may have begun stopping (a round's end) meanwhile. Refused,
+	// the client is sent to the lobby (client_procs.dm) instead of being dropped by the exit.
+	if(GLOB.babylon_save.draining || GLOB.babylon_save.round_ending)
+		return FALSE
 	// Only the authenticated supervisor response can grant a play mode.
 	babylon_showcase_visitor = result["mode"] == "showcase"
 	babylon_admin_spectator = result["mode"] == "spectator" && result["role"] == "admin"

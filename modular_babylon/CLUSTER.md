@@ -503,13 +503,16 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   (`ROUND_END_COUNTDOWN`), at most 60 seconds, then everyone is sent back to the
   lobby and the world stops **without** a save. The supervisor records this as an
   ordinary stop (the world reports `round_ended`; the lobby shows the world as
-  stopping and admits nobody in the meantime). The next start resumes the latest
+  stopping and admits nobody in the meantime). Once station worlds are saved
+  (persistence for station maps is still to come), the next start resumes the latest
   autosave from before the round ended; to start over, reset or roll back the world.
+  Until then a station world starts fresh.
   An administrator's Reboot World ends the world the same way (a reboot would restart
   the run behind the supervisor's back).
-- **Resumed rounds.** A world whose save contains a started round resumes it at once,
-  without roundstart job assignment or antagonist rolls. Returning players get their
-  saved character back; others use the normal late-join menu.
+- **Resumed rounds** (with station persistence, still to come). A world whose save
+  contains a started round resumes it at once, without roundstart job assignment or
+  antagonist rolls. Returning players will get their saved character back once
+  characters are saved; until then everyone uses the normal late-join menu.
 - **Tutorials** (play instances and admin edits) start their round at once. The joining
   player spawns as their preferences character, job Assistant, without antagonists, at
   the tutorial's start.

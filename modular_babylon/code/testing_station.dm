@@ -144,4 +144,8 @@
 	result["inert_storyteller"] = babylon_storyteller_inert() && SSgamemode.storyteller?.type == /datum/storyteller/babylon
 	var/turf/start = babylon_tutorial_start_turf()
 	result["start_turf"] = isturf(start)
+	// A failed setup here is reported (status error) instead of a silent startup timeout.
+	round_setup_failed()
+	result["setup_failure_reported"] = !!boot_error
+	boot_error = null
 	return result

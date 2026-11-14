@@ -62,6 +62,14 @@ class BuildSplitTest(unittest.TestCase):
                 continue
             self.assertIsNone(pattern.search(text), "%s.dm contains SFW logic; move it to sfw.dm" % name)
 
+    def test_title_menu_anchor_still_exists(self):
+        # station_round.dm inserts the round status and Start round button after this exact
+        # markup in Skyrat's title screen; an upstream change would silently drop them.
+        anchor = '<div class="container_nav">'
+        title = (ROOT / "modular_skyrat/modules/title_screen/code/title_screen_html.dm").read_text()
+        self.assertEqual(title.count(anchor), 1)
+        self.assertIn(anchor, (ROOT / CODE / "station_round.dm").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

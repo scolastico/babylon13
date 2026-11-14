@@ -14,6 +14,8 @@
 
 /// Longest wait between the round's end and the return to the lobby.
 #define BABYLON_ROUND_END_DELAY_MAX (60 SECONDS)
+/// Tutorial spawn attempts per player before giving up.
+#define BABYLON_TUTORIAL_SPAWN_TRIES 3
 
 /datum/babylon_save
 	/// "hold" (waits for the owner's Start round), "auto" (tutorial kinds: starts at once) or
@@ -29,6 +31,8 @@
 	var/latejoin_source
 	/// ckeys whose tutorial character is being spawned.
 	var/list/tutorial_spawning = list()
+	/// ckey -> failed tutorial spawn attempts; at BABYLON_TUTORIAL_SPAWN_TRIES the player is told.
+	var/list/tutorial_spawn_failures = list()
 
 /client
 	/// The Start round verb is currently given to this client.
@@ -81,6 +85,11 @@
 /datum/babylon_save/proc/round_setup_failed()
 	SIGNAL_HANDLER
 	if(round_mode != "hold")
+		// Tutorials and resumed rounds are only ready once their round runs: report the failure
+		// (the supervisor shows it) instead of a silent startup timeout.
+		if(!boot_error)
+			boot_error = "The round could not be set up; see the world's log."
+			log_world("Babylon: round setup failed in a [round_mode] world.")
 		return
 	SSticker.start_immediately = FALSE
 	SSticker.SetTimeLeft(-1)
@@ -312,22 +321,48 @@
 	for(var/client/player in GLOB.clients)
 		if(!babylon_ready_client(player))
 			continue
-		player.babylon_update_start_verb()
-		if(round_mode == "auto" && SSticker.current_state == GAME_STATE_PLAYING && istype(player.mob, /mob/dead/new_player) && !player.babylon_showcase_visitor && !player.babylon_admin_spectator && !(player.ckey in tutorial_spawning))
-			INVOKE_ASYNC(src, PROC_REF(spawn_tutorial_player), player)
+		// Each player on their own, as in the session's loop.
+		try
+			player.babylon_update_start_verb()
+			if(wants_tutorial_spawn(player))
+				INVOKE_ASYNC(src, PROC_REF(spawn_tutorial_player), player)
+		catch(var/exception/error)
+			babylon_loop_failed("round control for [player?.ckey]", error)
+
+/datum/babylon_save/proc/wants_tutorial_spawn(client/player)
+	if(round_mode != "auto" || SSticker.current_state != GAME_STATE_PLAYING || !istype(player.mob, /mob/dead/new_player))
+		return FALSE
+	if(player.babylon_showcase_visitor || player.babylon_admin_spectator || (player.ckey in tutorial_spawning))
+		return FALSE
+	return tutorial_spawn_failures[player.ckey] < BABYLON_TUTORIAL_SPAWN_TRIES
 
 /// Tutorial worlds: the player plays their preferences character as an Assistant.
+/// A failed attempt is retried on the next ticks, at most BABYLON_TUTORIAL_SPAWN_TRIES times; then
+/// the player is told and keeps the menu (JOIN GAME still works).
 /datum/babylon_save/proc/spawn_tutorial_player(client/player)
 	var/player_key = player.ckey
 	tutorial_spawning += player_key
-	var/mob/dead/new_player/menu = player.mob
-	if(istype(menu) && menu.AttemptLateSpawn(JOB_ASSISTANT))
-		var/mob/living/character = player?.mob
-		var/turf/start = babylon_tutorial_start_turf()
-		if(isliving(character) && start)
-			character.buckled?.unbuckle_mob(character, TRUE)
-			character.forceMove(start)
+	var/spawned = FALSE
+	try
+		var/mob/dead/new_player/menu = player.mob
+		if(istype(menu) && menu.AttemptLateSpawn(JOB_ASSISTANT))
+			spawned = TRUE
+			var/mob/living/character = player?.mob
+			var/turf/start = babylon_tutorial_start_turf()
+			if(isliving(character) && start)
+				character.buckled?.unbuckle_mob(character, TRUE)
+				character.forceMove(start)
+	catch(var/exception/error)
+		log_world("Babylon: spawning [player_key] in the tutorial failed: [error] ([error?.file]:[error?.line])")
 	tutorial_spawning -= player_key
+	if(spawned)
+		tutorial_spawn_failures -= player_key
+		return
+	tutorial_spawn_failures[player_key] = tutorial_spawn_failures[player_key] + 1
+	if(tutorial_spawn_failures[player_key] >= BABYLON_TUTORIAL_SPAWN_TRIES)
+		log_world("Babylon: gave up spawning [player_key] in the tutorial after [BABYLON_TUTORIAL_SPAWN_TRIES] attempts.")
+		if(player)
+			to_chat(player, span_warning("Your tutorial character could not be created. Try JOIN GAME in the menu, or return to the lobby."))
 
 // --- Round end -----------------------------------------------------------------------------
 
@@ -390,3 +425,4 @@
 
 #undef BABYLON_TITLE_STYLE
 #undef BABYLON_ROUND_END_DELAY_MAX
+#undef BABYLON_TUTORIAL_SPAWN_TRIES
