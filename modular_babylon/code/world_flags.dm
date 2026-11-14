@@ -122,6 +122,20 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /datum/babylon_world/proc/stop_saves()
 	return saves()
 
+/// The round starts by itself as soon as the world is up, with no owner hold (station_round.dm):
+/// tutorial instances.
+/datum/babylon_world/proc/round_starts_at_once()
+	return is_tutorial()
+
+/// A player who joins is put into the tutorial's flow (station_round.dm): play instances. Admins
+/// editing a tutorial test-run it themselves.
+/datum/babylon_world/proc/plays_tutorial_on_join()
+	return kind == "tutorial"
+
+/// The stop message says the world is a tutorial, which is never saved (admission.dm).
+/datum/babylon_world/proc/unsaved_as_tutorial()
+	return is_tutorial()
+
 // Global shorthands of the policy table, safe before GLOB.babylon_world exists.
 
 /proc/babylon_creative_enabled()

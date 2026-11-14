@@ -157,6 +157,14 @@ class WorldPolicy(unittest.TestCase):
         self.assertTrue(world_policy("station", 0, 0, "tutorial_edit", "metastation")["can_save_back_tutorial"])
         self.assertFalse(world_policy("station", 1, 1, "tutorial", "metastation")["saves"])
 
+    def test_no_world_type_decision_outside_the_table(self):
+        # Other modules ask the table; they do not test the kind or the map group themselves.
+        pattern = re.compile(r'is_tutorial\(\)|is_creative_plane\(\)|\bkind\s*[!=]=\s*"')
+        for path, text in dm_sources().items():
+            if path.name == "world_flags.dm" or path.name.startswith("testing"):
+                continue
+            self.assertEqual(pattern.findall(text), [], path.name)
+
     def test_world_type_rules_live_in_world_flags(self):
         # The rules are defined once, in world_flags.dm; other modules only call them.
         for path, text in dm_sources().items():

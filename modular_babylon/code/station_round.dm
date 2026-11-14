@@ -74,7 +74,7 @@
 
 /// Called from SSbabylon_station.Initialize, before the world reports ready.
 /datum/babylon_save/proc/setup_round_control()
-	round_mode = babylon_choose_round_mode(GLOB.babylon_world.is_tutorial(), babylon_state_round_started(saved_state()))
+	round_mode = babylon_choose_round_mode(GLOB.babylon_world.round_starts_at_once(), babylon_state_round_started(saved_state()))
 	if(round_mode == "hold")
 		// The master sets timeLeft from start_at once initialization ends: no countdown at all.
 		SSticker.SetTimeLeft(-1)
@@ -473,7 +473,7 @@
 				character.buckled?.unbuckle_mob(character, TRUE)
 				character.forceMove(start)
 			// Play instances run the tutorial for the player; admins editing one test-run it.
-			if(isliving(character) && GLOB.babylon_world.kind == "tutorial")
+			if(isliving(character) && GLOB.babylon_world.plays_tutorial_on_join())
 				babylon_tutorial_begin(character)
 	catch(var/exception/error)
 		log_world("Babylon: spawning [player_key] in the tutorial failed: [error] ([error?.file]:[error?.line])")

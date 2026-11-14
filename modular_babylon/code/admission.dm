@@ -49,7 +49,7 @@
 /proc/babylon_stop_message(saves)
 	if(saves)
 		return "This world is stopping. Saving progress and returning players to the lobby."
-	if(GLOB.babylon_world?.is_tutorial())
+	if(GLOB.babylon_world?.unsaved_as_tutorial())
 		return "This tutorial is stopping; tutorial worlds are not saved. Returning you to the lobby."
 	return "This world is stopping without a save (saving is off for this world). Returning you to the lobby."
 

@@ -28,6 +28,9 @@ def world_policy(build, persistent, creative, kind, map_id):
         "storyteller_inert": build == "babylon" or tutorial or plane,
         "saves": saves,
         "stop_saves": saves,
+        "round_starts_at_once": tutorial,
+        "plays_tutorial_on_join": kind == "tutorial",
+        "unsaved_as_tutorial": tutorial,
     }
 
 
