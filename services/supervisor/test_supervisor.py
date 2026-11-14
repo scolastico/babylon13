@@ -28,6 +28,10 @@ class FakeDriver:
         return dict(world=r["world"], run=r["id"], players=r["players"], ready=r["ready"],
                     draining=r.get("draining", False))
 
+    def kill(self, run):
+        self.killed = getattr(self, "killed", []) + [run["id"]]
+        self.runs.pop(run["id"], None)
+
     def stop(self, run):
         if self.fail_save:
             return {"error": "disk full"}

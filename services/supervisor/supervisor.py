@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import subprocess
 import threading
@@ -401,6 +402,17 @@ class Driver:
 
     def status(self, run):
         return topic(run["port"], run["secret"], "status")
+
+    def kill(self, run):
+        """Ends a child's process at once, without a save (a tutorial instance stuck in error)."""
+        process = self.processes.pop(run["id"], None)
+        if process:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=30)
+            return
+        if run["pid"] and self.alive(run):
+            os.kill(run["pid"], getattr(signal, "SIGKILL", signal.SIGTERM))
 
     def stop(self, run):
         # The final save of a station world (every level) can take minutes.
@@ -1545,6 +1557,13 @@ class Supervisor:
                         with self.lock, self.db:
                             self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
                         log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
+                    elif run["state"] == "error":
+                        # It does not answer, so nobody can be playing in it.
+                        empty = run["empty_since"] or self.clock()
+                        if not run["empty_since"]:
+                            with self.lock, self.db:
+                                self.db.execute("UPDATE runs SET empty_since=? WHERE id=?", (empty, run["id"]))
+                        self.reclaim_errored_instance(run, empty)
                     continue
                 self.on_run_exited(run)
                 continue
@@ -1592,6 +1611,28 @@ class Supervisor:
                     self.maintain_checkpoints(run["world"], expected=status["last_save"])
                 if state == "running" and empty and self.clock() - empty >= self.config["empty_grace_seconds"]:
                     self.begin_stop(current)
+            if state == "error" and empty:
+                self.reclaim_errored_instance(run, empty)
+
+    def reclaim_errored_instance(self, run, empty_since):
+        """A tutorial instance (play or edit) in error that stayed empty for empty_grace_seconds is
+        killed and deleted (on_run_exited): it is throwaway, and kept it would hold its port, count
+        against the running-world limits and block its player from playing anything. Ordinary
+        worlds in error keep their process for inspection."""
+        if self.clock() - empty_since < self.config["empty_grace_seconds"]:
+            return
+        with self.lock:
+            world = self.row("SELECT kind FROM worlds WHERE id=?", (run["world"],))
+            current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
+        if not world or world["kind"] not in TUTORIAL_KINDS or not current or current["state"] != "error":
+            return
+        log("%s stayed in error with nobody in it; ending the tutorial instance" % self.describe(run["world"]))
+        try:
+            self.driver.kill(current)
+        except Exception as error:
+            log("Ending %s failed: %s" % (self.describe(run["world"]), error))
+            return
+        self.on_run_exited(current)
 
 
 def load_config(path):

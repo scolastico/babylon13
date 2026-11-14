@@ -736,6 +736,9 @@ preview, title, author and description:
   towards the running-world limits but not towards the world limits, and it is
   deleted as soon as it stops. A player has one tutorial at a time: Play on the same
   tutorial rejoins the running copy, another tutorial waits until that one has ended.
+  A copy that runs into an error (a failed start, a crash report) and stays empty for
+  `empty_grace_seconds` is ended and deleted by the supervisor; ordinary worlds in error
+  keep their process for inspection.
 - **Copy to my worlds** creates a new **Creative, saved** world of the player's own
   whose first checkpoint is the tutorial. It counts against the world limits like any
   saved world.

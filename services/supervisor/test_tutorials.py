@@ -534,6 +534,60 @@ class Robustness(TutorialFixture):
         self.assertEqual(set((self.data / "worlds").iterdir()), worlds)
         self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE owner='player'"))
 
+    def test_an_empty_instance_in_error_is_ended(self):
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.s.tick()
+        run = self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+        # It reports an error (its process is retained for ordinary worlds) and nobody is in it.
+        self.driver.runs[run["id"]]["error"] = "boom"
+        status = self.driver.status
+        self.driver.status = lambda r: dict(status(r), error=self.driver.runs[r["id"]].get("error"))
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs WHERE world=?", (world,))["state"], "error")
+        self.now += self.config["empty_grace_seconds"] - 1
+        self.s.tick()
+        self.assertTrue(self.s.row("SELECT * FROM runs WHERE world=?", (world,)))
+        self.now += 2
+        self.s.tick()
+        self.assertEqual(self.driver.killed, [run["id"]])
+        self.assertIsNone(self.s.row("SELECT * FROM runs WHERE world=?", (world,)))
+        self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE id=?", (world,)))
+        # The player can play again.
+        self.assertTrue(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["ok"])
+
+    def test_an_instance_that_never_answered_is_ended(self):
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        run = self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+        # Startup timed out: the process lives but never answers a status request.
+        self.s.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
+        self.s.db.commit()
+        status = self.driver.status
+
+        def silent(r):
+            if r["id"] == run["id"]:
+                raise OSError("no answer")
+            return status(r)
+        self.driver.status = silent
+        self.s.tick()
+        self.assertTrue(self.s.row("SELECT * FROM runs WHERE world=?", (world,)))
+        self.now += self.config["empty_grace_seconds"]
+        self.s.tick()
+        self.assertEqual(self.driver.killed, [run["id"]])
+        self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE id=?", (world,)))
+
+    def test_an_ordinary_world_in_error_keeps_its_process(self):
+        world, run = self.creative_run()
+        self.driver.runs[run["id"]]["error"] = "boom"
+        status = self.driver.status
+        self.driver.status = lambda r: dict(status(r), error=self.driver.runs[r["id"]].get("error"))
+        self.s.tick()
+        self.now += self.config["empty_grace_seconds"] * 10
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs WHERE world=?", (world,))["state"], "error")
+        self.assertFalse(getattr(self.driver, "killed", []))
+
     def test_a_broken_play_instance_is_explained(self):
         tid = self.published()
         world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
