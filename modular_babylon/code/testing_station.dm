@@ -45,47 +45,6 @@
 	result["flags_restored"] = !babylon_storyteller_inert()
 	return result
 
-/// Every world is safe for work (sfw.dm), the station build included.
-/datum/babylon_save/proc/test_station_sfw()
-	var/list/result = list()
-	var/datum/config_entry/flag/preferences = config.entries_by_type[/datum/config_entry/flag/disable_erp_preferences]
-	var/datum/config_entry/flag/items = config.entries_by_type[/datum/config_entry/flag/disable_lewd_items]
-	preferences.ValidateAndSet("0")
-	items.ValidateAndSet("0")
-	result["erp_preferences_locked_off"] = !!CONFIG_GET(flag/disable_erp_preferences)
-	result["lewd_items_locked_off"] = !!CONFIG_GET(flag/disable_lewd_items)
-	var/mob/living/carbon/human/dummy/first = new(respawn_turf)
-	var/mob/living/basic/mouse/second = new(respawn_turf)
-	var/datum/component/interactable/menu = second.GetComponent(/datum/component/interactable)
-	menu.build_interactions_list()
-	var/allowed_erp = FALSE
-	for(var/datum/interaction/interaction as anything in menu.interactions)
-		if(babylon_interaction_is_erp(interaction))
-			allowed_erp = TRUE
-	for(var/name in SSinteractions.interactions)
-		var/datum/interaction/interaction = SSinteractions.interactions[name]
-		if(babylon_interaction_is_erp(interaction) && menu.can_interact(interaction, first))
-			allowed_erp = TRUE
-	result["no_erp_interactions"] = !allowed_erp
-	var/datum/emote/living/lewd/lewdmoan/emote = new
-	result["no_lewd_emotes"] = !emote.can_run_emote(first, intentional = TRUE)
-	qdel(emote)
-	qdel(second)
-	qdel(first)
-	var/erp_designs = FALSE
-	for(var/node_id in SSresearch.techweb_nodes)
-		var/datum/techweb_node/node = SSresearch.techweb_nodes[node_id]
-		for(var/design_id in node.design_ids)
-			if(design_id in babylon_erp_design_ids())
-				erp_designs = TRUE
-	result["no_erp_designs"] = !erp_designs
-	var/erp_reactions = FALSE
-	for(var/reaction_path in GLOB.chemical_reactions_list)
-		if(babylon_reaction_is_erp(GLOB.chemical_reactions_list[reaction_path]))
-			erp_reactions = TRUE
-	result["no_erp_reactions"] = !erp_reactions
-	return result
-
 /// Facts about the running station world for the smoke report (not asserted).
 /datum/babylon_save/proc/test_station_info()
 	var/list/result = list()

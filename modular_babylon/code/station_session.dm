@@ -21,6 +21,8 @@ SUBSYSTEM_DEF(babylon_station)
 	// Babylon owns this policy, including ghosts and administrators.
 	CONFIG_SET(flag/kick_inactive, FALSE)
 	session.station_z = SSmapping.levels_by_trait(ZTRAIT_STATION)[1]
+	// Before the world reports ready: an admitted visitor or spectator appears here at once.
+	session.respawn_turf = session.station_spawn_turf()
 	// No vote: the round starts with the world's fixed storyteller (storyteller.dm).
 	SSgamemode.voted_storyteller = babylon_world_storyteller()
 	// Nothing to restore yet; the master controller may start the simulation.
@@ -33,7 +35,6 @@ SUBSYSTEM_DEF(babylon_station)
 		if(boot_error)
 			return
 		sleep(1 SECONDS)
-	respawn_turf = station_spawn_turf()
 	ready = TRUE
 	// One runtime error must not end this loop for the rest of the run.
 	while(TRUE)

@@ -123,6 +123,10 @@ world ports, internal API port, admin CSV, global/per-owner world limits,
 player limits, retained checkpoints, unused-world expiry, admission lifetime,
 empty grace and startup/shutdown timeouts. World port mappings must use the
 same host/container numbers because those ports are advertised to clients.
+Worlds on station maps (normal tg rounds, several z-levels) boot much longer than
+Babylon worlds (about 1.5 to 3 minutes measured); they use
+`BABYLON_STATION_STARTUP_TIMEOUT_SECONDS` (default 600) instead of
+`BABYLON_STARTUP_TIMEOUT_SECONDS` (default 300), whichever is larger.
 For an advanced custom SPLURT config, mount a directory read-only and set
 `BABYLON_CONFIG_DIRECTORY` to its container path; it must contain `config.txt`
 including `comms.txt`. The supervisor generates each child's control key.

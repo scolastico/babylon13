@@ -344,6 +344,15 @@ class WorldTypes(unittest.TestCase):
     def make(self, owner="owner", **data):
         return self.s.dispatch(owner, "create", dict(name="World", **data))["id"]
 
+    def test_station_worlds_get_the_longer_startup_timeout(self):
+        self.assertEqual(self.s.config["station_startup_timeout_seconds"], 600)
+        babylon, station = self.make(), self.make(map="metastation")
+        self.assertEqual(self.s.startup_timeout(dict(world=babylon)), 300)
+        self.assertEqual(self.s.startup_timeout(dict(world=station)), 600)
+        # A longer general timeout is never shortened for station maps.
+        self.s.config["startup_timeout_seconds"] = 900
+        self.assertEqual(self.s.startup_timeout(dict(world=station)), 900)
+
     def test_migration_defaults_babylon(self):
         import sqlite3
         self.s.db.close()

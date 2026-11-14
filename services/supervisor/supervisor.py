@@ -93,6 +93,8 @@ def world_flag(value, name):
 
 
 # Shipped with the repository; used when the configuration names no catalog.
+# Station-build worlds boot a full tg round (several z-levels); measured 77-167 s.
+STATION_STARTUP_TIMEOUT_SECONDS = 600
 DEFAULT_CATALOG = Path(__file__).resolve().parents[2] / "_maps/babylon/catalog.json"
 
 
@@ -360,6 +362,7 @@ class Supervisor:
     def __init__(self, config, driver=None, clock=time.time):
         self.config = config
         config.setdefault("max_total_worlds_per_player", 20)
+        config.setdefault("station_startup_timeout_seconds", STATION_STARTUP_TIMEOUT_SECONDS)
         self.clock = clock
         self.lock = threading.RLock()
         self.deletion_lock = threading.Lock()
@@ -1039,6 +1042,16 @@ class Supervisor:
                     self.stop_workers.discard(run["id"])
         threading.Thread(target=stop, daemon=True).start()
 
+    def startup_timeout(self, run):
+        """Seconds a starting child may take: station maps (tg rounds, several levels) load far longer."""
+        with self.lock:
+            world = self.row("SELECT * FROM worlds WHERE id=?", (run["world"],))
+        entry = self.catalog.get(world["map"]) if world is not None else None
+        station = bool(entry) and entry.get("build") == "station"
+        if station:
+            return max(self.config["startup_timeout_seconds"], self.config["station_startup_timeout_seconds"])
+        return self.config["startup_timeout_seconds"]
+
     def tick(self):
         self.cleanup_unused_worlds()
         # Never hold the DB lock during network requests: a child may be redeeming a ticket.
@@ -1051,10 +1064,11 @@ class Supervisor:
                     raise Denied("Child identity mismatch")
             except Exception:
                 if self.driver.alive(run) or not run["pid"]:
-                    if self.clock() - run["started"] > self.config["startup_timeout_seconds"] and run["state"] == "starting":
+                    timeout = self.startup_timeout(run)
+                    if self.clock() - run["started"] > timeout and run["state"] == "starting":
                         with self.lock, self.db:
                             self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
-                        log("%s did not start within %ss; process retained" % (self.describe(run["world"]), self.config["startup_timeout_seconds"]))
+                        log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
                     continue
                 log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
                 with self.lock, self.db:
@@ -1100,6 +1114,7 @@ def load_config(path):
     config.setdefault("delete_unused_worlds_after_days", 60)
     config.setdefault("afk_timeout_seconds", 900)
     config.setdefault("max_total_worlds_per_player", 20)
+    config.setdefault("station_startup_timeout_seconds", STATION_STARTUP_TIMEOUT_SECONDS)
     if type(config["max_total_worlds_per_player"]) is not int or config["max_total_worlds_per_player"] < 1:
         raise ValueError("max_total_worlds_per_player must be a positive integer")
     if type(config["afk_timeout_seconds"]) is not int or config["afk_timeout_seconds"] < 0:
@@ -1112,7 +1127,8 @@ def load_config(path):
         raise ValueError("Set a random lobby_secret of at least 32 characters")
     for key in ("listen_port", "port_first", "port_last", "max_running_worlds", "max_players_per_world",
                 "max_worlds_per_player", "max_running_worlds_per_player", "empty_grace_seconds",
-                "startup_timeout_seconds", "ticket_lifetime_seconds", "kept_save_points_per_world"):
+                "startup_timeout_seconds", "station_startup_timeout_seconds", "ticket_lifetime_seconds",
+                "kept_save_points_per_world"):
         if type(config.get(key)) is not int or config[key] < 1:
             raise ValueError(f"{key} must be a positive integer")
     if config["port_last"] < config["port_first"] or config["port_last"] > 65535:

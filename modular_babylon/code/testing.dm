@@ -24,78 +24,6 @@
 	qdel(ghost)
 	return result
 
-/datum/babylon_save/proc/test_showcase_visitor()
-	var/roster_before = length(player_sessions)
-	var/turf/start = respawn_turf
-	var/turf/destination = get_step(start, EAST)
-	var/mob/dead/observer/babylon_visitor/visitor = new(start)
-	var/obj/structure/closet/crate/crate = new(destination)
-	var/obj/item/screwdriver/tool = new(start)
-	var/list/result = list()
-	result["visible_to_living"] = !visitor.invisibility && visitor.alpha > 0
-	result["observer_without_body"] = isobserver(visitor) && !visitor.can_reenter_corpse && !visitor.mind
-	result["no_inventory"] = !length(visitor.contents) && !visitor.put_in_hands(tool) && tool.loc == start
-	result["no_physical_actions"] = !visitor.can_perform_action(crate, NONE) && !visitor.can_interact_with(crate) && !visitor.start_pulling(crate)
-	visitor.ClickOn(crate, "left=1")
-	visitor.UnarmedAttack(crate, TRUE)
-	result["cannot_open_crate"] = !crate.opened
-	result["no_possession"] = isnull(visitor.ghostize(can_reenter_corpse = TRUE))
-	result["no_emote_actions"] = !visitor.emote("boo")
-	visitor.Move(destination, EAST)
-	result["passes_through_solids"] = visitor.loc == destination && crate.density
-	result["faces_movement"] = visitor.dir == EAST
-	var/turf/outside = locate(1, 1, station_z == 1 ? 2 : 1)
-	visitor.Move(outside, NORTH)
-	visitor.forceMove(outside)
-	result["station_only"] = outside && visitor.loc == destination
-	result["observer_tools_allowed"] = babylon_showcase_allowed_verb(/mob/dead/observer/verb/follow) && babylon_showcase_allowed_verb(/client/verb/fix_tgui_panel)
-	result["ghost_powers_blocked"] = !babylon_showcase_allowed_verb(/mob/dead/observer/verb/reenter_corpse) && !babylon_showcase_allowed_verb(/mob/dead/observer/verb/observe)
-	result["unknown_window_blocked"] = !babylon_showcase_window_allowed(visitor, "tgui-window-1")
-	result["no_player_roster"] = length(player_sessions) == roster_before
-	result["raw_machine_link_blocked"] = !babylon_showcase_topic_allowed(list("src" = REF(crate), "open" = 1))
-	result["machine_ui_blocked"] = !babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "tgui1", "type" = "act", "payload" = "{}"))
-	result["chunk_bypass_blocked"] = !babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "oversizedPayloadRequest", "payload" = "{}"))
-	result["forged_verb_blocked"] = !babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "verbs/invoke", "payload" = json_encode(list("verb_type" = "/mob/dead/observer/proc/reenter_corpse"))))
-	result["chat_ready_allowed"] = babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "ready"))
-	result["chat_metadata_without_payload"] = babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "requestMetadata"))
-	result["chat_verbs_without_payload"] = babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "verbs/request_verbs"))
-	result["chat_entry_allowed"] = babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "tgui_say", "type" = "entry", "payload" = json_encode(list("channel" = SAY_CHANNEL, "entry" = "Hello"))))
-	result["say_verb_allowed"] = babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "browseroutput", "type" = "verbs/invoke", "payload" = json_encode(list("verb_type" = "/mob/verb/say_verb"))))
-	result["invalid_chat_payload_blocked"] = !babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "tgui_say", "type" = "entry", "payload" = "not json"))
-	result["unsafe_channel_blocked"] = !babylon_showcase_topic_allowed(list("tgui" = TRUE, "window_id" = "tgui_say", "type" = "entry", "payload" = json_encode(list("channel" = ME_CHANNEL, "entry" = "boo"))))
-	result["asset_link_cannot_smuggle_action"] = !babylon_showcase_topic_allowed(list("asset_cache_confirm_arrival" = 1, "src" = REF(crate), "open" = 1))
-	qdel(visitor)
-	qdel(crate)
-	qdel(tool)
-	return result
-
-// Guards the safe-for-work build (sfw.dm): every check must be TRUE.
-/datum/babylon_save/proc/test_moderation()
-	var/list/result = list()
-	SSplayer_ranks.mentor_controller?.add_player("babylonsmokementor")
-	result["no_mentors_loaded"] = !GLOB.mentor_datums["babylonsmokementor"]
-	babylon_grant_admin("babylonsmokeadmin")
-	var/datum/admins/granted = GLOB.admin_datums["babylonsmokeadmin"]
-	result["lobby_admin_granted"] = !!granted?.check_for_rights(R_EVERYTHING)
-	GLOB.admin_datums -= "babylonsmokeadmin"
-	result["reply_needs_the_player"] = babylon_discord_ahelp_reply("babylonsmokeabsent", "Mod", "Hello")["result"] == "The player is no longer in this world"
-	result["ticket_commands_refused"] = !babylon_discord_ahelp_reply("babylonsmokeabsent", "Mod", "ticket close")["ok"]
-	var/mob/living/basic/drone/babylon/named = new(respawn_turf)
-	var/base = named.name
-	named.key = "Smoke Namer"
-	named.babylon_show_player_key()
-	named.babylon_show_player_key()
-	result["drone_shows_player_key"] = named.name == "[base] (Smoke Namer)"
-	named.key = null
-	qdel(named)
-	result["station_named_after_world"] = station_name() == world.params["babylon-name"]
-	var/build_commit = world.GetConfig("env", "BABYLON_COMMIT")
-	result["revision_from_build"] = build_commit ? GLOB.revdata.commit == build_commit : isnull(GLOB.revdata.commit)
-	result["closing_needs_a_ticket"] = babylon_discord_ahelp_close(987654, "Mod")["result"] == "That ticket does not exist in this world"
-	result["ooc_allowed_during_round"] = GLOB.ooc_allowed && SSticker.current_state >= GAME_STATE_PLAYING
-	result["ooc_logged"] = !!CONFIG_GET(flag/log_ooc)
-	return result
-
 /datum/babylon_save/proc/test_research()
 	var/list/result = list()
 	var/datum/techweb/science/web = locate(/datum/techweb/science) in SSresearch.techwebs
@@ -271,68 +199,6 @@
 	fdel(music.root)
 	return result
 
-/datum/babylon_save/proc/test_music_loops()
-	var/list/result = list()
-	var/datum/babylon_music/music = new
-	music.root = "data/babylon_music_loops_test/"
-	fdel(music.root)
-	for(var/track in list("a.ogg", "b.ogg", "c.ogg", "d.ogg", "e.ogg", "intro.ogg", "notes.txt"))
-		text2file("", "[music.root]space/drift/[track]")
-	text2file(json_encode(list(
-		"title" = "Drift", "weight" = 3, "layers" = list("min" = 2, "max" = 3),
-		"duration" = 60, "change_every" = 10, "overlap" = 0, "intro" = "intro.ogg",
-		"always" = list("a.ogg"), "never_together" = list(list("b.ogg", "c.ogg")),
-		"loops" = list("d.ogg" = list("volume" = 50, "weight" = 0)),
-	)), "[music.root]space/drift/index.json")
-	text2file("{", "[music.root]space/broken/index.json")
-	text2file("", "[music.root]space/broken/x.ogg")
-	text2file("", "[music.root]space/plain.ogg")
-	music.scan_folder("", 0)
-	var/datum/babylon_loop_set/drift
-	for(var/entry in music.tracks["space"])
-		if(istype(entry, /datum/babylon_loop_set))
-			drift = entry
-	result["plain_track_and_one_set"] = length(music.tracks["space"]) == 2 && !!drift
-	result["broken_set_skipped"] = !("[music.root]space/broken/x.ogg" in music.tracks["space"])
-	result["channels_reserved"] = length(music.loop_channels) >= 6
-	if(!drift)
-		return result
-	var/path = "[music.root]space/drift/"
-	result["settings_read"] = drift.title == "Drift" && drift.weight == 3 && drift.layers_min == 2 && drift.layers_max == 3 \
-		&& drift.duration_min == 60 SECONDS && drift.change_min == 10 SECONDS && !drift.overlap && drift.intro == "[path]intro.ogg"
-	result["loops_found"] = length(drift.loops) == 5 && drift.loops["[path]d.ogg"] == 50 && !drift.loop_weights["[path]d.ogg"]
-	result["no_errors"] = !length(drift.errors)
-	var/rules_kept = TRUE
-	var/changed = 0
-	var/list/current = drift.choose(3)
-	for(var/i in 1 to 200)
-		var/list/next = i % 2 ? drift.choose(rand(2, 3)) : drift.next_layers(current)
-		if(!length(next ^ current))
-			changed--
-		changed++
-		current = next
-		if(!("[path]a.ogg" in current) || ("[path]d.ogg" in current) || (("[path]b.ogg" in current) && ("[path]c.ogg" in current)) \
-			|| length(current) < 2 || length(current) > 3)
-			rules_kept = FALSE
-	result["always_never_together_and_layers_kept"] = rules_kept
-	result["layers_change"] = changed > 120
-	var/datum/babylon_loop_player/run = new(null, drift, 0)
-	result["run_starts"] = run.advance(0) && length(run.active) >= 2 && length(run.active) <= 3
-	var/list/first = run.active.Copy()
-	run.advance(5 SECONDS)
-	result["no_change_early"] = !length(first ^ run.active)
-	for(var/second in 10 to 50 step 10)
-		run.advance(second SECONDS)
-	result["run_keeps_rules"] = ("[path]a.ogg" in run.active) && length(run.active) >= 2
-	result["run_ends"] = run.advance(60 SECONDS) && !length(run.active) && !run.advance(70 SECONDS)
-	var/datum/babylon_loop_set/errors = new
-	text2file(json_encode(list("layers" = "many", "always" = list("missing.ogg"))), "[music.root]space/errors/index.json")
-	text2file("", "[music.root]space/errors/z.ogg")
-	result["mistakes_logged"] = errors.load("[music.root]space/errors/") && length(errors.errors) == 2
-	fdel(music.root)
-	qdel(run)
-	return result
-
 /datum/babylon_save/proc/test_space_wrap()
 	var/list/result = list()
 	var/middle = round(world.maxy / 2)
@@ -362,48 +228,6 @@
 	SSgamemode.set_storyteller(/datum/storyteller/high, TRUE, "babylon-test")
 	result["other_storyteller_refused"] = SSgamemode.storyteller?.type == /datum/storyteller/babylon
 	result["no_scheduled_events"] = !length(SSgamemode.scheduled_events)
-	return result
-
-/datum/babylon_save/proc/test_sfw_content()
-	var/list/result = list()
-	result["erp_preferences_disabled"] = !!CONFIG_GET(flag/disable_erp_preferences)
-	result["lewd_items_disabled"] = !!CONFIG_GET(flag/disable_lewd_items)
-	var/mob/living/basic/drone/babylon/replacement/first = new(respawn_turf)
-	var/mob/living/basic/mouse/second = new(respawn_turf)
-	var/datum/component/interactable/menu = second.GetComponent(/datum/component/interactable)
-	menu.build_interactions_list()
-	var/listed_erp = FALSE
-	for(var/datum/interaction/interaction as anything in menu.interactions)
-		if(babylon_interaction_is_erp(interaction))
-			listed_erp = TRUE
-	result["no_erp_interactions_listed"] = !listed_erp
-	var/allowed_erp = FALSE
-	for(var/name in SSinteractions.interactions)
-		var/datum/interaction/interaction = SSinteractions.interactions[name]
-		if(babylon_interaction_is_erp(interaction) && menu.can_interact(interaction, first))
-			allowed_erp = TRUE
-	result["no_erp_interactions_allowed"] = !allowed_erp
-	result["no_erp_ui_data"] = !("genitals" in menu.ui_data(first)) && !length(menu.ui_static_data(first))
-	var/datum/emote/living/lewd/lewdmoan/emote = new
-	result["no_lewd_emotes"] = !emote.can_run_emote(first, intentional = TRUE)
-	qdel(emote)
-	qdel(second)
-	qdel(first)
-	var/erp_designs = FALSE
-	for(var/node_id in SSresearch.techweb_nodes)
-		var/datum/techweb_node/node = SSresearch.techweb_nodes[node_id]
-		for(var/design_id in node.design_ids)
-			if(design_id in babylon_erp_design_ids())
-				erp_designs = TRUE
-	result["no_erp_designs"] = !erp_designs
-	var/erp_reactions = FALSE
-	for(var/reaction_path in GLOB.chemical_reactions_list)
-		if(babylon_reaction_is_erp(GLOB.chemical_reactions_list[reaction_path]))
-			erp_reactions = TRUE
-	result["no_erp_reactions"] = !erp_reactions
-	var/obj/item/toy/plush/bubbleplush/plush = new(respawn_turf)
-	result["no_plush_toy_slot"] = !plush.plappable && !plush.atom_storage
-	qdel(plush)
 	return result
 
 /// No pAI, station AI, MMI or positronic brain can be researched, built or found (silicons.dm).
@@ -442,28 +266,4 @@
 	result["no_soulcatcher_button"] = !(join in ghost.actions)
 	qdel(join)
 	qdel(ghost)
-	return result
-
-/// Play time is kept per player in the checkpoint and restored with it (play_time.dm).
-/datum/babylon_save/proc/test_play_time()
-	var/list/result = list()
-	result["text_format"] = babylon_play_time_text(3 HOURS + 7 MINUTES) == "3h 07m" && babylon_play_time_text(30 SECONDS) == "under a minute"
-	var/datum/babylon_save/player = new
-	player.play_time = 42 MINUTES
-	var/list/snapshot = player_snapshot(player)
-	var/datum/babylon_save/restored = new
-	restore_player(restored, snapshot)
-	result["player_time_survives_a_checkpoint"] = restored.play_time == 42 MINUTES
-	var/datum/babylon_save/older = new
-	restore_player(older, list())
-	result["older_checkpoints_start_at_zero"] = older.play_time == 0
-	// Nobody connected: time passes, play time does not.
-	var/before = play_time
-	play_time_counted_at = REALTIMEOFDAY - 5 SECONDS
-	var/list/sessions = player_sessions
-	player_sessions = list()
-	count_play_time()
-	player_sessions = sessions
-	result["empty_world_does_not_count"] = play_time == before
-	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
 	return result

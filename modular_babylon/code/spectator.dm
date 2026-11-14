@@ -20,7 +20,10 @@
 	spectator.key = student.key
 	winset(student, "title_browser", "is-disabled=true;is-visible=false")
 	winset(student, "status_bar", "is-visible=true")
-	to_chat(student, span_notice("Spectating as an admin ghost: players cannot see you and no drone was created for you. To build, return to the lobby and join the world normally."))
+	if(babylon_is_station_build())
+		to_chat(student, span_notice("Spectating as an admin ghost: players cannot see you and no character was created for you. To play, return to the lobby and join the world normally."))
+	else
+		to_chat(student, span_notice("Spectating as an admin ghost: players cannot see you and no drone was created for you. To build, return to the lobby and join the world normally."))
 	qdel(menu)
 
 /mob/dead/observer/babylon_spectator

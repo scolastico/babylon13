@@ -113,7 +113,7 @@
 		student.init_verbs()
 		winset(student, "title_browser", "is-disabled=true;is-visible=false")
 		winset(student, "status_bar", "is-visible=true")
-		to_chat(student, span_notice("Showcase visit: everyone can see you. Explore with the movement keys, Orbit (the HUD button or the Orbit verb) and Jump to Mob, and use Say (T) or OOC (O) to chat. You cannot use equipment, operate machines or enter a body. Membership is required to build."))
+		to_chat(student, span_notice("Showcase visit: everyone can see you. Explore with the movement keys, Orbit (the HUD button or the Orbit verb) and Jump to Mob, and use Say (T) or OOC (O) to chat. You cannot use equipment, operate machines or enter a body. Membership is required to [babylon_is_station_build() ? "play" : "build"]."))
 		if(isnewplayer(previous))
 			qdel(previous)
 
