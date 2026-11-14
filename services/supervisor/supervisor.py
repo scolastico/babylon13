@@ -805,6 +805,14 @@ class Supervisor:
                                       last_save=run["last_save"] if run else self.last_save(world["id"]),
                                       error=run["error"] if run else None,
                                       last_active=time.strftime("%Y-%m-%d %H:%M", time.localtime(world["last_used"])))
+                    # A station round that ended stops its world by itself; the lobby says so.
+                    if run and run["state"] == "stopping" and self.row(
+                            "SELECT 1 FROM audit WHERE world=? AND action='round_ended' AND at>=?", (world["id"], run["started"])):
+                        worlds[-1]["stop_reason"] = "round_ended"
+                    # Owners and admins manage members from the lobby, so they see the list.
+                    if role in ("owner", "admin"):
+                        worlds[-1]["members"] = [r["ckey"] for r in self.db.execute(
+                            "SELECT ckey FROM members WHERE world=? ORDER BY ckey", (world["id"],))]
                 if self.shutting_down:
                     self.restart_screen_shown.add(actor)
                 return {"ok": True, "worlds": worlds, "maps": public_catalog(self.catalog), "admin": actor in self.admins, "server_notice": self.server_notice,

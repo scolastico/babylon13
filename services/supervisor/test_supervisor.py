@@ -292,6 +292,26 @@ class Policies(unittest.TestCase):
         self.s.tick()
         self.assertIsNone(self.s.row("SELECT * FROM runs"))
 
+    def test_list_shows_round_end_and_members_to_managers(self):
+        w = self.create()
+        self.s.dispatch("owner", "member", {"world": w, "member": "Friend", "role": "member"})
+        self.assertEqual(self.s.dispatch("owner", "list", {})["worlds"][0]["members"], ["friend"])
+        self.assertEqual(self.s.dispatch("admin", "list", {})["worlds"][0]["members"], ["friend"])
+        self.assertNotIn("members", self.s.dispatch("friend", "list", {})["worlds"][0])
+        self.assertNotIn("members", self.s.dispatch("stranger", "list", {})["worlds"][0])
+        run = self.start(w)
+        self.assertNotIn("stop_reason", self.s.dispatch("owner", "list", {})["worlds"][0])
+        self.s.round_ended(run["id"], run["secret"])
+        listed = self.s.dispatch("owner", "list", {})["worlds"][0]
+        self.assertEqual((listed["state"], listed["stop_reason"]), ("stopping", "round_ended"))
+        # An ordinary stop of a later run is not a round end.
+        del self.driver.runs[run["id"]]
+        self.s.tick()
+        self.now += 10
+        run = self.start(w)
+        self.s.dispatch("owner", "stop", {"world": w})
+        self.assertNotIn("stop_reason", self.s.dispatch("owner", "list", {})["worlds"][0])
+
     def test_round_end_stops_the_run_cleanly_without_a_save(self):
         w = self.create()
         run = self.start(w)
