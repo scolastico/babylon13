@@ -1,5 +1,5 @@
 // Babylon tutorial wand (modular_babylon/code/tutorial/wand.dm). Chooses what a click with the
-// wand does (Place / Configure / NPC / Delete), lists every tutorial object with its problems
+// wand does (Place / Configure / NPC / Delete / Select with the area tools), lists every tutorial object with its problems
 // and starts or stops a test run. Every action is checked again on the server.
 import { type ReactNode, useEffect, useState } from 'react';
 import {
@@ -16,6 +16,7 @@ import { createSearch } from 'tgui-core/string';
 
 import { useBackend } from '../backend';
 import { Window } from '../layouts';
+import { type AreaData, AreaTools, type Material } from './BabylonTutorialArea';
 
 export type PaletteEntry = {
   kind: string;
@@ -75,6 +76,8 @@ export type WandData = {
     objective?: string | null;
   };
   notice: { text: string; ok: boolean; id: number } | null;
+  area?: AreaData;
+  materials?: Material[];
 };
 
 const MODES = [
@@ -101,6 +104,12 @@ const MODES = [
     name: 'Delete',
     icon: 'eraser',
     help: 'Click a tutorial object (or an NPC) with the wand to remove it.',
+  },
+  {
+    id: 'select',
+    name: 'Select',
+    icon: 'vector-square',
+    help: 'Click two opposite corners to select an area, then copy, paste, fill, border or clear it here.',
   },
 ];
 
@@ -219,11 +228,17 @@ const BuildTab = () => {
         </Stack>
         <Box mt={1} color="label">
           <Icon name="circle-info" mr={1} />
-          {mode.help}
+          {mode.help} Right-click the wand in your hand to switch modes.
         </Box>
       </Section>
-      {!data.objects.length && <FirstSteps />}
-      {data.mode === 'npc' ? <PresetPalette /> : <ObjectPalette />}
+      {data.mode === 'select' ? (
+        <AreaTools />
+      ) : (
+        <>
+          {!data.objects.length && <FirstSteps />}
+          {data.mode === 'npc' ? <PresetPalette /> : <ObjectPalette />}
+        </>
+      )}
     </>
   );
 };
