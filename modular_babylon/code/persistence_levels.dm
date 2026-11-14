@@ -277,6 +277,13 @@
 /datum/babylon_save/restored_level_z(saved_z)
 	return saved_level_zs["[saved_z]"] || saved_z
 
+/// The saved z (as restored_level_z() takes it) of level z in this world.
+/datum/babylon_save/proc/saved_level_of(z)
+	for(var/saved_z in saved_level_zs)
+		if(saved_level_zs[saved_z] == z)
+			return text2num(saved_z)
+	return z
+
 /datum/babylon_save/restore_session_state(list/state)
 	// Living things were rebuilt with their saved health and stat set directly: let them die
 	// properly, or settle their stat from their health.

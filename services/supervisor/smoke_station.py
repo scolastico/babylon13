@@ -63,8 +63,10 @@ def main():
     parser.add_argument("--only-characters", action="store_true",
                         help="only the characters' save and restore on the first --maps map")
     parser.add_argument("--only-planes", action="store_true", help="only the --creative-planes checks")
+    parser.add_argument("--only-tutorial-tests", nargs="+", metavar="PROC",
+                        help="only these DM tests, in the tutorial world on the first --maps map")
     args = parser.parse_args()
-    if args.only_characters or args.only_planes:
+    if args.only_characters or args.only_planes or args.only_tutorial_tests:
         args.only_multiz, args.no_multiz, args.restore_maps = True, True, []
     root = Path(__file__).resolve().parents[2]
     for ext in ("dmb", "rsc"):
@@ -366,7 +368,7 @@ def main():
         assert first.get("ok"), first
         state = saved_state(world, first["generation"])
         players = {key for key in state["characters"] if not key.startswith("#")}
-        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger"}, players
+        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger", "smokelate"}, players
         assert [state["characters"][key]["real_name"] for key in state["characters"] if key.startswith("#")] == ["Smoke Corpse"], \
             list(state["characters"])
         assert "smokecharacter" in state["players"], list(state["players"])
@@ -529,7 +531,7 @@ def main():
                 discard_child()
             report["maps"][map_id] = entry
             print(json.dumps({map_id: entry}), flush=True)
-        if not args.only_multiz:
+        if not args.only_multiz or args.only_tutorial_tests:
             # A tutorial-kind world starts its round by itself (no owner hold).
             world = api("create", dict(name="Station smoke tutorial", visibility="private", map=args.maps[0]))["id"]
             with service.lock, service.db:
@@ -539,9 +541,10 @@ def main():
                             world_flags=checks(run, "test_station_world_flags"))
             # Tutorial objects, triggers, actions and NPCs in a running tutorial round.
             # Every test reports before any failure is raised, so one run shows all problems.
-            for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains",
-                         "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
-                         "test_area_tools_copy_settings", "test_tutorial_checkpoint_has_no_characters"):
+            for proc in args.only_tutorial_tests or (
+                    "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review",
+                    "test_tutorial_chains", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
+                    "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
                 tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
             for proc, got in tutorial.items():

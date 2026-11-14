@@ -677,7 +677,14 @@
 	stale.set_character(swapped)
 	result["one_player_per_body"] = !ensure_station_player("smokeswapb").character()
 	ensure_station_player("smokeswapb").set_character(swapped)
+	// Review S-A: the body's owner is one map lookup, kept in step by set_character().
+	result["owner_map"] = character_owners[swapped] == ensure_station_player("smokeswapb") && !stale.character()
 	stale.character_ref = WEAKREF(swapped) // as a mind swap leaves it: not through set_character()
+	// Review R2: a body its player took a moment ago (a ckey on it; the tracker has not seen it yet)
+	// is that player's, not a body left behind.
+	var/mob/living/carbon/human/latejoiner = test_character_body(tile, "Smoke Latejoiner", "smokelate")
+	ensure_station_player("smokelate")
+	latejoiner.ckey = "smokelate"
 	// Review S3: a corpse whose player now plays another human.
 	var/mob/living/carbon/human/corpse = test_character_body(tile, "Smoke Corpse", "smokeabandon")
 	var/obj/item/storage/backpack/corpse_pack = new(tile)
@@ -688,14 +695,10 @@
 	ensure_station_player("smokeabandon").set_character(newbody)
 	// Review S4: a body on a shuttle docked on a saved level, which loads again at its roundstart dock.
 	var/turf/aboard
-	var/list/levels = persisted_levels()
-	for(var/obj/docking_port/mobile/shuttle as anything in SSshuttle.mobile_docking_ports)
-		if(aboard || QDELETED(shuttle) || istype(shuttle, /obj/docking_port/mobile/custom) || !(shuttle.z in levels))
-			continue
-		for(var/turf/open/floor/candidate in shuttle.return_turfs())
-			if(!candidate.is_blocked_turf(TRUE))
-				aboard = candidate
-				break
+	for(var/turf/open/floor/candidate in checkpoint_skipped_tiles())
+		if(!candidate.is_blocked_turf(TRUE))
+			aboard = candidate
+			break
 	result["shuttle_floor_on_a_saved_level"] = !!aboard
 	var/mob/living/carbon/human/passenger = test_character_body(aboard || tile, "Smoke Passenger", "smokepassenger")
 	ensure_station_player("smokepassenger").set_character(passenger)
@@ -737,6 +740,8 @@
 	result["swapped_entries"] = swapped_entries == 1
 	result["corpse_kept_without_player"] = corpse_kept && characters["smokeabandon"]?["real_name"] == "Smoke Newbody"
 	result["passenger_on_shuttle"] = !!characters["smokepassenger"]?["on_shuttle"]
+	result["latejoiner_is_theirs"] = characters["smokelate"]?["real_name"] == "Smoke Latejoiner" && player_sessions["smokelate"].character() == latejoiner
+	latejoiner.ckey = null // a key on a client-less mob would take that player straight in if they joined
 	// Characters are never one of the levels' mobs.
 	var/in_level_mobs = FALSE
 	var/list/mobs_by_turf = checkpoint_mobs()
@@ -752,7 +757,7 @@
 	result["tutorial_snapshot_empty"] = islist(tutorial_state["characters"]) && !length(tutorial_state["characters"]) && islist(tutorial_state["players"]) && !length(tutorial_state["players"])
 	var/list/world_state = list()
 	capture_session_state(world_state)
-	result["world_save_has_them"] = length(world_state["characters"]) >= 6 && islist(world_state["players"]["smokecharacter"])
+	result["world_save_has_them"] = length(world_state["characters"]) >= 7 && islist(world_state["players"]["smokecharacter"])
 	result["x"] = body.x
 	result["y"] = body.y
 	return result

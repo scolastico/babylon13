@@ -47,29 +47,38 @@
 	var/mob/living/carbon/human/body = character_ref?.resolve()
 	return (ishuman(body) && !QDELETED(body)) ? body : null
 
-/// Makes body this player's character. A body is one player's at most: anyone else's link to it
-/// goes. While it is theirs, its deletion (gibbed, dusted) marks its level as changed, so whatever
-/// it dropped there is saved with the level.
+/// Makes body this player's character. A body is one player's at most (character_owners): anyone
+/// else's link to it goes. While it is theirs, its deletion (gibbed, dusted) marks its level as
+/// changed, so whatever it dropped there is saved with the level. Called every world tick for every
+/// player: an unchanged body costs nothing more.
 /datum/babylon_player/proc/set_character(mob/living/carbon/human/body, ghosted = FALSE)
 	var/mob/living/carbon/human/previous = character()
-	if(previous && previous != body)
-		UnregisterSignal(previous, COMSIG_QDELETING)
-	character_ref = body ? WEAKREF(body) : null
 	character_ghosted = body ? !!ghosted : FALSE
+	if(previous == body && body)
+		return
+	var/list/owners = GLOB.babylon_save.character_owners
+	if(previous)
+		UnregisterSignal(previous, COMSIG_QDELETING)
+		if(owners[previous] == src)
+			owners -= previous
+	character_ref = body ? WEAKREF(body) : null
 	if(!body)
 		return
-	if(previous != body)
-		RegisterSignal(body, COMSIG_QDELETING, PROC_REF(character_deleted))
-	for(var/other_key in GLOB.babylon_save.player_sessions)
-		var/datum/babylon_player/other = GLOB.babylon_save.player_sessions[other_key]
-		if(other != src && other.character_ref?.resolve() == body)
-			other.set_character(null)
+	var/datum/babylon_player/other = owners[body]
+	if(other && other != src)
+		other.set_character(null)
+	owners[body] = src
+	RegisterSignal(body, COMSIG_QDELETING, PROC_REF(character_deleted))
 
 /datum/babylon_player/proc/character_deleted(mob/living/carbon/human/body)
 	SIGNAL_HANDLER
 	var/turf/tile = get_turf(body)
 	if(tile)
 		GLOB.babylon_save.mark_level_changed(tile.z, body)
+	if(GLOB.babylon_save.character_owners[body] == src)
+		GLOB.babylon_save.character_owners -= body
+	character_ref = null
+	character_ghosted = FALSE
 
 /// Follows the player's mob: their human, the human their ghost can return to, or none once they
 /// play something else (a cyborg, an animal) or gave their body up. The menu changes nothing (a
@@ -102,6 +111,8 @@
 /datum/babylon_save
 	/// Players whose characters this restore rebuilt; the resumed round's start registers their jobs.
 	var/list/restored_characters = list()
+	/// Body -> the /datum/babylon_player whose character it is (one player per body).
+	var/list/character_owners = list()
 	/// ckey -> saved character entry this restore could not rebuild: saved again unchanged while
 	/// the player has no character, so one failure does not lose the character for good.
 	var/list/unrestored_characters = list()
@@ -113,6 +124,10 @@
 /datum/babylon_save/proc/track_characters()
 	if(busy || draining)
 		return
+	track_connected_characters()
+
+/// Each connected player's record follows their mob (track_character()).
+/datum/babylon_save/proc/track_connected_characters()
 	for(var/client/student in GLOB.clients)
 		if(!babylon_ready_client(student) || student.babylon_showcase_visitor || student.babylon_admin_spectator)
 			continue
@@ -135,7 +150,10 @@
 	var/list/characters = list()
 	if(!babylon_world_saves_characters(for_tutorial) || !SSticker.HasRoundStarted())
 		return characters
+	// Bodies taken since the last world tick (a late-join a moment ago) are their players'.
+	track_connected_characters()
 	var/list/levels = persisted_levels()
+	var/list/skipped_tiles = checkpoint_skipped_tiles()
 	var/list/captured_bodies = list()
 	for(var/player_key in player_sessions)
 		var/datum/babylon_player/player = player_sessions[player_key]
@@ -152,17 +170,28 @@
 			continue
 		captured_bodies[body] = TRUE
 		try
-			characters[player_key] = capture_character(body, player)
+			characters[player_key] = capture_character(body, player, skipped_tiles)
 		catch(var/exception/error)
 			log_world("Babylon save: the character of [player_key] could not be saved: [error] ([error?.file]:[error?.line])")
 	for(var/mob/living/carbon/human/body as anything in GLOB.human_list)
 		if(captured_bodies[body] || QDELETED(body) || !saves_character_body(body, levels))
 			continue
-		if(!body.babylon_kept_body && !babylon_body_owner(body) && !body.last_mind?.key)
+		var/owner_key = babylon_body_owner(body)
+		if(!body.babylon_kept_body && !owner_key && !body.last_mind?.key)
 			continue // an NPC human (ruin corpses): not kept (checkpoint_mobs()).
 		captured_bodies[body] = TRUE
+		// A body its player is in (a ckey on it), while their record holds no other character:
+		// theirs, not left behind.
+		var/datum/babylon_player/owner = owner_key && body.ckey == owner_key ? player_sessions[owner_key] : null
+		if(owner && !characters[owner_key] && !owner.character())
+			owner.set_character(body)
+			try
+				characters[owner_key] = capture_character(body, owner, skipped_tiles)
+			catch(var/exception/owner_error)
+				log_world("Babylon save: the character of [owner_key] could not be saved: [owner_error] ([owner_error?.file]:[owner_error?.line])")
+			continue
 		try
-			var/list/entry = capture_character(body, null)
+			var/list/entry = capture_character(body, null, skipped_tiles)
 			characters["[BABYLON_OWNERLESS_PREFIX][entry["id"]]"] = entry
 		catch(var/exception/error)
 			log_world("Babylon save: the body of [body.real_name] could not be saved: [error] ([error?.file]:[error?.line])")
@@ -175,8 +204,8 @@
 
 /// One character: the human's identity, job, damage and place, and its items as save records
 /// (the worn and held ones with the character as parent, their contents below them). player is
-/// null for a body left behind.
-/datum/babylon_save/proc/capture_character(mob/living/carbon/human/body, datum/babylon_player/player)
+/// null for a body left behind. skipped_tiles: checkpoint_skipped_tiles(), the shuttles' tiles.
+/datum/babylon_save/proc/capture_character(mob/living/carbon/human/body, datum/babylon_player/player, list/skipped_tiles = checkpoint_skipped_tiles())
 	var/body_id = assign_id(body)
 	var/turf/tile = get_turf(body)
 	var/list/records = list()
@@ -203,16 +232,16 @@
 		"blood_type" = dna.blood_type?.id,
 	)
 	var/datum/bank_account/account = SSeconomy.bank_accounts_by_id["[body.account_id]"]
-	// A body on a shuttle that loads again at its roundstart dock (players' own shuttles are saved
-	// where they are) would come back over whatever lies beneath it.
-	var/obj/docking_port/mobile/shuttle = SSshuttle.get_containing_shuttle(body)
+	// A body on a shuttle's tile, which the level saves as what lies beneath the shuttle (it loads
+	// again at its roundstart dock; players' own shuttles are saved where they are), would come back
+	// over that. The same tiles as the level writer's (checkpoint_skipped_tiles()).
 	return list(
 		"id" = body_id,
 		"type" = "[body.type]",
 		"x" = tile.x,
 		"y" = tile.y,
 		"z" = tile.z,
-		"on_shuttle" = !!(shuttle && !istype(shuttle, /obj/docking_port/mobile/custom)),
+		"on_shuttle" = !!skipped_tiles[tile],
 		"real_name" = babylon_save_text(body.real_name),
 		"gender" = body.gender,
 		"physique" = body.physique,
@@ -250,7 +279,9 @@
 		var/mob/living/carbon/human/body
 		try
 			body = restore_character(ownerless ? null : key, entry)
-			. += list(list("id" = entry["id"], "type" = "[body.type]", "parent" = null, "x" = body.x, "y" = body.y, "z" = null, "fields" = list("babylon_character" = entry), "references" = list()))
+			// Where it stands now (a late-join point if its own place could not hold it), as a saved
+			// z: restore_world() maps a record's z through restored_level_z().
+			. += list(list("id" = entry["id"], "type" = "[body.type]", "parent" = null, "x" = body.x, "y" = body.y, "z" = saved_level_of(body.z), "fields" = list("babylon_character" = entry), "references" = list()))
 			for(var/list/record in entry["records"])
 				. += list(record)
 		catch(var/exception/error)
