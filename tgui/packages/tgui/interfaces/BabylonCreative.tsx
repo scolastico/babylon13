@@ -108,6 +108,10 @@ export type TutorialData = {
   message: string | null;
   /** The edited tutorial's title (edit worlds). */
   title: string | null;
+  /** Hours between two submissions (the supervisor's setting, as last checked). */
+  cooldown_hours: number;
+  /** About how long a save pauses the world. */
+  pause_seconds: number;
   title_max: number;
   description_max: number;
 };
@@ -1232,7 +1236,7 @@ function TutorialTab() {
               disabled={running || !!tutorial.blocked}
               onClick={() => setConfirming(true)}
             >
-              Save back to the pending tutorial
+              {running ? 'Saving back…' : 'Save back to the pending tutorial'}
             </Button>
           )}
           {blocked}
@@ -1247,16 +1251,19 @@ function TutorialTab() {
     description.length > tutorial.description_max;
   const canSend =
     !running && !tutorial.blocked && title.trim().length > 0 && !tooLong;
-  // Only the owner of a Creative station world has a cooldown to show.
-  const noCooldown =
+  // Only the owner of a Creative station world can submit, and has a cooldown to show.
+  const cannotSubmit =
     tutorial.blocked === 'not_capable' || tutorial.blocked === 'not_owner';
+  const pause = formatWait(Math.max(1, tutorial.pause_seconds));
   return (
     <Scroll>
       <Section title="Submit as a tutorial">
         <NoticeBox>
           Submitting sends this world to the moderators for review and saves its
-          current state as the tutorial (the world pauses while it is saved).
-          Players start at the start marker.
+          current state as the tutorial; players start at the start marker. You
+          can't change it afterwards, and you can submit again only after the
+          cooldown ({tutorial.cooldown_hours} h). Everyone in the world is
+          paused for about {pause} while it saves.
         </NoticeBox>
         <LabeledList>
           <LabeledList.Item label="Title">
@@ -1265,7 +1272,7 @@ function TutorialTab() {
               value={title}
               maxLength={tutorial.title_max}
               placeholder={`1–${tutorial.title_max} characters`}
-              disabled={running}
+              disabled={running || cannotSubmit}
               onChange={(value: string) => setTitle(value)}
             />
           </LabeledList.Item>
@@ -1276,14 +1283,14 @@ function TutorialTab() {
               value={description}
               maxLength={tutorial.description_max}
               placeholder="What the tutorial teaches (optional)"
-              disabled={running}
+              disabled={running || cannotSubmit}
               onChange={(value: string) => setDescription(value)}
             />
             <Box color="label" textAlign="right">
               {description.length}/{tutorial.description_max}
             </Box>
           </LabeledList.Item>
-          {!noCooldown && (
+          {!cannotSubmit && (
             <LabeledList.Item label="Cooldown">
               {tutorial.checking
                 ? 'Checking…'
@@ -1295,16 +1302,44 @@ function TutorialTab() {
             </LabeledList.Item>
           )}
         </LabeledList>
-        <Box mt={1}>
-          <Button
-            icon="paper-plane"
-            color="good"
-            disabled={!canSend}
-            onClick={() => act('tutorial_submit', { title, description })}
-          >
-            {running ? 'Submitting…' : 'Submit for review'}
-          </Button>
-        </Box>
+        {confirming && canSend ? (
+          <NoticeBox mt={1}>
+            <Box mb={1}>
+              Submit "{title.trim()}" for review? You can't change it
+              afterwards, your next submission waits {tutorial.cooldown_hours}{' '}
+              h, and the world pauses for about {pause}.
+            </Box>
+            <Button
+              icon="paper-plane"
+              color="good"
+              onClick={() => {
+                setConfirming(false);
+                act('tutorial_submit', { title, description });
+              }}
+            >
+              Yes, submit
+            </Button>
+            <Button icon="xmark" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </NoticeBox>
+        ) : (
+          <Box mt={1}>
+            <Button
+              icon="paper-plane"
+              color="good"
+              disabled={!canSend}
+              onClick={() => setConfirming(true)}
+            >
+              {running ? 'Submitting…' : 'Submit for review…'}
+            </Button>
+          </Box>
+        )}
+        {!running && !tutorial.blocked && !title.trim() && (
+          <Box color="label" mt={1}>
+            Enter a title to submit.
+          </Box>
+        )}
         {blocked}
       </Section>
       {outcome}

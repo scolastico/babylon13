@@ -35,9 +35,9 @@
 
 /// Asks the supervisor; tells the player what went wrong and returns null on failure.
 /client/proc/babylon_world_request(op, target, reason)
-	var/list/result = babylon_supervisor_request(list("action" = "world_manage", "actor" = ckey, "op" = op, "target" = target, "reason" = reason))
-	if(!result)
-		to_chat(src, span_warning("The server did not answer. Try again."))
+	var/list/result = babylon_supervisor_request_within(list("action" = "world_manage", "actor" = ckey, "op" = op, "target" = target, "reason" = reason))
+	if(result["timeout"])
+		to_chat(src, span_warning("The server did not answer in time; the change may still apply. Check before you retry."))
 		return null
 	if(!result["ok"])
 		to_chat(src, span_warning(html_encode(result["error"] || "That did not work.")))

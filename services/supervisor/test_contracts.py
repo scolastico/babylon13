@@ -12,7 +12,8 @@ import test_driver
 import test_supervisor
 import itertools
 
-from constants import SAVES_CHARACTERS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_TITLE_MAX, WORLD_KINDS, world_policy
+from constants import (SAVES_CHARACTERS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_TITLE_MAX, WORLD_KINDS,
+                       world_policy)
 from supervisor import CHILD_ACTIONS, Denied, Supervisor
 
 DM = Path(__file__).resolve().parents[2] / "modular_babylon/code"
@@ -51,13 +52,36 @@ class ChildActions(unittest.TestCase):
     def test_every_child_action_is_called_by_the_dm_code(self):
         self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()), set())
 
+    def test_every_supervisor_request_is_bounded(self):
+        # world.Export blocks with no timeout of its own (arch-review C5): a hung supervisor would
+        # stall logins, the round end or a lobby page. Only the background call datums block;
+        # everything else goes through babylon_supervisor_request_within() / lobby_export_within().
+        allowed = {"babylon_supervisor_request(": {"/datum/babylon_supervisor_call/proc/perform"},
+                   "world.Export(": {"/proc/babylon_supervisor_request", "/datum/lobby_request/proc/perform"}}
+        sources = dict(dm_sources())
+        sources.update({path: path.read_text(encoding="utf-8") for path in sorted((DM.parent / "lobby").glob("*.dm"))})
+        found = {call: set() for call in allowed}
+        for path, text in sources.items():
+            owner = None
+            for line in text.splitlines():
+                if line and not line[0].isspace() and not line.startswith("//"):
+                    owner = re.match(r"[^(]*", line).group(0)
+                code = line.split("//")[0]
+                for call in allowed:
+                    if call in code and not code.lstrip().startswith("/proc/babylon_supervisor_request("):
+                        found[call].add(owner)
+                        self.assertIn(owner, allowed[call], "%s: %s calls %s" % (path.name, owner, call))
+        for call, owners in allowed.items():
+            self.assertEqual(found[call], owners, call)
+
     def test_no_supervisor_request_from_a_ui_action(self):
         # world.Export blocks (the tutorial copy takes long): tgui actions start a background proc
         # instead (arch-review C5). A ui_act, or a panel action it dispatches to, never asks itself.
         handler = re.compile(r"^/[\w/]+/(?:proc/)?(ui_act|handle_action|extension_action)\(.*?(?=^\S)", re.M | re.S)
         for path, text in dm_sources().items():
             for match in handler.finditer(text + "\n/end"):
-                for call in ("babylon_supervisor_request", "babylon_supervisor_request_within", ".request(", "save_world("):
+                for call in ("babylon_supervisor_request", "babylon_supervisor_request_within", ".request(", "save_world(",
+                             ".check(", ".submit(", ".save_back(", "take_snapshot("):
                     self.assertNotIn(call, match.group(0), "%s: %s" % (path.name, match.group(1)))
 
     def test_every_child_action_rejects_bad_credentials(self):
@@ -170,6 +194,10 @@ class WorldPolicy(unittest.TestCase):
         self.assertIn("capture_session_state(state, for_tutorial)", (DM / "persistence.dm").read_text(encoding="utf-8"))
         flags = (DM / "world_flags.dm").read_text(encoding="utf-8")
         self.assertRegex(flags, r"(?m)^/proc/babylon_world_saves_characters\(for_tutorial = FALSE\)\n\treturn !for_tutorial && !!GLOB\.babylon_world\?\.saves_characters\(\)$")
+
+    def test_tutorial_snapshot_marker_matches(self):
+        text = (DM / "persistence.dm").read_text(encoding="utf-8")
+        self.assertIn('rustg_file_write("1", "[base]/%s")' % TUTORIAL_SNAPSHOT_MARKER, text)
 
     def test_tutorial_text_limits_match(self):
         text = (DM / "tutorial/submit.dm").read_text(encoding="utf-8")

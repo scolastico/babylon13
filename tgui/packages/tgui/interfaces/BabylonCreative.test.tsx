@@ -163,6 +163,8 @@ const idle: TutorialData = {
   state: 'idle',
   message: null,
   title: null,
+  cooldown_hours: 6,
+  pause_seconds: 40,
   title_max: 60,
   description_max: 500,
 };
@@ -174,7 +176,7 @@ const withTutorial = (tutorial: Partial<TutorialData>) =>
   });
 
 const submitButton = () =>
-  screen.getByText(/^(Submit for review|Submitting…)$/).closest('.Button');
+  screen.getByText(/^(Submit for review…|Submitting…)$/).closest('.Button');
 
 const isDisabled = (element: Element | null) =>
   !!element?.className.includes('Button--disabled');
@@ -191,12 +193,38 @@ describe('BabylonCreative Tutorial tab', () => {
     expect(screen.getByText('0/500')).toBeDefined();
     // No title yet: nothing to send.
     expect(isDisabled(submitButton())).toBe(true);
+    expect(screen.getByText('Enter a title to submit.')).toBeDefined();
+    // The warning names what the player can't undo.
+    expect(screen.getByText(/can't change it afterwards/)).toBeDefined();
+    expect(screen.getByText(/cooldown \(6 h\)/)).toBeDefined();
     act(() => {
       fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
         target: { value: 'First aid' },
       });
     });
     expect(isDisabled(submitButton())).toBe(false);
+    expect(screen.queryByText('Enter a title to submit.')).toBeNull();
+  });
+
+  it('confirms a submission before sending it', () => {
+    withTutorial({});
+    openTab('Tutorial');
+    act(() => {
+      fireEvent.change(screen.getByPlaceholderText('1–60 characters'), {
+        target: { value: 'First aid' },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Submit for review…'));
+    });
+    expect(screen.getByText(/Submit "First aid" for review\?/)).toBeDefined();
+    expect(screen.getByText(/waits 6 h/)).toBeDefined();
+    expect(screen.getByText('Yes, submit')).toBeDefined();
+    act(() => {
+      fireEvent.click(screen.getByText('Cancel'));
+    });
+    expect(screen.queryByText('Yes, submit')).toBeNull();
+    expect(screen.getByText('Submit for review…')).toBeDefined();
   });
 
   it('cooldown: shows the time left and why Submit is disabled', () => {
@@ -263,13 +291,17 @@ describe('BabylonCreative Tutorial tab', () => {
     expect(screen.getByText(/Babylon worlds can build/)).toBeDefined();
     expect(isDisabled(submitButton())).toBe(true);
     expect(screen.queryByText('None: you can submit now')).toBeNull();
+    // Nothing can be sent from here: the form is read-only.
+    expect(
+      screen.getByPlaceholderText('1–60 characters').hasAttribute('disabled'),
+    ).toBe(true);
   });
 
   it('save back: admins confirm before the pending tutorial is replaced', () => {
     withTutorial({ mode: 'save_back', title: 'First aid' });
     openTab('Tutorial');
     expect(screen.getByText('Editing: First aid')).toBeDefined();
-    expect(screen.queryByText('Submit for review')).toBeNull();
+    expect(screen.queryByText('Submit for review…')).toBeNull();
     act(() => {
       fireEvent.click(screen.getByText('Save back to the pending tutorial'));
     });
@@ -279,6 +311,12 @@ describe('BabylonCreative Tutorial tab', () => {
       fireEvent.click(screen.getByText('Cancel'));
     });
     expect(screen.queryByText('Yes, save back')).toBeNull();
+  });
+
+  it('save back: the button says it is running', () => {
+    withTutorial({ mode: 'save_back', state: 'saving_back' });
+    openTab('Tutorial');
+    expect(screen.getByText('Saving back…')).toBeDefined();
   });
 
   it('save back: players who are not admins see why it is disabled', () => {

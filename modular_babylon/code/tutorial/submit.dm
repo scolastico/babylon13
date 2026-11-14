@@ -18,10 +18,6 @@
 /// TUTORIAL_TITLE_MAX / TUTORIAL_DESCRIPTION_MAX; test_contracts.py checks they match).
 #define BABYLON_TUTORIAL_TITLE_MAX 60
 #define BABYLON_TUTORIAL_DESCRIPTION_MAX 500
-/// How long the world waits for the cooldown check.
-#define BABYLON_TUTORIAL_CHECK_TIMEOUT (30 SECONDS)
-/// How long the world waits for the supervisor to copy the snapshot.
-#define BABYLON_TUTORIAL_COPY_TIMEOUT (3 MINUTES)
 /// The cooldown is asked again at most this often per panel (and after every submission).
 #define BABYLON_TUTORIAL_CHECK_INTERVAL (1 MINUTES)
 
@@ -31,10 +27,17 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 /datum/babylon_tutorial_submissions
 	/// The ckey whose submission or save back runs now, else null.
 	var/busy_ckey
+	/// How long the world waits for the cooldown check, and for the supervisor's copy of a snapshot.
+	var/check_timeout = 30 SECONDS
+	var/copy_timeout = 3 MINUTES
+	/// The supervisor's cooldown between submissions (hours), as its last check said.
+	var/cooldown_hours = 6
+	/// The request type (tests use one that answers late).
+	var/call_type = /datum/babylon_supervisor_call
 
 /// Asks the supervisor (tests replace this to answer themselves).
 /datum/babylon_tutorial_submissions/proc/request(list/query, timeout, datum/callback/on_answer)
-	return babylon_supervisor_request_within(query, timeout, on_answer)
+	return babylon_supervisor_request_within(query, timeout, on_answer, call_type)
 
 /// Reserves the world's one snapshot slot for ckey. FALSE while another runs.
 /datum/babylon_tutorial_submissions/proc/begin(ckey)
@@ -45,9 +48,11 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 
 /// The supervisor's cooldown for ckey: list("ok", "wait_seconds") or list("ok" = FALSE, "error").
 /datum/babylon_tutorial_submissions/proc/check(ckey)
-	var/list/answer = request(list("action" = "tutorial_submit_check", "actor" = ckey), BABYLON_TUTORIAL_CHECK_TIMEOUT)
+	var/list/answer = request(list("action" = "tutorial_submit_check", "actor" = ckey), check_timeout)
 	if(!answer?["ok"])
 		return list("ok" = FALSE, "error" = answer?["error"] || "The server could not be reached")
+	if(isnum(answer["cooldown_hours"]))
+		cooldown_hours = max(0, answer["cooldown_hours"])
 	return list("ok" = TRUE, "wait_seconds" = max(0, round(text2num("[answer["wait_seconds"]]") || 0)))
 
 /// Submits the world as a tutorial (after begin()). list("ok", "text") for the panel.
@@ -70,16 +75,21 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 		return list("ok" = FALSE, "text" = "Not submitted: [cooldown["error"]].")
 	if(cooldown["wait_seconds"])
 		return list("ok" = FALSE, "text" = "Not submitted: you can submit another tutorial in [babylon_tutorial_wait_text(cooldown["wait_seconds"])].", "wait_seconds" = cooldown["wait_seconds"])
+	// Again right before the save: the check above takes a moment (the marker may be gone, the
+	// world stopping).
+	refusal = babylon_tutorial_submit_refusal(ckey, TRUE)
+	if(refusal)
+		return list("ok" = FALSE, "text" = babylon_tutorial_refusal_text(refusal))
 	var/list/snapshot = take_snapshot()
 	if(!snapshot["ok"])
 		return list("ok" = FALSE, "text" = "Not submitted: the world could not be saved ([snapshot["error"]]).")
 	var/generation = snapshot["generation"]
-	var/list/answer = request(list("action" = "tutorial_submit", "actor" = ckey, "title" = title, "description" = description, "generation" = generation), BABYLON_TUTORIAL_COPY_TIMEOUT, CALLBACK(src, PROC_REF(discard_snapshot), generation))
+	var/list/answer = request(list("action" = "tutorial_submit", "actor" = ckey, "title" = title, "description" = description, "generation" = generation), copy_timeout, CALLBACK(src, PROC_REF(submission_answered), generation, ckey))
 	if(answer?["ok"])
 		log_game("BABYLON TUTORIAL: [ckey] submitted \"[title]\" as tutorial [answer["tutorial"]] (snapshot [generation]).")
 		return list("ok" = TRUE, "text" = "Submitted \"[title]\". The moderators review it before it is published.", "tutorial" = answer["tutorial"], "generation" = generation)
 	if(answer?["timeout"])
-		return list("ok" = FALSE, "text" = "The server did not confirm the submission in time. It may still arrive: check the lobby's Tutorials tab later before you submit again.")
+		return list("ok" = FALSE, "text" = "The server did not confirm the submission in time. It may still go through. If it did, your cooldown has started: the Cooldown line here shows it in a moment.")
 	return list("ok" = FALSE, "text" = "Not submitted: [answer?["error"] || "the server could not be reached"].")
 
 /// Saves the edit world back to its pending tutorial (after begin()). list("ok", "text").
@@ -101,12 +111,12 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 	if(!snapshot["ok"])
 		return list("ok" = FALSE, "text" = "Not saved back: the world could not be saved ([snapshot["error"]]).")
 	var/generation = snapshot["generation"]
-	var/list/answer = request(list("action" = "tutorial_save_back", "actor" = ckey, "generation" = generation), BABYLON_TUTORIAL_COPY_TIMEOUT, CALLBACK(src, PROC_REF(discard_snapshot), generation))
+	var/list/answer = request(list("action" = "tutorial_save_back", "actor" = ckey, "generation" = generation), copy_timeout, CALLBACK(src, PROC_REF(discard_snapshot), generation))
 	if(answer?["ok"])
 		log_game("BABYLON TUTORIAL: [ckey] saved tutorial [GLOB.babylon_world.tutorial_id] back (snapshot [generation]).")
 		return list("ok" = TRUE, "text" = "Saved back: the pending tutorial now starts from this state.")
 	if(answer?["timeout"])
-		return list("ok" = FALSE, "text" = "The server did not confirm the save back in time. It may still complete: check the tutorial before you save back again.")
+		return list("ok" = FALSE, "text" = "The server did not confirm the save back in time. It may still complete: play the pending tutorial from the lobby to check before you save back again.")
 	return list("ok" = FALSE, "text" = "Not saved back: [answer?["error"] || "the server could not be reached"].")
 
 /// Writes the tutorial snapshot: list("ok", "generation") or list("error").
@@ -116,7 +126,15 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 		return list("ok" = FALSE, "error" = result?["error"] || "unknown error")
 	return result
 
-/// Deletes a tutorial snapshot once the supervisor answered (it has its own copy, or none).
+/// The supervisor answered a submission (in time or late): the snapshot goes, and the owner's
+/// panel asks for the cooldown again (it started if the submission went through).
+/datum/babylon_tutorial_submissions/proc/submission_answered(generation, ckey)
+	discard_snapshot(generation)
+	var/datum/babylon_creative_panel/panel = GLOB.babylon_creative_panels[ckey]
+	panel?.refresh_tutorial_cooldown(TRUE)
+
+/// Deletes a tutorial snapshot once the supervisor answered (it has its own copy, or none). The
+/// supervisor deletes it too; one left behind is marked and never a checkpoint (persistence.dm).
 /datum/babylon_tutorial_submissions/proc/discard_snapshot(generation)
 	var/static/regex/valid = regex(@"^save-\d{8}-\d{6}-\d+$")
 	if(!istext(generation) || !valid.Find(generation))
@@ -130,8 +148,9 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 		return "not_capable"
 	if(!ckey || ckey != GLOB.babylon_world.owner_ckey)
 		return "not_owner"
-	if(!babylon_tutorial_marker_turf("start"))
-		return "no_start"
+	. = babylon_tutorial_snapshot_refusal()
+	if(.)
+		return
 	if(!running && GLOB.babylon_tutorial_submissions.busy_ckey)
 		return "busy"
 	return null
@@ -142,10 +161,24 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 		return "not_edit_world"
 	if(!is_admin)
 		return "not_admin"
-	if(!babylon_tutorial_marker_turf("start"))
-		return "no_start"
+	. = babylon_tutorial_snapshot_refusal()
+	if(.)
+		return
 	if(!running && GLOB.babylon_tutorial_submissions.busy_ckey)
 		return "busy"
+	return null
+
+/// Why no tutorial snapshot can be taken now, whoever asks: the world is stopping, or the start
+/// marker is missing or on a level that is not saved (CentCom, reserved levels).
+/proc/babylon_tutorial_snapshot_refusal()
+	var/datum/babylon_save/session = GLOB.babylon_save
+	if(session?.draining || session?.round_ending)
+		return "stopping"
+	var/turf/start = babylon_tutorial_marker_turf("start")
+	if(!start)
+		return "no_start"
+	if(!(start.z in session?.persisted_levels()))
+		return "start_unsaved"
 	return null
 
 /proc/babylon_tutorial_refusal_text(code, wait_seconds)
@@ -156,6 +189,10 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 			return "Only the world's owner can submit it as a tutorial."
 		if("no_start")
 			return "Needs a start marker: place a marker with the id \"start\" (tutorial wand) where players begin."
+		if("stopping")
+			return "This world is stopping; try again once it has started again."
+		if("start_unsaved")
+			return "The start marker is on a level that is not saved: move it onto the station or the map's own levels."
 		if("busy")
 			return "A tutorial save is already running in this world. Wait for it to finish."
 		if("cooldown")
@@ -235,6 +272,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 		"state" = tutorial_running || (tutorial_outcome ? (tutorial_outcome["ok"] ? "done" : "error") : "idle"),
 		"message" = tutorial_outcome?["text"],
 		"title" = GLOB.babylon_world?.tutorial_title,
+		"cooldown_hours" = GLOB.babylon_tutorial_submissions.cooldown_hours,
+		"pause_seconds" = GLOB.babylon_save?.estimated_pause_seconds() || 0,
 		"title_max" = BABYLON_TUTORIAL_TITLE_MAX,
 		"description_max" = BABYLON_TUTORIAL_DESCRIPTION_MAX,
 	)
@@ -340,6 +379,4 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 	if(player)
 		to_chat(player, result["ok"] ? span_notice(html_encode(result["text"])) : span_warning(html_encode(result["text"])))
 
-#undef BABYLON_TUTORIAL_CHECK_TIMEOUT
-#undef BABYLON_TUTORIAL_COPY_TIMEOUT
 #undef BABYLON_TUTORIAL_CHECK_INTERVAL

@@ -201,6 +201,7 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 var/global/babylon_byond_1686_slot_pad_shared
 #if defined(BABYLON_DRONE) && defined(BABYLON_TESTING)
 // babylon-test.dme
+var/global/babylon_byond_1686_slot_pad_drone_test_1
 #elif defined(BABYLON_DRONE)
 // babylon.dme
 #elif defined(BABYLON_STATION) && defined(BABYLON_TESTING)

@@ -4,7 +4,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 
 // Exercises the same native HTTP export as the admission gate, without a client.
 /datum/babylon_save/proc/test_supervisor_export(encoded_query)
-	return babylon_supervisor_request(json_decode(encoded_query))
+	return babylon_supervisor_request_within(json_decode(encoded_query))
 
 /datum/babylon_save/proc/test_afk_policy()
 	var/datum/babylon_afk/policy = new

@@ -13,6 +13,14 @@ SAVES_CHARACTERS = {"world": True, "tutorial": False, "tutorial_edit": False}
 # Longest tutorial title and description (characters after cleaning); the DM side has the same limits
 # (modular_babylon/code/tutorial/submit.dm, checked by test_contracts.py).
 TUTORIAL_TITLE_MAX = 60
+# A file in a save generation that a world wrote only as a tutorial snapshot (a submission or save
+# back; modular_babylon/code/persistence.dm writes it). Such a generation is never a checkpoint:
+# Checkpoints neither lists nor restores it and deletes it once it is old, and tutorial copies leave
+# the file out.
+TUTORIAL_SNAPSHOT_MARKER = "tutorial-snapshot"
+# Seconds after which a tutorial snapshot left in a world's saves (its world stopped, or the
+# supervisor's answer never arrived) is deleted.
+TUTORIAL_SNAPSHOT_MAX_AGE = 15 * 60
 TUTORIAL_DESCRIPTION_MAX = 500
 
 

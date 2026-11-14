@@ -27,7 +27,7 @@ from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
-from constants import DEFAULTS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_KINDS, TUTORIAL_TITLE_MAX, WORLD_KIND, world_policy
+from constants import DEFAULTS, TUTORIAL_DESCRIPTION_MAX, TUTORIAL_KINDS, TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_TITLE_MAX, WORLD_KIND, world_policy
 from tutorials import SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, seed_first_save, walk
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
@@ -1126,48 +1126,62 @@ class Supervisor:
             raise Denied("The saved snapshot %s does not exist" % generation)
         return source
 
+    @staticmethod
+    def discard_tutorial_snapshot(source):
+        """Deletes the world's tutorial snapshot once it was copied (or refused): it is no checkpoint.
+        A generation without the snapshot mark is a real checkpoint and is left alone."""
+        if (source / TUTORIAL_SNAPSHOT_MARKER).is_file() and not source.is_symlink():
+            shutil.rmtree(source, ignore_errors=True)
+
     def tutorial_submit_check(self, run_id, secret, data):
         """Whether the world's owner may submit now: {ok, wait_seconds}; refused for worlds that can't."""
         with self.lock, self.db:
             world, actor = self.submitter(run_id, secret, data)
-            return {"ok": True, "wait_seconds": self.submit_wait(actor)}
+            hours = self.config.get("tutorial_submit_cooldown_hours", DEFAULTS["tutorial_submit_cooldown_hours"])
+            return {"ok": True, "wait_seconds": self.submit_wait(actor), "cooldown_hours": hours}
 
     def tutorial_submit(self, run_id, secret, data):
         """Copies a snapshot generation of the world into pending/<id>/ for review.
 
         The cooldown starts only once the tutorial is stored: a failed copy can be retried at once."""
-        with self.lock, self.db:
-            world, actor = self.submitter(run_id, secret, data)
-            title = clean_text(str(data.get("title", "")))
-            description = clean_text(str(data.get("description", "")), multiline=True)
-            if not 1 <= len(title) <= TUTORIAL_TITLE_MAX or len(description) > TUTORIAL_DESCRIPTION_MAX:
-                raise Denied("Use a title of 1–%d characters and a description up to %d characters"
-                             % (TUTORIAL_TITLE_MAX, TUTORIAL_DESCRIPTION_MAX))
-            wait = self.submit_wait(actor)
-            if wait:
-                raise Denied("You can submit another tutorial in %s" % self.duration(wait))
-            source = self.generation_source(world["id"], data.get("generation"))
-            tid = secrets.token_hex(16)
-            now = self.clock()
-            tutorial = dict(id=tid, title=title, description=description, author=actor, status="pending",
-                            map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
-                            reviewed_by=None, source_world=world["id"], based_on=world.get("copied_from"))
-            try:
-                self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"],
-                                                                based_on=self.based_on(tutorial)))
-            except (OSError, TutorialError) as error:
-                log("Storing the tutorial from %s failed: %s" % (self.describe(world["id"]), error))
-                raise Denied("The tutorial could not be stored: %s" % (
-                    error if isinstance(error, TutorialError) else "the save could not be copied")) from None
-            try:
-                self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world,based_on)"
-                                " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world,:based_on)",
-                                tutorial)
-                self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, now))
-                self.audit(actor, "tutorial_submit:" + tid, world["id"])
-            except Exception:
-                self.tutorials.remove("pending", tid)
-                raise
+        source = None
+        try:
+            with self.lock, self.db:
+                world, actor = self.submitter(run_id, secret, data)
+                title = clean_text(str(data.get("title", "")))
+                description = clean_text(str(data.get("description", "")), multiline=True)
+                if not 1 <= len(title) <= TUTORIAL_TITLE_MAX or len(description) > TUTORIAL_DESCRIPTION_MAX:
+                    raise Denied("Use a title of 1–%d characters and a description up to %d characters"
+                                 % (TUTORIAL_TITLE_MAX, TUTORIAL_DESCRIPTION_MAX))
+                wait = self.submit_wait(actor)
+                if wait:
+                    raise Denied("You can submit another tutorial in %s" % self.duration(wait))
+                source = self.generation_source(world["id"], data.get("generation"))
+                tid = secrets.token_hex(16)
+                now = self.clock()
+                tutorial = dict(id=tid, title=title, description=description, author=actor, status="pending",
+                                map=world["map"], build=build_of(self.catalog, world["map"]), created=now, updated=now,
+                                reviewed_by=None, source_world=world["id"], based_on=world.get("copied_from"))
+                try:
+                    self.tutorials.create_pending(tid, source, dict(tutorial, generation=data["generation"],
+                                                                    based_on=self.based_on(tutorial)))
+                except (OSError, TutorialError) as error:
+                    log("Storing the tutorial from %s failed: %s" % (self.describe(world["id"]), error))
+                    raise Denied("The tutorial could not be stored: %s" % (
+                        error if isinstance(error, TutorialError) else "the save could not be copied")) from None
+                try:
+                    self.db.execute("INSERT INTO tutorials(id,title,description,author,status,map,build,created,updated,reviewed_by,source_world,based_on)"
+                                    " VALUES(:id,:title,:description,:author,:status,:map,:build,:created,:updated,:reviewed_by,:source_world,:based_on)",
+                                    tutorial)
+                    self.db.execute("INSERT OR REPLACE INTO tutorial_cooldowns VALUES(?,?)", (actor, now))
+                    self.audit(actor, "tutorial_submit:" + tid, world["id"])
+                except Exception:
+                    self.tutorials.remove("pending", tid)
+                    raise
+        finally:
+            # The world's snapshot is no checkpoint: gone once copied or refused (the world deletes it too).
+            if source is not None:
+                self.discard_tutorial_snapshot(source)
         self.notify_tutorial(tutorial)
         return {"ok": True, "tutorial": tid}
 
@@ -1211,6 +1225,9 @@ class Supervisor:
             except (OSError, TutorialError) as error:
                 log("Saving back tutorial %s failed: %s" % (tutorial["id"], error))
                 raise Denied("The tutorial could not be saved back; the pending copy is unchanged") from None
+            finally:
+                # The edit world's snapshot is no checkpoint: gone once copied or refused.
+                self.discard_tutorial_snapshot(source)
             self.db.execute("UPDATE tutorials SET updated=? WHERE id=?", (self.clock(), tutorial["id"]))
             self.audit(actor, "tutorial_save_back:" + tutorial["id"], world["id"])
             return {"ok": True, "tutorial": tutorial["id"]}

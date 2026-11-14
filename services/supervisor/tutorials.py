@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 
+from constants import TUTORIAL_SNAPSHOT_MARKER
 from world_storage import TUTORIAL_ID_RE
 
 STATUSES = ("pending", "published")
@@ -57,6 +58,9 @@ def copy_snapshot(source, target):
         destination = target / entry.name
         if is_link(entry):
             raise TutorialError("The save contains a link")
+        if entry.name == TUTORIAL_SNAPSHOT_MARKER:
+            # The world's "not a checkpoint" mark: the copy is a tutorial's save, or a world's first checkpoint.
+            continue
         if entry.is_dir():
             copy_snapshot(entry, destination)
         elif entry.is_file():

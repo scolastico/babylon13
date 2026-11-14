@@ -773,6 +773,10 @@
 		if(length(encoded[2]) > 2)
 			turf_parts += copytext(encoded[2], 2, -1)
 	var/bytes = 0
+	if(for_tutorial)
+		// First, so even a half-written snapshot is never taken for a checkpoint (the supervisor's
+		// constants.TUTORIAL_SNAPSHOT_MARKER: never listed or restored, deleted once old).
+		rustg_file_write("1", "[base]/tutorial-snapshot")
 	for(var/z_text in level_maps)
 		bytes += length(level_maps[z_text])
 		rustg_file_write(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")

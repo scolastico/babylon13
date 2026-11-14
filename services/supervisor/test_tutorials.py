@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import time
 import unittest
+import unittest.mock
 
 import test_driver
 from supervisor import CHILD_ACTIONS, Denied, Supervisor
@@ -89,9 +90,37 @@ class Submit(TutorialFixture):
         # The world's own checkpoint is untouched.
         self.assertTrue((self.data / "worlds" / world / "data/babylon/saves" / GENERATION / "map.dmm").is_file())
 
+    def test_tutorial_snapshots_are_removed_once_copied(self):
+        # The world marks a submission's snapshot; the supervisor deletes it once copied or refused,
+        # and the copy leaves the mark out (review S1).
+        world, run = self.creative_run()
+        snapshot = self.data / "worlds" / world / "data/babylon/saves" / GENERATION
+        (snapshot / "tutorial-snapshot").write_text("1")
+        tid = self.submit(run)
+        self.assertFalse(snapshot.exists())
+        saved = self.data / "tutorials/pending" / tid / "save"
+        self.assertTrue((saved / "map.dmm").is_file())
+        self.assertFalse((saved / "tutorial-snapshot").exists())
+        # A refused copy removes it too; an unmarked generation (a real checkpoint) is never removed.
+        world2, run2 = self.creative_run("second")
+        marked = self.data / "worlds" / world2 / "data/babylon/saves" / GENERATION
+        (marked / "tutorial-snapshot").write_text("1")
+        with unittest.mock.patch.object(self.s.tutorials, "create_pending", side_effect=OSError("disk full")):
+            with self.assertRaises(Denied):
+                self.submit(run2, "second")
+        self.assertFalse(marked.exists())
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        edit_run = self.s.row("SELECT * FROM runs WHERE world=?", (edit,))
+        back = self.save(edit, "save-20261114-150000-7")
+        (back / "tutorial-snapshot").write_text("1")
+        self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")
+        self.assertFalse(back.exists())
+        self.assertFalse((saved / "tutorial-snapshot").exists())
+
     def test_submit_check_and_actor_must_own_the_world(self):
         world, run = self.creative_run()
-        self.assertEqual(self.child("tutorial_submit_check", run, actor="owner"), {"ok": True, "wait_seconds": 0})
+        self.assertEqual(self.child("tutorial_submit_check", run, actor="owner"), {"ok": True, "wait_seconds": 0, "cooldown_hours": 6})
         for actor in ("someone", "", "admin"):
             with self.assertRaisesRegex(Denied, "owner"):
                 self.child("tutorial_submit_check", run, actor=actor)

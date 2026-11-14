@@ -1,4 +1,7 @@
 // Trusted server-to-server API. Player input never supplies the actor or credential.
+/// Blocks until the supervisor answers (world.Export has no timeout): only
+/// /datum/babylon_supervisor_call calls it. Everything else uses
+/// babylon_supervisor_request_within() (test_contracts.py checks this).
 /proc/babylon_supervisor_request(list/query)
 	var/api = world.params["babylon-api"]
 	if(!api || !findtext(api, "http://127.0.0.1:"))
@@ -26,16 +29,20 @@
 	src.on_answer = on_answer
 
 /datum/babylon_supervisor_call/proc/perform()
-	answer = babylon_supervisor_request(query)
+	finish(babylon_supervisor_request(query))
+
+/datum/babylon_supervisor_call/proc/finish(list/result)
+	answer = result
 	done = TRUE
 	on_answer?.Invoke(answer)
 
 /// babylon_supervisor_request(), but waits at most `timeout` deciseconds. world.Export has no
 /// timeout of its own: the request goes on in the background, and on_answer is called with its
 /// answer whenever it arrives. Returns the answer, or list("ok" = FALSE, "error" = ..., "timeout" = TRUE).
-/// Sleeps: call it from a background proc (INVOKE_ASYNC), never from a ui_act.
-/proc/babylon_supervisor_request_within(list/query, timeout, datum/callback/on_answer)
-	var/datum/babylon_supervisor_call/request = new(query, on_answer)
+/// Sleeps: call it from a background proc (INVOKE_ASYNC), never from a ui_act. call_type: tests
+/// put in a call that answers late.
+/proc/babylon_supervisor_request_within(list/query, timeout = BABYLON_SUPERVISOR_TIMEOUT, datum/callback/on_answer, call_type = /datum/babylon_supervisor_call)
+	var/datum/babylon_supervisor_call/request = new call_type(query, on_answer)
 	INVOKE_ASYNC(request, TYPE_PROC_REF(/datum/babylon_supervisor_call, perform))
 	var/deadline = world.time + timeout
 	while(!request.done && world.time < deadline)
@@ -53,7 +60,8 @@
 	var/ticket = params["babylon_ticket"]
 	if(!istext(ticket) || length(ticket) > 128)
 		return FALSE
-	var/list/result = babylon_supervisor_request(list("action" = "redeem", "ticket" = ticket, "actor" = ckey))
+	// On a timeout the player is refused (and sent back to the lobby); the ticket is spent.
+	var/list/result = babylon_supervisor_request_within(list("action" = "redeem", "ticket" = ticket, "actor" = ckey))
 	if(!result?["ok"] || result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))
 		return FALSE
 	// The redemption blocks; the world may have begun stopping (a round's end) meanwhile. Refused,

@@ -182,9 +182,35 @@ var/global/list/lobby_config
 	poll_generation++
 	..()
 
+/// Longest the lobby waits for one supervisor answer (deciseconds); a tutorial copy can hold the
+/// supervisor for a while.
+#define LOBBY_API_TIMEOUT 600
+
+/// One supervisor request in the background: world.Export has no timeout of its own.
+/datum/lobby_request
+	var/url
+	var/done = FALSE
+	var/list/response
+
+/datum/lobby_request/proc/perform()
+	response = world.Export(url)
+	done = TRUE
+
+/// world.Export(url), waiting at most `timeout` deciseconds: the response, or null (also when the
+/// request is still running; it then finishes in the background and its answer is dropped).
+/proc/lobby_export_within(url, timeout = LOBBY_API_TIMEOUT)
+	var/datum/lobby_request/request = new
+	request.url = url
+	spawn(0)
+		request.perform()
+	var/deadline = world.time + timeout
+	while(!request.done && world.time < deadline)
+		sleep(1)
+	return request.done ? request.response : null
+
 /mob/lobby/proc/api(action, list/payload)
 	var/list/query = list("secret" = lobby_config["secret"], "actor" = ckey, "action" = action, "payload" = json_encode(payload || list()))
-	var/list/response = world.Export("[lobby_config["api"]]/api?[list2params(query)]")
+	var/list/response = lobby_export_within("[lobby_config["api"]]/api?[list2params(query)]")
 	if(!response || !response["CONTENT"])
 		world.log << "Supervisor unavailable for [ckey] ([action])"
 		return list("error" = "The world manager isn't responding. Try again in a moment.", "unavailable" = TRUE)

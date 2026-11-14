@@ -21,3 +21,7 @@
 /// (datum/babylon_save/session). Modules step with it through a /datum/babylon_tick_listener (state.dm)
 /// instead of overriding tick_world (guarded by tools/babylon/test_tick_override.py).
 #define COMSIG_BABYLON_WORLD_TICK "babylon_world_tick"
+
+/// How long a world waits for the supervisor's answer to an ordinary request (redeem, world
+/// management, round end, adminhelp relays): babylon_supervisor_request_within().
+#define BABYLON_SUPERVISOR_TIMEOUT (30 SECONDS)
