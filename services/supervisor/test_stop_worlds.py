@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -12,15 +13,15 @@ class Shutdown(unittest.TestCase):
         self.config = dict(data_directory=self.temp.name)
         self.database = Path(self.temp.name) / 'supervisor.sqlite3'
         self.db = sqlite3.connect(self.database)
-        self.db.executescript('CREATE TABLE worlds(id,owner); CREATE TABLE runs(world,state,error);')
+        self.db.executescript('CREATE TABLE worlds(id,owner,map); CREATE TABLE runs(world,state,error);')
 
     def tearDown(self):
         self.db.close()
         self.temp.cleanup()
 
-    def world(self, name, owner):
+    def world(self, name, owner, map_id='babylon'):
         with self.db:
-            self.db.execute('INSERT INTO worlds VALUES(?,?)', (name, owner))
+            self.db.execute('INSERT INTO worlds VALUES(?,?,?)', (name, owner, map_id))
             self.db.execute("INSERT INTO runs VALUES(?,'running',NULL)", (name,))
 
     def test_stopped_cluster_is_noop(self):
@@ -72,15 +73,32 @@ class Shutdown(unittest.TestCase):
             stop_worlds(self.config, timeout=0, request=lambda *_: None)
         self.assertEqual(len(running_worlds(self.database)), 1)
 
-    def test_starting_wait_covers_the_station_startup_timeout(self):
-        self.world('a', 'alice')
+    def catalog(self, build):
+        directory = Path(self.temp.name) / 'cat'
+        directory.mkdir(exist_ok=True)
+        path = directory / 'catalog.json'
+        path.write_text(json.dumps({'maps': [
+            {'id': 'babylon', 'name': 'Babylon', 'description': 'd', 'group': 'babylon', 'size': None,
+             'build': 'babylon', 'map_json': None, 'preview': None, 'multiz': False},
+            {'id': 'box', 'name': 'Box', 'description': 'd', 'group': 'station', 'size': None,
+             'build': build, 'map_json': 'box/box.json' if build == 'station' else None, 'preview': None,
+             'multiz': False}]}))
+        return str(path)
+
+    def starting_world_times_out(self, map_id, build):
+        self.world('a', 'alice', map_id)
         with self.db:
             self.db.execute("UPDATE runs SET state='starting'")
         now = [0]
         def sleep(seconds):
-            now[0] += 100  # a station world needs 450 s to come up
-            if now[0] >= 450:
-                with self.db:
-                    self.db.execute("DELETE FROM runs")
-        stop_worlds(dict(self.config, station_startup_timeout_seconds=600), timeout=180,
-                    request=lambda *_: None, sleep=sleep, clock=lambda: now[0])
+            now[0] += 100
+        config = dict(self.config, station_startup_timeout_seconds=600, map_catalog=self.catalog(build))
+        with self.assertRaises(TimeoutError):
+            stop_worlds(config, timeout=180, request=lambda *_: None, sleep=sleep, clock=lambda: now[0])
+        return now[0]
+
+    def test_starting_station_world_waits_the_station_startup_timeout(self):
+        self.assertGreaterEqual(self.starting_world_times_out('box', 'station'), 600)
+
+    def test_starting_babylon_world_keeps_the_ordinary_wait(self):
+        self.assertLess(self.starting_world_times_out('babylon', 'babylon'), 600)

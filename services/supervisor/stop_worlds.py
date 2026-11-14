@@ -18,7 +18,18 @@ def running_worlds(database):
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
-            'SELECT r.world,r.state,r.error,w.owner FROM runs r JOIN worlds w ON w.id=r.world')]
+            'SELECT r.world,r.state,r.error,w.owner,w.map FROM runs r JOIN worlds w ON w.id=r.world')]
+
+
+def station_build_starting(config, worlds):
+    """True when a world that is still starting runs on the (slower) station build."""
+    from catalog import load_catalog
+    from supervisor import build_of, catalog_path
+    try:
+        catalog = load_catalog(catalog_path(config))
+        return any(build_of(catalog, world['map']) == 'station' for world in worlds if world['state'] == 'starting')
+    except Exception:
+        return False
 
 
 def stop_worlds(config, timeout=180, request=None, sleep=time.sleep, clock=time.monotonic):
@@ -43,9 +54,11 @@ def stop_worlds(config, timeout=180, request=None, sleep=time.sleep, clock=time.
     log('Saving and stopping %d world(s)...' % len(worlds))
     # A child cannot checkpoint until restoration/initialization has finished.
     # The supervisor refuses new worlds and joins while shutting down (restart_countdown).
-    # Station-build worlds start slower than Babylon ones; wait as long as the supervisor allows them.
-    deadline = clock() + max(timeout, config.get('startup_timeout_seconds', DEFAULTS['startup_timeout_seconds']),
-                             config.get('station_startup_timeout_seconds', DEFAULTS['station_startup_timeout_seconds']))
+    wait = max(timeout, config.get('startup_timeout_seconds', DEFAULTS['startup_timeout_seconds']))
+    if station_build_starting(config, worlds):
+        # Station-build worlds start slower than Babylon ones; wait as long as the supervisor allows them.
+        wait = max(wait, config.get('station_startup_timeout_seconds', DEFAULTS['station_startup_timeout_seconds']))
+    deadline = clock() + wait
     while any(world['state'] == 'starting' for world in worlds):
         if clock() >= deadline:
             raise TimeoutError('A world is still starting; supervisor and children left running')

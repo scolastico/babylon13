@@ -25,7 +25,7 @@ from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
-from constants import DEFAULTS, TUTORIAL_KINDS
+from constants import DEFAULTS, TUTORIAL_KINDS, WORLD_KIND
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
 
@@ -169,7 +169,7 @@ class Driver:
 
     def restore_source(self, world):
         """The generation or tutorial snapshot directory a world starts from, or None for a fresh map."""
-        kind = self.field(world, "kind", "world")
+        kind = self.field(world, "kind", WORLD_KIND)
         tutorial = self.field(world, "tutorial", "")
         data = self.data_root()
         if kind in TUTORIAL_KINDS:
@@ -327,7 +327,7 @@ class Driver:
                             "babylon-build": build,
                             "babylon-persistent": 1 if self.field(world, "persistent", 1) else 0,
                             "babylon-creative": 1 if self.field(world, "creative", 0) else 0,
-                            "babylon-kind": self.field(world, "kind", "world"),
+                            "babylon-kind": self.field(world, "kind", WORLD_KIND),
                             "babylon-tutorial": self.field(world, "tutorial", ""),
                             "babylon-map": self.field(world, "map", "babylon"),
                             **self.music_param()})
@@ -831,7 +831,7 @@ class Supervisor:
                     if world["visibility"] == "private" and role == "guest":
                         continue
                     # Tutorial instances belong to their player alone.
-                    if world["kind"] != "world" and role not in ("owner", "admin"):
+                    if world["kind"] != WORLD_KIND and role not in ("owner", "admin"):
                         continue
                     run = self.row("SELECT * FROM runs WHERE world=?", (world["id"],))
                     worlds.append({k: world[k] for k in ("id", "owner", "name", "description", "visibility", "max_players",
@@ -1247,8 +1247,8 @@ def serve(config, service=None):
                     data = {k: v[-1] for k, v in parse_qs(urlsplit(self.path).query, keep_blank_values=True).items()}
                 handler = CHILD_ACTIONS.get(data.get("action"))
                 if handler:
-                    # Every child action is authenticated here, whatever the handler does with the run.
-                    service.child(data.get("run"), data.get("secret", ""))
+                    # Each handler authenticates itself (Supervisor.child under the service lock);
+                    # test_contracts checks that every entry rejects bad credentials.
                     result = handler(service, data)
                 else:
                     if not hmac.compare_digest(str(data.get("secret", "")), config["lobby_secret"]):

@@ -1,4 +1,5 @@
 """Contracts between the supervisor and the DM code that talks to it."""
+import json
 import re
 import tempfile
 import unittest
@@ -8,8 +9,9 @@ from unittest.mock import patch
 from urllib.parse import parse_qs
 
 import test_driver
+import test_supervisor
 from constants import WORLD_KINDS
-from supervisor import CHILD_ACTIONS
+from supervisor import CHILD_ACTIONS, Denied, Supervisor
 
 DM = Path(__file__).resolve().parents[2] / "modular_babylon/code"
 
@@ -25,18 +27,52 @@ def dm_sources():
     return {path: path.read_text(encoding="utf-8") for path in sorted(DM.rglob("*.dm"))}
 
 
+ACTION = re.compile(r'"action"\s*=\s*"([a-z_]+)"')
+
+
+def dm_actions():
+    """Every "action" literal in files that call babylon_supervisor_request, mapped to a file."""
+    found = {}
+    for path, text in dm_sources().items():
+        if "babylon_supervisor_request" in text:
+            for action in ACTION.findall(text):
+                found.setdefault(action, path.name)
+    return found
+
+
 class ChildActions(unittest.TestCase):
     def test_every_dm_action_literal_is_a_child_action(self):
-        found = {}
-        for path, text in dm_sources().items():
-            for action in re.findall(r'list\(\s*"action"\s*=\s*"([a-z_]+)"', text):
-                found.setdefault(action, path.name)
+        found = dm_actions()
         self.assertTrue({"redeem", "ahelp", "world_manage", "round_ended"} <= set(found), found)
         self.assertEqual({a: f for a, f in found.items() if a not in CHILD_ACTIONS}, {})
 
     def test_every_child_action_is_called_by_the_dm_code(self):
-        used = set(re.findall(r'list\(\s*"action"\s*=\s*"([a-z_]+)"', "\n".join(dm_sources().values())))
-        self.assertEqual(set(CHILD_ACTIONS) - used, set())
+        self.assertEqual(set(CHILD_ACTIONS) - set(dm_actions()), set())
+
+    def test_every_child_action_rejects_bad_credentials(self):
+        with tempfile.TemporaryDirectory() as temp:
+            service = Supervisor(dict(data_directory=temp, template_directory=temp, config_directory=temp,
+                                      dreamdaemon="x", listen_port=1, port_first=1400, port_last=1410,
+                                      max_running_worlds=2, max_players_per_world=4, max_worlds_per_player=3,
+                                      max_running_worlds_per_player=1, kept_save_points_per_world=4,
+                                      empty_grace_seconds=60, startup_timeout_seconds=60,
+                                      ticket_lifetime_seconds=60, map_catalog=str(write_catalog(temp))),
+                                 driver=test_supervisor.FakeDriver())
+            service.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,max_players,created,last_used)"
+                               " VALUES('w','o','W','','public',4,0,0)")
+            service.db.execute("INSERT INTO runs(id,world,port,secret,state,started) VALUES('r','w',1400,'right-secret','running',0)")
+            service.db.commit()
+            for action, handler in CHILD_ACTIONS.items():
+                for run, secret in (("r", "wrong"), ("unknown", "right-secret"), (None, "")):
+                    with self.assertRaises(Denied, msg="%s accepted run=%r secret=%r" % (action, run, secret)):
+                        handler(service, {"action": action, "run": run, "secret": secret, "actor": "o",
+                                          "ticket": "t", "op": "kick", "target": "x", "kind": "new"})
+
+
+def write_catalog(temp):
+    path = Path(temp) / "catalog.json"
+    path.write_text(json.dumps(test_driver.CATALOG))
+    return path
 
 
 class ChildParams(test_driver.DriverFixture):

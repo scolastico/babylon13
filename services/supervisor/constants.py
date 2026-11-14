@@ -2,6 +2,8 @@
 
 # A world's kind: a normal player world, a tutorial run by a player, or a tutorial being edited.
 WORLD_KINDS = ("world", "tutorial", "tutorial_edit")
+# The kind of an ordinary player world.
+WORLD_KIND = WORLD_KINDS[0]
 # Kinds whose world starts from a tutorial snapshot instead of a player save.
 TUTORIAL_KINDS = ("tutorial", "tutorial_edit")
 
