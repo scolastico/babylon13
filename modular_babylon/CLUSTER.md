@@ -600,16 +600,26 @@ to open its window and choose what a click does:
     list (optionally only empty tiles).
   - **Clear**: removes objects, mobs and tutorial objects, tiles become plating (or the
     picked floor or wall). It asks first.
-  - **Undo** your last paste, fill, border or clear (one step).
+  - **Undo** your last paste, fill, border or clear (one step; any new operation replaces
+    it, and the window says so). Undoing a fill or border is exact. Undoing a paste or
+    clear rebuilds the whole rectangle as it was before, so later changes there are undone
+    too, and it is approximate: floor markings and machine settings are lost. Tutorial ids
+    taken in the meantime get a suffix instead of being duplicated.
 
-  Limits: at most 10 000 tiles at once, on one level, inside the map. Indestructible
-  turfs are never changed (a paste over them is refused). Players are never deleted:
-  they are moved to the nearest free tile outside the area. One operation per 2 seconds,
-  and every operation is logged. Rotating a paste is not supported. A paste keeps the
-  target's areas (rooms); copied turf decals (floor stripes) and machine settings beyond
-  their build state are not carried over.
+  Limits: at most 10,000 tiles and 20,000 objects at once, on one deck, inside the map.
+  Protected tiles and objects (indestructible: the Creative Plane's edge, vault parts,
+  unique machines) are never changed, copied or removed; they are outlined in red, and a
+  paste over a protected tile is refused. A copy turns floors and walls the tools can't
+  build (lava, airless floors …) into plating. Players are never deleted, including a
+  ghosted player's body: they are moved to the nearest free tile outside the area. After
+  an operation you wait 2 seconds plus 1 second per 1000 tiles; only one operation runs
+  in the world at a time. Every operation is logged. Rotating a paste is not supported.
+  A paste keeps the target's areas (rooms) and leaves a copied APC out where the area
+  already has one; copied floor markings and machine settings beyond their build state
+  are not carried over. Mobs are not copied; NPC spawners come along and make their NPC
+  again.
 
-Right-clicking the wand in your hand switches to the next mode.
+Right-clicking the wand while holding it switches to the next mode.
 
 Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
 other by id, like airlock ids. A marker with the id **start** is where players begin

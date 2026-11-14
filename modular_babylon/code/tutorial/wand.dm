@@ -68,7 +68,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	if(!babylon_creative_enabled())
 		. += span_warning("It only works in creative worlds.")
 		return
-	. += span_notice("Mode: <b>[babylon_tutorial_mode_name(mode)]</b>. Use it in your hand to open its window, right-click it in your hand to switch modes, then click tiles with it.")
+	. += span_notice("Mode: <b>[babylon_tutorial_mode_name(mode)]</b>. Use it in your hand to open its window, right-click it while holding it to switch modes, then click tiles with it.")
 
 /proc/babylon_tutorial_mode_name(mode)
 	switch(mode)
@@ -178,6 +178,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		if("select")
 			var/datum/babylon_area_session/session = area_session(user)
 			var/list/result = session.click(tile)
+			session.result(result["text"], result["ok"])
 			report(user, result["text"], result["ok"])
 			user.balloon_alert(user, session.paste_armed ? "paste here?" : (session.corner ? "corner 1" : "selected"))
 			sync_view(TRUE)
@@ -447,7 +448,12 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		// The edge, plus a light fill inside small areas.
 		for(var/turf/tile as anything in (tiles <= 400 ? babylon_area_tiles(rect[1], rect[2], x2, y2, rect[5]) : babylon_area_edge(rect[1], rect[2], x2, y2, rect[5])))
 			var/edge = tile.x == rect[1] || tile.x == x2 || tile.y == rect[2] || tile.y == y2
-			made += babylon_area_shade(tile, entry[2], edge ? 90 : 30)
+			if(!babylon_area_locked(tile))
+				made += babylon_area_shade(tile, entry[2], edge ? 90 : 30)
+		// Protected tiles (the game won't let anyone change them) in red, wherever they are.
+		for(var/turf/tile as anything in babylon_area_tiles(max(1, rect[1]), max(1, rect[2]), x2, y2, rect[5]))
+			if(babylon_area_locked(tile))
+				made += babylon_area_shade(tile, "#ff3b3b", 140)
 		var/turf/top_left = locate(rect[1], y2, rect[5])
 		if(top_left)
 			made += babylon_area_label(top_left, entry[3], entry[2])
@@ -570,12 +576,14 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		if("kind")
 			if(babylon_tutorial_kinds()[params["kind"]])
 				selected_kind = params["kind"]
-				mode = "place"
+				if(mode != "place")
+					set_mode(user, "place")
 			return TRUE
 		if("preset")
 			if(babylon_tutorial_npc_presets()[params["preset"]])
 				selected_preset = params["preset"]
-				mode = "npc"
+				if(mode != "npc")
+					set_mode(user, "npc")
 			return TRUE
 		if("configure")
 			var/obj/babylon_tutorial/object = locate(params["ref"]) in GLOB.babylon_tutorial_objects

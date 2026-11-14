@@ -31,7 +31,7 @@
 			body.key = null
 		if(!QDELETED(thing))
 			qdel(thing)
-	GLOB.babylon_area_busy = FALSE
+	GLOB.babylon_area_busy = 0
 	setup?.undo(null)
 	for(var/key in GLOB.babylon_area_sessions)
 		if(findtext(key, "areatest_") == 1)
@@ -55,17 +55,17 @@
 	try
 		setup = area_test_setup(rect)
 		var/datum/babylon_area_session/session = babylon_area_test_session("limits")
-		result["over_limit_refused"] = !!findtext(session.select(1, 1, z, 101, 100, z) || "", "at most 10 000 tiles")
+		result["over_limit_refused"] = !!findtext(session.select(1, 1, z, 101, 100, z) || "", "at most 10,000 tiles")
 		result["over_limit_not_selected"] = isnull(session.selection)
 		result["at_limit_accepted"] = isnull(session.select(1, 1, z, 100, 100, z)) && session.selection_width() * session.selection_height() == 10000
 		result["out_of_bounds_refused"] = !!findtext(session.select(world.maxx - 2, 1, z, world.maxx + 3, 4, z) || "", "edge of the map")
-		result["cross_z_refused"] = !!findtext(session.select(rect[1], rect[2], z, rect[1] + 2, rect[2] + 2, z + 1) || "", "same level")
+		result["cross_z_refused"] = !!findtext(session.select(rect[1], rect[2], z, rect[1] + 2, rect[2] + 2, z + 1) || "", "same deck")
 		var/foreign = 0
 		for(var/level in 1 to world.maxz)
 			if(!(level in babylon_area_levels()))
 				foreign = level
 				break
-		result["foreign_level_refused"] = !foreign || !!findtext(session.select(1, 1, foreign, 3, 3, foreign) || "", "not part of this world")
+		result["foreign_level_refused"] = !foreign || !!findtext(session.select(1, 1, foreign, 3, 3, foreign) || "", "own decks")
 		// A click picks corner 1, the second click selects; a refused corner 2 keeps corner 1.
 		session.reselect()
 		session.click(locate(rect[1], rect[2], z))
@@ -80,24 +80,52 @@
 		var/turf/blocker = locate(rect[1] + 11, rect[2] + 1, z)
 		blocker.ChangeTurf(/turf/closed/indestructible)
 		session.click(locate(rect[1] + 10, rect[2], z))
-		result["paste_over_indestructible_refused"] = !!findtext(session.paste(null)["text"], "indestructible")
+		result["paste_over_indestructible_refused"] = !!findtext(session.paste(null)["text"], "protected tile")
 		session.cancel_paste()
 		session.select(rect[1] + 10, rect[2], z, rect[1] + 12, rect[2] + 2, z)
 		session.fill(null, "[/turf/open/floor/iron]")
 		result["fill_leaves_indestructible"] = istype(blocker, /turf/closed/indestructible) && istype(locate(rect[1] + 10, rect[2], z), /turf/open/floor/iron)
 		session.clear(null)
 		result["clear_leaves_indestructible"] = istype(blocker, /turf/closed/indestructible)
+		// A copy never carries protected tiles or objects, nor turfs the tools can't build.
+		var/turf/lava = locate(rect[1] + 12, rect[2] + 1, z)
+		lava.ChangeTurf(/turf/open/lava/smooth)
+		var/obj/structure/chair/guarded = new(locate(rect[1] + 10, rect[2] + 2, z))
+		made += guarded
+		guarded.resistance_flags |= INDESTRUCTIBLE
+		session.copy(null)
+		result["copy_reports_left_out"] = session.clipboard.skipped_locked == 1 && session.clipboard.skipped_protected == 1 && session.clipboard.replaced_turfs == 1
+		session.arm_paste()
+		session.click(locate(rect[1] + 15, rect[2], z))
+		result["paste_beside_protected_ok"] = session.paste(null)["ok"]
+		result["protected_tile_not_carried"] = !babylon_area_locked(locate(rect[1] + 16, rect[2] + 1, z))
+		result["unbuildable_turf_becomes_plating"] = istype(locate(rect[1] + 17, rect[2] + 1, z), /turf/open/floor/plating)
+		result["protected_object_not_copied"] = !(locate(/obj/structure/chair) in locate(rect[1] + 15, rect[2] + 2, z))
+		session.cancel_paste()
+		session.clear(null)
+		result["clear_keeps_protected_object"] = !QDELETED(guarded) && get_turf(guarded) == locate(rect[1] + 10, rect[2] + 2, z)
+		qdel(guarded)
 		blocker.ChangeTurf(/turf/open/floor/plating)
+		// A paste leaves a copied APC out where the area keeps its own APC.
+		var/datum/babylon_area_clip/apc_clip = new
+		apc_clip.width = 1
+		apc_clip.height = 1
+		apc_clip.tiles = list(list("turf" = "[/turf/open/floor/plating]", "objects" = list("[/obj/machinery/power/apc]{\n\tdir = 1\n\t}", "[/obj/structure/table]"), "space" = FALSE))
+		var/apc_text = babylon_area_map_text(apc_clip, FALSE, list("0,0" = TRUE))
+		result["second_apc_left_out"] = !findtext(apc_text, "/obj/machinery/power/apc") && findtext(apc_text, "/obj/structure/table")
 		result["unknown_material_refused"] = !session.fill(null, "[/obj/item/toy/plush]")["ok"] && !babylon_area_material("[/turf/closed/indestructible]")
 		session.rate_limited = TRUE
 		session.next_op = 0
 		var/first = session.copy(null)["ok"]
 		var/list/second = session.copy(null)
-		result["rate_limited"] = first && !second["ok"] && !!findtext(second["text"], "every 2 seconds")
+		result["rate_limited"] = first && !second["ok"] && !!findtext(second["text"], "longer pause")
 		session.rate_limited = FALSE
-		GLOB.babylon_area_busy = TRUE
+		GLOB.babylon_area_busy = world.time + 100
 		result["one_at_a_time"] = !!findtext(session.copy(null)["text"], "still running")
-		GLOB.babylon_area_busy = FALSE
+		// A lock that outlived its timeout blocks nobody.
+		GLOB.babylon_area_busy = world.time - 1
+		result["stale_lock_ignored"] = session.copy(null)["ok"]
+		GLOB.babylon_area_busy = 0
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_area_tools_limits failed: [error] ([error.file]:[error.line])")
@@ -173,6 +201,19 @@
 		var/replaced = !babylon_tutorial_find("room_enter_2") && !!babylon_tutorial_find("room_enter_c")
 		session.undo(null)
 		result["undo_restores_ids"] = replaced && !babylon_tutorial_find("room_enter_c") && babylon_tutorial_find("room_enter_2")?.setting("actions") ~= list("room_msg_2", "room_point_2")
+		// An id taken in the meantime: the restored objects get a suffix instead of a duplicate.
+		session.set_option("custom_suffix", "_d")
+		session.click(locate(x1 + 6, y1, z))
+		session.paste(null)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(x1, y1 + 7, z), "room_msg_2", list(), made)
+		var/list/undone = session.undo(null)
+		var/collisions = 0
+		var/list/seen = list()
+		for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
+			if(seen[object.tutorial_id])
+				collisions++
+			seen[object.tutorial_id] = TRUE
+		result["undo_resuffixes_taken_ids"] = undone["ok"] && !collisions && !!findtext(undone["text"], "suffix") && babylon_tutorial_find("room_enter_2_2")?.setting("actions") ~= list("room_msg_2_2", "room_point_2_2")
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_paste_suffix_rewrites_refs failed: [error] ([error.file]:[error.line])")
@@ -250,12 +291,22 @@
 		var/mob/living/carbon/human/player = new(locate(x1 + 2, y1 + 2, z))
 		made += player
 		player.key = "AreaTestPlayer"
+		// A ghosted player's body (a mind, no ckey), once on the floor and once in a closet.
+		var/mob/living/carbon/human/ghosted = new(locate(x1 + 4, y1 + 3, z))
+		made += ghosted
+		ghosted.mind_initialize()
+		var/obj/structure/closet/locker = new(locate(x1 + 5, y1 + 3, z))
+		var/mob/living/carbon/human/stored = new(locker)
+		made += stored
+		stored.mind_initialize()
 		result["clear_ok"] = session.clear(null)["ok"]
 		result["clear_removed_objects"] = QDELETED(toolbox) && QDELETED(closet) && QDELETED(beaker)
 		result["clear_removed_npc"] = QDELETED(npc)
 		result["clear_player_not_deleted"] = !QDELETED(player)
 		var/turf/player_tile = get_turf(player)
 		result["clear_player_moved_out"] = player_tile && !(player_tile in room) && player_tile.z == z
+		result["clear_keeps_ghosted_body"] = !QDELETED(ghosted) && !(get_turf(ghosted) in room)
+		result["clear_keeps_body_in_closet"] = !QDELETED(stored) && !(get_turf(stored) in room)
 		result["clear_to_plating"] = babylon_area_test_all(room, /turf/open/floor/plating)
 		session.undo(null)
 		var/obj/structure/closet/restored_closet = locate() in locate(x1 + 1, y1, z)
@@ -289,6 +340,7 @@
 		result["paste_player_kept"] = !QDELETED(player) && player_tile && !(player_tile in babylon_area_tiles(x1 + 8, y1, x1 + 13, y1 + 4, z))
 		session.undo(null)
 		result["paste_undone"] = !(locate(/obj/structure/cable) in locate(x1 + 9, y1 + 1, z))
+		result["no_one_way_pipes"] = !babylon_area_one_way_nodes(list(x1 + 8, y1, x1 + 13, y1 + 4, z))
 
 		// The wand: Select mode, two clicks, outlines for the holder.
 		var/was_creative = GLOB.babylon_world.creative
