@@ -74,7 +74,7 @@ SUBSYSTEM_DEF(babylon_station)
 		return get_turf(pick(SSjob.latejoin_trackers))
 	return locate(round(world.maxx / 2), round(world.maxy / 2), station_z)
 
-/datum/babylon_save/tick_world()
+/datum/babylon_save/tick_players()
 	if(draining)
 		return
 	for(var/client/student in GLOB.clients)

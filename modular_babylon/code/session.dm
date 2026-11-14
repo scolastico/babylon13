@@ -81,7 +81,7 @@
 			babylon_loop_failed("world tick", error)
 		sleep(1 SECONDS)
 
-/datum/babylon_save/tick_world()
+/datum/babylon_save/tick_players()
 	if(!draining)
 		for(var/client/student in GLOB.clients)
 			if(!babylon_ready_client(student))

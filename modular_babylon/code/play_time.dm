@@ -17,8 +17,12 @@
 	/// Deciseconds this player was connected to the world as a player.
 	var/play_time = 0
 
-/datum/babylon_save/tick_world()
+/datum/babylon_save/New()
 	. = ..()
+	RegisterSignal(src, COMSIG_BABYLON_WORLD_TICK, PROC_REF(on_world_tick_play_time))
+
+/datum/babylon_save/proc/on_world_tick_play_time(datum/babylon_save/source)
+	SIGNAL_HANDLER
 	count_play_time()
 
 /datum/babylon_save/proc/count_play_time()

@@ -60,9 +60,16 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	RETURN_TYPE(/datum/babylon_player)
 	return player_sessions[owner_ckey]
 
-/// One step of the world's player loop, once a second while the world runs. Each build's
-/// session (session.dm, station_session.dm) supplies it; play_time.dm adds to it.
+/// One step of the world's loop, once a second while the world runs: the build's player loop,
+/// then COMSIG_BABYLON_WORLD_TICK for the modules' own steps (play time, round control ...).
+/// Defined only here; modules register for the signal (tools/babylon/test_tick_override.py).
 /datum/babylon_save/proc/tick_world()
+	SHOULD_NOT_OVERRIDE(TRUE)
+	tick_players()
+	SEND_SIGNAL(src, COMSIG_BABYLON_WORLD_TICK)
+
+/// The build's player loop (session.dm, station_session.dm), once per world tick.
+/datum/babylon_save/proc/tick_players()
 	return
 
 /// Reads babylon-afk-timeout into afk_timeout. FALSE (with boot_error set) when it is invalid.
