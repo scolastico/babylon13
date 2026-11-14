@@ -76,7 +76,69 @@
 		if(findtext(entry["path"], "debug"))
 			search_clean = FALSE
 	result["search"] = search_clean
-	result["categories"] = length(babylon_creative_categories()) == 7
+	result["categories"] = length(babylon_creative_categories()) == length(babylon_creative_category_ids()) - 1
+	panel.last_search = -INFINITY
+	panel.handle_action(body, "search", list("query" = "metal", "category" = "materials"))
+	var/alias_found = FALSE
+	for(var/list/entry as anything in panel.search_results)
+		if(entry["path"] == "[/obj/item/stack/sheet/iron]")
+			alias_found = TRUE
+	result["search_alias"] = alias_found
+	panel.handle_action(body, "search", list("query" = "dildo", "category" = "all"))
+	result["search_cooldown"] = panel.search_query == "metal"
+	panel.last_search = -INFINITY
+	panel.handle_action(body, "search", list("query" = "dildo", "category" = "all"))
+	result["search_no_erp"] = panel.search_query == "dildo" && !length(panel.search_results)
+	result["erp_blocked"] = babylon_type_is_erp(/obj/item/clothing/sextoy/dildo) && babylon_creative_spawn_blocked(/obj/item/clothing/sextoy/dildo) \
+		&& babylon_creative_spawn_blocked(/obj/structure/stripper_pole) && !babylon_type_is_erp(/obj/item/wrench) && !babylon_type_is_erp(/obj/item/clothing/suit/hazardvest)
+	panel.last_search = -INFINITY
+	panel.handle_action(body, "search", list("query" = "tank", "category" = "all"))
+	var/hints = TRUE
+	var/list/names_seen = list()
+	for(var/list/entry as anything in panel.search_results)
+		names_seen[entry["name"]] = (names_seen[entry["name"]] || 0) + 1
+	for(var/list/entry as anything in panel.search_results)
+		if(names_seen[entry["name"]] > 1 && !entry["hint"])
+			hints = FALSE
+	result["same_names_get_hints"] = hints && panel.search_capped
+
+	// Blacklist rules from the review: singularity makers, spreading cores, shuttle control,
+	// CentCom IDs, mob makers, and the board of every blocked machine.
+	result["blocked_singularity"] = babylon_creative_spawn_blocked(/obj/singularity) && babylon_creative_spawn_blocked(/obj/energy_ball) \
+		&& babylon_creative_spawn_blocked(/obj/machinery/power/singularity_beacon) && !babylon_creative_spawn_blocked(/obj/machinery/power/supermatter_crystal)
+	result["blocked_spreading"] = babylon_creative_spawn_blocked(/obj/structure/mold) && babylon_creative_spawn_blocked(/obj/structure/fleshmind) \
+		&& babylon_creative_spawn_blocked(/obj/structure/spacevine) && babylon_creative_spawn_blocked(/obj/structure/alien/weeds/node)
+	result["blocked_shuttle_and_ids"] = babylon_creative_spawn_blocked(/obj/machinery/computer/shuttle) \
+		&& babylon_creative_spawn_blocked(/obj/machinery/computer/camera_advanced/shuttle_docker) \
+		&& babylon_creative_spawn_blocked(/obj/item/card/id/advanced/centcom/ert) && babylon_creative_spawn_blocked(/obj/item/card/id/advanced/black/deathsquad)
+	result["blocked_mob_makers"] = babylon_creative_spawn_blocked(/mob/living/basic/mining/legion) && babylon_creative_spawn_blocked(/mob/living/basic/regal_rat) \
+		&& babylon_creative_spawn_blocked(/obj/item/mmi/posibrain)
+	var/boards_follow = TRUE
+	var/shuttle_boards = 0
+	for(var/obj/item/circuitboard/board as anything in typesof(/obj/item/circuitboard))
+		var/builds = initial(board.build_path)
+		if(ispath(builds, /obj/machinery/computer/shuttle))
+			shuttle_boards++
+		if(ispath(builds) && babylon_creative_spawn_blocked(builds) && !babylon_creative_spawn_blocked(board))
+			boards_follow = FALSE
+	result["blocked_machine_boards"] = boards_follow && shuttle_boards > 0
+
+	// Supermatter: spawnable, but no singularity, tesla or cascade here.
+	var/datum/sm_delam/delam = GLOB.sm_delam_list[/datum/sm_delam/singularity]
+	var/datum/sm_delam/cascade = GLOB.sm_delam_list[/datum/sm_delam/cascade]
+	var/singularities = length(GLOB.singularities)
+	result["supermatter_contained"] = babylon_delam_contained() && !delam.effect_singulo(null) && !delam.effect_tesla(null) \
+		&& !cascade.can_select(null) && length(GLOB.singularities) == singularities
+
+	// Mob cap: a world full of creative mobs refuses more.
+	var/list/mobs_before = GLOB.babylon_creative_mobs.Copy()
+	for(var/i in 1 to BABYLON_CREATIVE_MOB_CAP)
+		GLOB.babylon_creative_mobs += WEAKREF(body)
+	var/corgis = babylon_creative_test_count(start, /mob/living/basic/pet/dog/corgi)
+	panel.handle_action(body, "spawn", list("path" = "/mob/living/basic/pet/dog/corgi"))
+	result["mob_cap"] = !panel.notice_ok && babylon_creative_test_count(start, /mob/living/basic/pet/dog/corgi) == corgis
+	GLOB.babylon_creative_mobs = mobs_before
+	panel.spawn_times.Cut()
 
 	// Teleport: coordinates clamped to the map, only this world's levels, areas, unstuck.
 	panel.handle_action(body, "noclip")
@@ -106,6 +168,16 @@
 	result["noclip_off_unstuck"] = !body.babylon_creative_noclip && !body.incorporeal_move && get_turf(body) != start \
 		&& !babylon_creative_turf_blocked(get_turf(body), body) && get_dist(body, start) <= BABYLON_CREATIVE_UNSTUCK_RANGE
 	qdel(wall)
+	// Teleporting out of a closet leaves the closet behind, empty of the body.
+	var/obj/structure/closet/locker = new(start)
+	cleanup += locker
+	body.forceMove(locker)
+	panel.handle_action(body, "teleport_coords", list("x" = start.x, "y" = start.y, "z" = start.z))
+	result["teleport_leaves_closet"] = isturf(body.loc) && !(body in locker.contents)
+	panel.handle_action(body, "teleport_back")
+	result["teleport_back"] = panel.notice_ok
+	qdel(locker)
+	body.forceMove(start)
 	panel.handle_action(body, "teleport_coords", list("x" = start.x, "y" = start.y, "z" = start.z))
 
 	// Events: offered list is filtered; one can be started and is stepped where SSevents is off.
@@ -127,6 +199,16 @@
 	started?.kill()
 	panel.handle_action(body, "run_event", list("path" = "/datum/round_event_control/antagonist/solo/traitor"))
 	result["blocked_event_refused"] = !panel.notice_ok
+	result["dangerous_events_refused"] = istext(babylon_creative_run_event(body, "/datum/round_event_control/dark_matteor")) \
+		&& istext(babylon_creative_run_event(body, "/datum/round_event_control/sandstorm")) \
+		&& istext(babylon_creative_run_event(body, "/datum/round_event_control/icarus_sunbeam"))
+	var/datum/round_event_control/communications_blackout/never_random = new
+	never_random.weight = 0
+	var/weightless = babylon_creative_event_blocked(never_random)
+	never_random.weight = 10
+	never_random.max_occurrences = 0
+	result["admin_only_events_refused"] = weightless && babylon_creative_event_blocked(never_random)
+	qdel(never_random)
 	panel.event_times.Cut()
 
 	// Tools: the kit, and the wand (refused while it does not exist).
@@ -141,11 +223,15 @@
 	// Creative switched off at runtime: the world tick takes everything back.
 	panel.handle_action(body, "godmode")
 	panel.handle_action(body, "noclip")
+	panel.event_times.Cut()
+	panel.handle_action(body, "run_event", list("path" = "/datum/round_event_control/communications_blackout"))
+	var/datum/round_event/lingering = length(SSevents.running) ? SSevents.running[length(SSevents.running)] : null
 	flags.creative = FALSE
 	creative_was_on = TRUE
 	tick_creative()
 	result["runtime_off_revokes"] = !HAS_TRAIT(body, TRAIT_GODMODE) && !body.babylon_creative_noclip && !body.incorporeal_move \
 		&& !babylon_creative_test_button(body)
+	result["runtime_off_ends_events"] = istype(lingering, /datum/round_event/communications_blackout) && !(lingering in SSevents.running)
 
 	flags.creative = was_creative
 	creative_was_on = was_on

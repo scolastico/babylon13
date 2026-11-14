@@ -35,6 +35,7 @@
 #include "modular_babylon/code/creative/spawning.dm"
 #include "modular_babylon/code/creative/teleport.dm"
 #include "modular_babylon/code/creative/events.dm"
+#include "modular_babylon/code/creative/supermatter.dm"
 #include "modular_babylon/code/creative/panel.dm"
 #ifdef BABYLON_TESTING
 #include "modular_babylon/code/testing_common.dm"

@@ -20,7 +20,7 @@ const data: CreativeData = {
     { id: 'spawn', name: 'Spawn', icon: 'cube' },
     { id: 'teleport', name: 'Teleport', icon: 'location-arrow' },
     { id: 'events', name: 'Events', icon: 'bolt' },
-    { id: 'tools', name: 'Tools', icon: 'toolbox' },
+    { id: 'tools', name: 'Kits', icon: 'toolbox' },
     { id: 'tutorial', name: 'Tutorial', icon: 'graduation-cap' },
   ],
   categories: [
@@ -65,6 +65,7 @@ const data: CreativeData = {
     },
   ],
   wand_available: false,
+  kit: [wrench],
   show_markers: true,
   map_size: { x: 255, y: 255 },
   limits: {
@@ -83,9 +84,13 @@ const data: CreativeData = {
   position: { x: 120, y: 98, z: 2, area: 'Hallway' },
   players: [{ ckey: 'friend', name: 'Drone (Friend)', z: 2 }],
   markers: [],
-  search: { query: '', category: 'all', results: [] },
+  search: { query: '', category: 'all', results: [], capped: false },
   spawns_left: 20,
+  spawns_refill_in: 0,
+  can_go_back: false,
+  respawn_pending: false,
   events_left: 3,
+  events_refill_in: 0,
   notice: { text: 'Godmode on: nothing can hurt you.', ok: true, id: 1 },
   extensions: {},
 };
@@ -110,9 +115,11 @@ describe('BabylonCreative', () => {
 
   it('shows the curated spawn categories', () => {
     openTab('Spawn');
-    expect(screen.getAllByText('Creative machines').length).toBeGreaterThan(0);
-    expect(screen.getByText('Nothing here yet.')).toBeDefined();
-    expect(screen.getByText('(stack of 50)')).toBeDefined();
+    // Empty categories stay out of "All"; stacks show their full-stack badge.
+    expect(screen.getAllByText('Creative machines').length).toBe(1);
+    expect(screen.getByText('x50')).toBeDefined();
+    expect(screen.getByText('Full stack')).toBeDefined();
+    expect(screen.getByText('20 spawns left')).toBeDefined();
   });
 
   it('lists players, areas and an empty marker section', () => {
@@ -129,7 +136,7 @@ describe('BabylonCreative', () => {
   });
 
   it('shows the wand as coming soon while it does not exist', () => {
-    openTab('Tools');
+    openTab('Kits');
     expect(screen.getByText('Get tool kit')).toBeDefined();
     expect(screen.getByText('Coming soon')).toBeDefined();
   });

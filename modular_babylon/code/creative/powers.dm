@@ -89,13 +89,9 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 		babylon_creative_set_noclip(body, FALSE)
 	GLOB.babylon_creative_powered.Cut()
 
-/// The basic tool kit: a toolbelt with the everyday tools, plus an RCD (with matter), an RPD and
-/// insulated gloves. Human bodies wear the belt and gloves when those slots are free; the rest
-/// goes to the hands, else to the floor. Returns the created items.
-/proc/babylon_creative_give_tools(mob/living/user)
-	var/turf/location = get_turf(user)
-	var/obj/item/storage/belt/utility/belt = new(location)
-	for(var/tool in list(
+/// The tools the kit's toolbelt holds.
+/proc/babylon_creative_belt_tools()
+	var/static/list/tools = list(
 		/obj/item/screwdriver/power,
 		/obj/item/crowbar/power,
 		/obj/item/weldingtool/experimental,
@@ -103,7 +99,24 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 		/obj/item/stack/cable_coil,
 		/obj/item/analyzer,
 		/obj/item/t_scanner,
-	))
+	)
+	return tools
+
+/// Everything in the kit, as the Kits tab lists it.
+/proc/babylon_creative_kit_types()
+	return list(/obj/item/storage/belt/utility) + babylon_creative_belt_tools() + list(
+		/obj/item/clothing/gloves/color/yellow,
+		/obj/item/construction/rcd/loaded/upgraded,
+		/obj/item/pipe_dispenser,
+	)
+
+/// The basic tool kit: a toolbelt with the everyday tools, plus an RCD (with matter), an RPD and
+/// insulated gloves. Human bodies wear the belt and gloves when those slots are free; the rest
+/// goes to the hands, else to the floor. Returns the created items.
+/proc/babylon_creative_give_tools(mob/living/user)
+	var/turf/location = get_turf(user)
+	var/obj/item/storage/belt/utility/belt = new(location)
+	for(var/tool in babylon_creative_belt_tools())
 		var/obj/item/created = new tool(location)
 		if(!belt.atom_storage.attempt_insert(created, override = TRUE, messages = FALSE))
 			qdel(created)

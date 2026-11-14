@@ -8,6 +8,9 @@
 // clamped. Nothing here reaches outside this world: no VV, proc calls, SDQL, bans or
 // announcements. Every action is written to the game log with the player's key.
 
+/// Searches per panel at most one per this many deciseconds (the panel debounces typing).
+#define BABYLON_CREATIVE_SEARCH_COOLDOWN 2
+
 /// ckey => /datum/babylon_creative_panel
 GLOBAL_LIST_EMPTY(babylon_creative_panels)
 /// Every Creative button handed out, so all can be taken back when Creative is switched off.
@@ -83,7 +86,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 		if(player?.mob)
 			babylon_creative_sync(player.mob)
 	babylon_creative_revoke_powers()
-	log_game("BABYLON CREATIVE: Creative was switched off; panels closed and powers removed.")
+	babylon_creative_end_events()
+	log_game("BABYLON CREATIVE: Creative was switched off; panels closed, powers removed, panel events ended.")
 
 /datum/babylon_save
 	/// Creative was on at the last world tick (to notice it being switched off).
@@ -105,6 +109,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	for(var/client/player as anything in GLOB.clients)
 		if(babylon_ready_client(player) && player.mob)
 			babylon_creative_sync(player.mob)
+	babylon_creative_prune_panels()
 	creative_event_phase = !creative_event_phase
 	if(creative_event_phase)
 		babylon_creative_step_events()
@@ -119,6 +124,19 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			continue
 		event.process(2)
 	return TRUE
+
+/// Drops the panels of players who left this world (their rate limits go with them after a
+/// minute away, so leaving and rejoining does not reset a limit right away).
+/proc/babylon_creative_prune_panels()
+	for(var/ckey in GLOB.babylon_creative_panels.Copy())
+		var/datum/babylon_creative_panel/panel = GLOB.babylon_creative_panels[ckey]
+		if(GLOB.directory[ckey])
+			panel.left_at = null
+			continue
+		panel.left_at ||= world.time
+		if(world.time - panel.left_at >= 1 MINUTES)
+			GLOB.babylon_creative_panels -= ckey
+			qdel(panel)
 
 /datum/action/babylon_creative
 	name = "Creative"
@@ -151,13 +169,24 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	var/search_query = ""
 	var/search_category = "all"
 	var/list/search_results = list()
+	var/search_capped = FALSE
 	/// The last action's outcome, shown in the panel.
 	var/notice
 	var/notice_ok = TRUE
 	var/notice_id = 0
+	/// world.time of the last search (searches are at most one per BABYLON_CREATIVE_SEARCH_COOLDOWN).
+	var/last_search = -INFINITY
+	/// world.time the owner was last seen gone from the world, for pruning.
+	var/left_at
+	/// Where the owner was before their last teleport, for "Back".
+	var/datum/weakref/teleport_back
 
 /datum/babylon_creative_panel/New(ckey)
 	src.ckey = ckey
+
+/datum/babylon_creative_panel/Destroy()
+	SStgui.close_uis(src)
+	return ..()
 
 /datum/babylon_creative_panel/ui_interact(mob/user, datum/tgui/ui)
 	ui = SStgui.try_update_ui(user, src, ui)
@@ -181,7 +210,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 		list("id" = "spawn", "name" = "Spawn", "icon" = "cube"),
 		list("id" = "teleport", "name" = "Teleport", "icon" = "location-arrow"),
 		list("id" = "events", "name" = "Events", "icon" = "bolt"),
-		list("id" = "tools", "name" = "Tools", "icon" = "toolbox"),
+		list("id" = "tools", "name" = "Kits", "icon" = "toolbox"),
 	)
 
 /// Data for tabs other modules add, merged into ui_data under "extensions".
@@ -200,6 +229,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	data["areas"] = babylon_creative_areas()
 	data["events"] = babylon_creative_events()
 	data["wand_available"] = ispath(babylon_tutorial_wand_type(), /obj/item)
+	data["kit"] = babylon_creative_curated(babylon_creative_kit_types())
 	data["show_markers"] = babylon_tutorial_capable()
 	data["map_size"] = list("x" = world.maxx, "y" = world.maxy)
 	data["limits"] = list(
@@ -224,9 +254,13 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	data["position"] = here ? list("x" = here.x, "y" = here.y, "z" = here.z, "area" = get_area_name(here, TRUE)) : null
 	data["players"] = babylon_creative_players(user)
 	data["markers"] = babylon_tutorial_capable() ? babylon_creative_markers() : list()
-	data["search"] = list("query" = search_query, "category" = search_category, "results" = search_results)
+	data["search"] = list("query" = search_query, "category" = search_category, "results" = search_results, "capped" = search_capped)
 	data["spawns_left"] = budget_left(spawn_times, BABYLON_CREATIVE_SPAWN_LIMIT, BABYLON_CREATIVE_SPAWN_WINDOW)
+	data["spawns_refill_in"] = refill_in(spawn_times, BABYLON_CREATIVE_SPAWN_WINDOW)
 	data["events_left"] = budget_left(event_times, BABYLON_CREATIVE_EVENT_LIMIT, BABYLON_CREATIVE_EVENT_WINDOW)
+	data["events_refill_in"] = refill_in(event_times, BABYLON_CREATIVE_EVENT_WINDOW)
+	data["can_go_back"] = !!teleport_back?.resolve()
+	data["respawn_pending"] = babylon_creative_respawn_pending(user)
 	data["notice"] = notice ? list("text" = notice, "ok" = notice_ok, "id" = notice_id) : null
 	data["extensions"] = extension_data(user)
 	return data
@@ -242,6 +276,19 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	while(length(times) && times[1] <= world.time - window)
 		times.Cut(1, 2)
 	return max(0, limit - length(times))
+
+/// Seconds until the oldest entry of `times` leaves the window (one more fits), or 0.
+/datum/babylon_creative_panel/proc/refill_in(list/times, window)
+	if(!length(times))
+		return 0
+	return max(0, round((times[1] + window - world.time) / (1 SECONDS), 1))
+
+/// The "slow down" text for a spawn that does not fit the rate limit.
+/datum/babylon_creative_panel/proc/spawn_limit_text()
+	var/left = budget_left(spawn_times, BABYLON_CREATIVE_SPAWN_LIMIT, BABYLON_CREATIVE_SPAWN_WINDOW)
+	if(!left)
+		return "No spawns left right now: wait [refill_in(spawn_times, BABYLON_CREATIVE_SPAWN_WINDOW)] seconds."
+	return "Only [left] spawn[left == 1 ? "" : "s"] left right now: lower the amount or wait a few seconds."
 
 /datum/babylon_creative_panel/proc/report(text, ok = TRUE)
 	notice = text
@@ -287,16 +334,22 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 				return report("Noclip off. You were moved out of the wall to the nearest free spot.")
 			return report("Noclip off.")
 		if("heal")
+			if(babylon_creative_respawn_pending(body))
+				return report("Your body is being replaced; heal the new one once it arrives.", FALSE)
 			var/was_dead = body.stat == DEAD
 			babylon_creative_heal(body)
 			babylon_creative_log(body, "healed themselves[was_dead ? " (revived)" : ""].")
 			return report(was_dead ? "Revived and fully healed." : "Fully healed.")
 		if("search")
+			if(world.time < last_search + BABYLON_CREATIVE_SEARCH_COOLDOWN)
+				return FALSE
+			last_search = world.time
 			search_query = copytext_char(trim("[params["query"]]"), 1, 65)
 			var/category = "[params["category"]]"
-			var/static/list/known = list("all", "creative", "tools", "materials", "machines", "structures", "items", "mobs")
-			search_category = (category in known) ? category : "all"
-			search_results = babylon_creative_search(search_query, search_category)
+			search_category = (category in babylon_creative_category_ids()) ? category : "all"
+			var/list/answer = babylon_creative_search(search_query, search_category)
+			search_results = answer["results"]
+			search_capped = answer["capped"]
 			return TRUE
 		if("spawn")
 			return act_spawn(body, params)
@@ -316,6 +369,11 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			if(!target || target == body || player.babylon_showcase_visitor || player.babylon_admin_spectator || isnewplayer(target))
 				return report("That player is not in this world.", FALSE)
 			return finish_teleport(body, get_turf(target), "[player.key]")
+		if("teleport_back")
+			var/turf/back = teleport_back?.resolve()
+			if(!back)
+				return report("There is no earlier spot to go back to.", FALSE)
+			return finish_teleport(body, back, "your earlier spot")
 		if("teleport_marker")
 			var/list/targets = babylon_tutorial_capable() ? babylon_tutorial_marker_targets() : list()
 			var/id = "[params["id"]]"
@@ -324,7 +382,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			return finish_teleport(body, get_turf(targets[id]), "marker [id]")
 		if("run_event")
 			if(!budget_left(event_times, BABYLON_CREATIVE_EVENT_LIMIT, BABYLON_CREATIVE_EVENT_WINDOW))
-				return report("Slow down: at most [BABYLON_CREATIVE_EVENT_LIMIT] events every [BABYLON_CREATIVE_EVENT_WINDOW / (1 SECONDS)] seconds.", FALSE)
+				return report("No events left right now: the next one is possible in [refill_in(event_times, BABYLON_CREATIVE_EVENT_WINDOW)] seconds.", FALSE)
 			var/result = babylon_creative_run_event(body, params["path"])
 			if(istext(result))
 				babylon_creative_log(body, "was refused event [babylon_creative_clean(params["path"])]: [result]")
@@ -335,7 +393,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			return report("Started: [started.control.name].")
 		if("give_tools")
 			if(!budget_left(spawn_times, BABYLON_CREATIVE_SPAWN_LIMIT, BABYLON_CREATIVE_SPAWN_WINDOW))
-				return report("Slow down: at most [BABYLON_CREATIVE_SPAWN_LIMIT] spawns every [BABYLON_CREATIVE_SPAWN_WINDOW / (1 SECONDS)] seconds.", FALSE)
+				return report(spawn_limit_text(), FALSE)
 			babylon_creative_give_tools(body)
 			spawn_times += world.time
 			babylon_creative_log(body, "took the creative tool kit at [babylon_creative_where(body)].")
@@ -344,7 +402,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			if(!ispath(babylon_tutorial_wand_type(), /obj/item))
 				return report("The tutorial wand is coming soon.", FALSE)
 			if(!budget_left(spawn_times, BABYLON_CREATIVE_SPAWN_LIMIT, BABYLON_CREATIVE_SPAWN_WINDOW))
-				return report("Slow down: at most [BABYLON_CREATIVE_SPAWN_LIMIT] spawns every [BABYLON_CREATIVE_SPAWN_WINDOW / (1 SECONDS)] seconds.", FALSE)
+				return report(spawn_limit_text(), FALSE)
 			var/obj/item/wand = babylon_creative_give_wand(body)
 			spawn_times += world.time
 			babylon_creative_log(body, "took a tutorial wand at [babylon_creative_where(body)].")
@@ -359,7 +417,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	var/amount = round(text2num("[params["amount"]]") || 1)
 	var/count = ispath(path, /obj/item/stack) ? 1 : clamp(amount, 1, BABYLON_CREATIVE_MAX_COPIES)
 	if(budget_left(spawn_times, BABYLON_CREATIVE_SPAWN_LIMIT, BABYLON_CREATIVE_SPAWN_WINDOW) < count)
-		return report("Slow down: at most [BABYLON_CREATIVE_SPAWN_LIMIT] spawns every [BABYLON_CREATIVE_SPAWN_WINDOW / (1 SECONDS)] seconds.", FALSE)
+		return report(spawn_limit_text(), FALSE)
 	var/in_hand = !!params["in_hand"] && params["in_hand"] != "0" && ispath(path, /obj/item)
 	var/result = babylon_creative_spawn(body, path, amount, in_hand)
 	if(istext(result))
@@ -386,5 +444,16 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	if(error)
 		babylon_creative_log(body, "was refused a teleport to [label]: [error]")
 		return report(error, FALSE)
+	if(from)
+		teleport_back = WEAKREF(from)
 	babylon_creative_log(body, "teleported from [babylon_creative_where(from)] to [label] [babylon_creative_where(body)].")
 	return report("Teleported to [label].")
+
+/// Babylon: the player's drone is dead and a replacement is on its way (drone_recovery.dm).
+/proc/babylon_creative_respawn_pending(mob/user)
+#ifndef BABYLON_STATION
+	var/datum/babylon_player/player = GLOB.babylon_save?.player_sessions[user?.ckey]
+	return !!player?.respawn_pending
+#else
+	return FALSE
+#endif

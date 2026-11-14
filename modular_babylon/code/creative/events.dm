@@ -14,12 +14,17 @@
  * - events that single out other players: heart attack, brain trauma, disease, fake virus,
  *   obsession, borers, sentience;
  * - events that wreck the server or the round: space vines and fleshmind (unbounded spreading),
- *   mold, the emergency shuttle events (insurance, loan, catastrophe), dynamic tweaks.
+ *   mold, the emergency shuttle events (insurance, loan, catastrophe), dynamic tweaks, the dark
+ *   matt-eor (a singularity), sandstorms, the ICARUS sunbeam and the armageddon CME (they sweep
+ *   the whole level);
+ * - admin-only events: weight 0 or max_occurrences 0 (tg's convention for "never random").
  */
 /proc/babylon_creative_event_blocked(datum/round_event_control/control)
 	if(!istype(control) || !ispath(control.typepath, /datum/round_event))
 		return TRUE
 	if(control.roundstart || control.wizardevent || control.holidayID)
+		return TRUE
+	if(!control.weight || !control.max_occurrences)
 		return TRUE
 	if(control.track == EVENT_TRACK_CREWSET || control.track == EVENT_TRACK_GHOSTSET)
 		return TRUE
@@ -53,6 +58,11 @@
 		/datum/round_event_control/mutant_infestation,
 		/datum/round_event_control/santa,
 		/datum/round_event_control/wizard_dice,
+		/datum/round_event_control/dark_matteor,
+		/datum/round_event_control/sandstorm,
+		/datum/round_event_control/sandstorm_classic,
+		/datum/round_event_control/icarus_sunbeam,
+		/datum/round_event_control/cme/armageddon,
 	)
 	return is_type_in_list(control, blocked)
 
@@ -76,13 +86,30 @@
 	var/path = text2path("[event_path]")
 	if(!ispath(path, /datum/round_event_control))
 		return "Unknown event."
-	var/datum/round_event_control/control = locate(path) in SSevents.control
-	if(!control || control.type != path || babylon_creative_event_blocked(control))
+	var/datum/round_event_control/control
+	for(var/datum/round_event_control/candidate as anything in SSevents.control)
+		if(candidate.type == path)
+			control = candidate
+			break
+	if(!control || babylon_creative_event_blocked(control))
 		return "That event cannot run here."
 	var/datum/round_event/started = control.run_event(event_cause = "[user.key] (creative panel)")
 	if(!istype(started))
 		return "The event did not start."
+	GLOB.babylon_creative_events += WEAKREF(started)
 	return started
+
+/// Round events started from Creative panels (weakrefs), ended when Creative is switched off.
+GLOBAL_LIST_EMPTY(babylon_creative_events)
+
+/// Ends every event started from a Creative panel that is still running.
+/proc/babylon_creative_end_events()
+	for(var/datum/weakref/reference as anything in GLOB.babylon_creative_events)
+		var/datum/round_event/event = reference.resolve()
+		if(event && (event in SSevents.running))
+			event.processing = FALSE
+			event.kill()
+	GLOB.babylon_creative_events.Cut()
 
 /// Events need SSevents to step them; the Babylon build switches it off (rules.dm).
 /proc/babylon_creative_events_need_stepping()

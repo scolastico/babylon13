@@ -13,6 +13,36 @@
 /proc/babylon_erp_design_ids()
 	return list("sex_research", "hypnoticmodule", "borg_upgrade_bellyriding_harness", "nifsoft_hypno_brainwash", "nifsoft_rapid_disrobe", "nifsoft_gfluid")
 
+/**
+ * TRUE for ERP item, structure and machine types: the lewd item roots (sex toys, the types
+ * modular_skyrat/.../_erp_disabled_item_enforcement.dm deletes when lewd items are off) and any
+ * type path naming lewd content. Spawning and type listings (the Creative panel) skip them.
+ */
+/proc/babylon_type_is_erp(path)
+	if(!ispath(path))
+		return FALSE
+	var/static/list/erp_roots = list(
+		/obj/item/clothing/sextoy, /obj/item/storage/box/milking_kit, /obj/item/storage/box/xstand_kit,
+		/obj/item/storage/box/bdsmbed_kit, /obj/item/storage/box/strippole_kit, /obj/item/storage/box/shibari_stand,
+		/obj/item/paper/shibari_kit_instructions, /obj/item/clothing/mask/ballgag, /obj/item/reagent_containers/cup/lewd_filter,
+		/obj/item/clothing/mask/gas/bdsm_mask, /obj/item/clothing/suit/corset, /obj/item/clothing/head/domina_cap,
+		/obj/item/storage/belt/erpbelt, /obj/item/clothing/glasses/hypno, /obj/item/clothing/shoes/latex_heels/domina_heels,
+		/obj/item/clothing/gloves/ball_mittens, /obj/item/clothing/suit/straight_jacket/kinky_sleepbag,
+		/obj/item/clothing/ears/kinky_headphones, /obj/item/clothing/glasses/blindfold/kinky, /obj/item/clothing/neck/kink_collar,
+		/obj/item/lustwish_discount, /obj/item/tickle_feather, /obj/item/clothing/mask/leatherwhip, /obj/item/kinky_shocker,
+		/obj/item/condom_pack, /obj/item/clothing/under/stripper_outfit, /obj/structure/stripper_pole, /obj/item/polepack,
+		/obj/item/bdsm_bed_kit, /obj/structure/chair/x_stand, /obj/item/x_stand_kit, /obj/structure/chair/milking_machine,
+		/obj/item/milking_machine/constructionkit, /obj/item/bdsm_candle, /obj/item/spanking_pad, /obj/item/restraints/handcuffs/lewd,
+		/obj/item/strapon_dildo, /obj/item/key/kink_collar, /obj/item/mind_controller, /obj/item/clothing/neck/mind_collar,
+		/obj/item/restraints/handcuffs/milker, /obj/item/vending_refill/lustwish, /obj/machinery/vending/dorms,
+		/obj/structure/bed/bdsm_bed, /obj/item/clothing/strapon, /obj/item/clothing/erp_leash, /obj/item/clicker, /obj/item/breastpump,
+	)
+	for(var/root in erp_roots)
+		if(ispath(path, root))
+			return TRUE
+	var/static/regex/erp_words = regex(@"lewd|sextoy|dildo|strapon|kink|bdsm|lustwish|fleshlight|vibrator|condom|genital|aphro|(^|[/_])erp")
+	return erp_words.Find(lowertext("[path]")) != 0
+
 // Config: the server operator cannot turn ERP back on (config.txt or VV).
 
 /datum/config_entry/flag/disable_erp_preferences

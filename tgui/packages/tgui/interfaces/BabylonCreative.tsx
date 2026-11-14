@@ -2,18 +2,19 @@
 // Every action is checked again on the server; this window only shows and asks.
 // Tabs come from the server (panel.dm, /datum/babylon_creative_panel/proc/tabs); a module that
 // adds a tab there registers its component in CREATIVE_TABS below.
-import { type ComponentType, useEffect, useState } from 'react';
+import { type ComponentType, type ReactNode, useEffect, useState } from 'react';
 import {
   Box,
   Button,
   DmIcon,
   Dropdown,
   Icon,
+  ImageButton,
   Input,
   LabeledList,
   NoticeBox,
-  NumberInput,
   ProgressBar,
+  RestrictedInput,
   Section,
   Stack,
   Tabs,
@@ -33,6 +34,7 @@ type Entry = {
   stack: boolean;
   max: number;
   item: boolean;
+  hint?: string;
 };
 
 type Category = { id: string; name: string; icon: string; entries: Entry[] };
@@ -54,6 +56,7 @@ export type CreativeData = {
   areas: AreaEntry[];
   events: EventEntry[];
   wand_available: boolean;
+  kit: Entry[];
   show_markers: boolean;
   map_size: { x: number; y: number };
   limits: {
@@ -72,9 +75,18 @@ export type CreativeData = {
   position: { x: number; y: number; z: number; area: string } | null;
   players: Player[];
   markers: Marker[];
-  search: { query: string; category: string; results: Entry[] };
+  search: {
+    query: string;
+    category: string;
+    results: Entry[];
+    capped: boolean;
+  };
   spawns_left: number;
+  spawns_refill_in: number;
   events_left: number;
+  events_refill_in: number;
+  can_go_back: boolean;
+  respawn_pending: boolean;
   notice: { text: string; ok: boolean; id: number } | null;
   extensions: Record<string, unknown>;
 };
@@ -85,8 +97,11 @@ export const CREATIVE_TABS: Record<string, ComponentType> = {
   spawn: SpawnTab,
   teleport: TeleportTab,
   events: EventsTab,
-  tools: ToolsTab,
+  tools: KitsTab,
 };
+
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? '' : 's'}`;
 
 export const BabylonCreative = () => {
   const { data } = useBackend<CreativeData>();
@@ -95,24 +110,31 @@ export const BabylonCreative = () => {
   const Content = CREATIVE_TABS[tab];
 
   return (
-    <Window width={600} height={680} title="Creative">
+    <Window width={620} height={700} title="Creative">
       <Window.Content>
         <Stack fill vertical>
           <Stack.Item>
-            <Tabs fluid>
-              {tabs.map((entry) => (
-                <Tabs.Tab
-                  key={entry.id}
-                  icon={entry.icon}
-                  selected={entry.id === tab}
-                  onClick={() => setTab(entry.id)}
-                >
-                  {entry.name}
-                </Tabs.Tab>
-              ))}
-            </Tabs>
+            <Stack align="center">
+              <Stack.Item grow>
+                <Tabs fluid>
+                  {tabs.map((entry) => (
+                    <Tabs.Tab
+                      key={entry.id}
+                      icon={entry.icon}
+                      selected={entry.id === tab}
+                      onClick={() => setTab(entry.id)}
+                    >
+                      {entry.name}
+                    </Tabs.Tab>
+                  ))}
+                </Tabs>
+              </Stack.Item>
+              <Stack.Item>
+                <QuickToggles />
+              </Stack.Item>
+            </Stack>
           </Stack.Item>
-          <Stack.Item grow basis={0} style={{ overflowY: 'auto' }}>
+          <Stack.Item grow basis={0} style={{ minHeight: 0 }}>
             {Content ? (
               <Content />
             ) : (
@@ -128,13 +150,50 @@ export const BabylonCreative = () => {
   );
 };
 
-/** The last action's outcome; fades after a few seconds. */
+/** Godmode and noclip, reachable from every tab. */
+const QuickToggles = () => {
+  const { act, data } = useBackend<CreativeData>();
+  const { godmode, godmode_elsewhere, noclip } = data;
+  return (
+    <>
+      <Button
+        icon="shield-halved"
+        selected={godmode || godmode_elsewhere}
+        disabled={godmode_elsewhere}
+        tooltip={
+          godmode_elsewhere
+            ? 'Godmode: granted by something else'
+            : `Godmode: ${godmode ? 'on' : 'off'} (click to toggle)`
+        }
+        onClick={() => act('godmode')}
+      />
+      <Button
+        icon="ghost"
+        selected={noclip}
+        tooltip={`Noclip: ${noclip ? 'on' : 'off'} (click to toggle)`}
+        onClick={() => act('noclip')}
+      />
+    </>
+  );
+};
+
+/** Scrolls its content inside the tab area. */
+const Scroll = (props: { children: ReactNode }) => (
+  <Box height="100%" style={{ overflowY: 'auto' }}>
+    {props.children}
+  </Box>
+);
+
+/**
+ * The last action's outcome. Successes fade after a few seconds; refusals stay until
+ * dismissed or replaced by the next action's outcome.
+ */
 const Notice = () => {
   const { data } = useBackend<CreativeData>();
   const { notice } = data;
   const [hiddenId, setHiddenId] = useState(-1);
   useEffect(() => {
-    if (!notice) {
+    if (!notice?.ok) {
       return;
     }
     const timer = setTimeout(() => setHiddenId(notice.id), 6000);
@@ -174,10 +233,18 @@ const Notice = () => {
 
 function SelfTab() {
   const { act, data } = useBackend<CreativeData>();
-  const { godmode, godmode_elsewhere, noclip, dead, health, body, position } =
-    data;
+  const {
+    godmode,
+    godmode_elsewhere,
+    noclip,
+    dead,
+    health,
+    body,
+    position,
+    respawn_pending,
+  } = data;
   return (
-    <>
+    <Scroll>
       <Section title="You">
         <LabeledList>
           <LabeledList.Item label="Body">{body}</LabeledList.Item>
@@ -197,7 +264,7 @@ function SelfTab() {
                   bad: [-Infinity, 30],
                 }}
               >
-                {health}%
+                {health <= 0 ? 'Critical' : `${health}%`}
               </ProgressBar>
             )}
           </LabeledList.Item>
@@ -213,12 +280,9 @@ function SelfTab() {
           <PowerToggle
             icon="shield-halved"
             name="Godmode"
-            enabled={godmode}
-            description={
-              godmode_elsewhere
-                ? 'You are already invulnerable from another source.'
-                : 'Nothing can hurt or kill you: no damage, no breathing, no pressure.'
-            }
+            enabled={godmode || godmode_elsewhere}
+            locked={godmode_elsewhere}
+            description="Nothing can hurt or kill you: no damage, no breathing, no pressure."
             onToggle={() => act('godmode')}
           />
           <PowerToggle
@@ -233,14 +297,17 @@ function SelfTab() {
       <Section title="Health">
         <Stack align="center">
           <Stack.Item grow color="label">
-            {dead
-              ? 'Bring your body back to life, fully healed.'
-              : 'Heal every wound, ailment and missing part.'}
+            {respawn_pending
+              ? 'A new body is on its way; heal that one once it arrives.'
+              : dead
+                ? 'Bring your body back to life, fully healed.'
+                : 'Heal every wound, ailment and missing part.'}
           </Stack.Item>
           <Stack.Item>
             <Button
               icon={dead ? 'heart-pulse' : 'kit-medical'}
               color={dead ? 'good' : undefined}
+              disabled={respawn_pending}
               onClick={() => act('heal')}
             >
               {dead ? 'Revive' : 'Heal fully'}
@@ -248,20 +315,48 @@ function SelfTab() {
           </Stack.Item>
         </Stack>
       </Section>
-    </>
+      <Section title="Quick start">
+        <Stack vertical>
+          <QuickTip
+            icon="cube"
+            text="Spawn: search or browse, click to get it."
+          />
+          <QuickTip
+            icon="location-arrow"
+            text="Teleport: coordinates, areas, other players, and Back."
+          />
+          <QuickTip
+            icon="bolt"
+            text="Events: start station events here, for everyone."
+          />
+          <QuickTip
+            icon="toolbox"
+            text="Kits: a full tool kit with one click."
+          />
+        </Stack>
+      </Section>
+    </Scroll>
   );
 }
+
+const QuickTip = (props: { icon: string; text: string }) => (
+  <Stack.Item color="label">
+    <Icon name={props.icon} mr={1} width="1.2em" />
+    {props.text}
+  </Stack.Item>
+);
 
 type PowerToggleProps = {
   icon: string;
   name: string;
   enabled: boolean;
+  locked?: boolean;
   description: string;
   onToggle: () => void;
 };
 
 function PowerToggle(props: PowerToggleProps) {
-  const { icon, name, enabled, description, onToggle } = props;
+  const { icon, name, enabled, locked, description, onToggle } = props;
   return (
     <Stack.Item>
       <Stack align="center">
@@ -279,6 +374,8 @@ function PowerToggle(props: PowerToggleProps) {
             icon={enabled ? 'toggle-on' : 'toggle-off'}
             color={enabled ? 'good' : 'default'}
             selected={enabled}
+            disabled={locked}
+            tooltip={locked ? 'Granted by something else' : undefined}
             onClick={onToggle}
           >
             {enabled ? 'On' : 'Off'}
@@ -291,14 +388,26 @@ function PowerToggle(props: PowerToggleProps) {
 
 // ---------------------------------------------------------------- Spawn
 
+/** null: the default (a full stack for stacks, one of anything else). */
+type Amount = number | null;
+
+/** How many of an entry a click spawns. */
+const amountFor = (entry: Entry, amount: Amount, copies: number) => {
+  if (entry.stack) {
+    return amount === null ? entry.max : Math.min(amount, entry.max);
+  }
+  return amount === null ? 1 : Math.min(amount, copies);
+};
+
 function SpawnTab() {
   const { act, data } = useBackend<CreativeData>();
   const { categories = [], search, spawns_left, limits } = data;
   const [query, setQuery] = useState(search?.query || '');
   const [category, setCategory] = useState(search?.category || 'all');
   const [inHand, setInHand] = useState(true);
-  const [amount, setAmount] = useState(1);
-  const searching = query.trim().length >= 2;
+  const [amount, setAmount] = useState<Amount>(null);
+  const trimmed = query.trim();
+  const searching = trimmed.length >= 2;
 
   const runSearch = (nextQuery: string, nextCategory: string) => {
     if (nextQuery.trim().length >= 2) {
@@ -306,180 +415,307 @@ function SpawnTab() {
     }
   };
 
-  const shown = categories.filter(
-    (entry) => category === 'all' || entry.id === category,
+  const shown = categories.filter((entry) =>
+    category === 'all' ? entry.entries.length > 0 : entry.id === category,
   );
   const answered =
-    search && search.query === query.trim() && search.category === category;
+    search && search.query === trimmed && search.category === category;
   const spawn = (entry: Entry) =>
     act('spawn', {
       path: entry.path,
-      amount: entry.stack
-        ? Math.min(amount, entry.max)
-        : Math.min(amount, limits.copies),
+      amount: amountFor(entry, amount, limits.copies),
       in_hand: entry.item && inHand ? 1 : 0,
     });
+  const list = (entries: Entry[]) => (
+    <EntryGrid
+      entries={entries}
+      amount={amount}
+      inHand={inHand}
+      disabled={!spawns_left}
+      onSpawn={spawn}
+    />
+  );
 
   return (
-    <>
-      <Section>
-        <Stack vertical>
-          <Stack.Item>
-            <Input
-              fluid
-              autoFocus
-              expensive={300}
-              value={query}
-              placeholder="Search everything that can be spawned (name or type path)"
-              onChange={(value) => {
-                setQuery(value);
-                runSearch(value, category);
-              }}
-            />
-          </Stack.Item>
-          <Stack.Item>
-            <Box style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25em' }}>
-              <Button
-                icon="layer-group"
-                selected={category === 'all'}
-                onClick={() => {
-                  setCategory('all');
-                  runSearch(query, 'all');
+    <Stack fill vertical>
+      <Stack.Item>
+        <Section>
+          <Stack vertical>
+            <Stack.Item>
+              <Input
+                fluid
+                autoFocus
+                expensive={300}
+                value={query}
+                placeholder="Search everything that can be spawned (name, nickname or type path)"
+                onChange={(value) => {
+                  setQuery(value);
+                  runSearch(value, category);
                 }}
-              >
-                All
-              </Button>
-              {categories.map((entry) => (
+              />
+            </Stack.Item>
+            <Stack.Item>
+              <Box style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25em' }}>
                 <Button
-                  key={entry.id}
-                  icon={entry.icon}
-                  selected={category === entry.id}
+                  icon="layer-group"
+                  selected={category === 'all'}
                   onClick={() => {
-                    setCategory(entry.id);
-                    runSearch(query, entry.id);
+                    setCategory('all');
+                    runSearch(query, 'all');
                   }}
                 >
-                  {entry.name}
+                  All
                 </Button>
-              ))}
-            </Box>
-          </Stack.Item>
-          <Stack.Item>
-            <Stack align="center">
-              <Stack.Item color="label">Put it</Stack.Item>
-              <Stack.Item>
-                <Button
-                  icon="hand"
-                  selected={inHand}
-                  tooltip="Items go into your hands; everything else lands at your feet."
-                  onClick={() => setInHand(true)}
-                >
-                  In hand
-                </Button>
-                <Button
-                  icon="shoe-prints"
-                  selected={!inHand}
-                  onClick={() => setInHand(false)}
-                >
-                  At my feet
-                </Button>
-              </Stack.Item>
-              <Stack.Item ml={1} color="label">
-                Amount
-              </Stack.Item>
-              <Stack.Item>
-                <NumberInput
-                  width="4em"
-                  minValue={1}
-                  maxValue={50}
-                  step={1}
-                  value={amount}
-                  onChange={(value) => setAmount(Math.round(value))}
-                />
-              </Stack.Item>
-              <Stack.Item grow textAlign="right" color="label">
-                <Icon name="gauge" mr={0.5} />
-                {spawns_left}/{limits.spawns} per {limits.spawn_window}s
-              </Stack.Item>
-            </Stack>
-            <Box color="label" mt={0.5} fontSize="0.9em">
-              Stacks spawn as one stack of the amount (up to a full stack);
-              anything else spawns that many copies, at most {limits.copies}.
-            </Box>
-          </Stack.Item>
-        </Stack>
-      </Section>
-      {searching ? (
-        <Section
-          title={
-            answered
-              ? `Results for "${query.trim()}"`
-              : `Searching for "${query.trim()}"...`
-          }
-        >
-          {answered && !search.results.length && (
-            <NoticeBox>
-              Nothing matches. Try another word or the type path, or pick "All".
-            </NoticeBox>
-          )}
-          {answered && <EntryList entries={search.results} onSpawn={spawn} />}
+                {categories.map((entry) => (
+                  <Button
+                    key={entry.id}
+                    icon={entry.icon}
+                    selected={category === entry.id}
+                    onClick={() => {
+                      setCategory(entry.id);
+                      runSearch(query, entry.id);
+                    }}
+                  >
+                    {entry.name}
+                  </Button>
+                ))}
+              </Box>
+            </Stack.Item>
+            <Stack.Item>
+              <Stack align="center" wrap>
+                <Stack.Item color="label">Spawn into</Stack.Item>
+                <Stack.Item>
+                  <Button
+                    icon="hand"
+                    selected={inHand}
+                    tooltip="Items go into your hands (at your feet when your hands are full). Machines, structures and mobs always land at your feet."
+                    onClick={() => setInHand(true)}
+                  >
+                    Your hands
+                  </Button>
+                  <Button
+                    icon="shoe-prints"
+                    selected={!inHand}
+                    onClick={() => setInHand(false)}
+                  >
+                    Your feet
+                  </Button>
+                </Stack.Item>
+                <Stack.Item ml={1} color="label">
+                  Amount
+                </Stack.Item>
+                <Stack.Item>
+                  <AmountPicker
+                    amount={amount}
+                    copies={limits.copies}
+                    onChange={setAmount}
+                  />
+                </Stack.Item>
+              </Stack>
+            </Stack.Item>
+            <Stack.Item>
+              <SpawnBudget />
+            </Stack.Item>
+          </Stack>
         </Section>
-      ) : (
-        shown.map((entry) => (
-          <Section
-            key={entry.id}
-            title={
-              <>
-                <Icon name={entry.icon} mr={1} />
-                {entry.name}
-              </>
-            }
-          >
-            {entry.entries.length ? (
-              <EntryList entries={entry.entries} onSpawn={spawn} />
-            ) : (
-              <Box color="label">Nothing here yet.</Box>
-            )}
-          </Section>
-        ))
-      )}
-    </>
+      </Stack.Item>
+      <Stack.Item grow basis={0} style={{ minHeight: 0 }}>
+        <Scroll>
+          {query.trim().length === 1 && (
+            <NoticeBox info>Type at least 2 letters to search.</NoticeBox>
+          )}
+          {searching ? (
+            <Section
+              title={
+                answered
+                  ? `Results for "${trimmed}"`
+                  : `Searching for "${trimmed}"...`
+              }
+            >
+              {answered && !search.results.length && (
+                <Box color="label">
+                  Nothing matches. Try another word or the type path, or search
+                  in "All".
+                </Box>
+              )}
+              {answered && list(search.results)}
+              {answered && search.capped && (
+                <Box color="label" mt={0.5}>
+                  Showing the first {search.results.length}: type more to narrow
+                  the list.
+                </Box>
+              )}
+            </Section>
+          ) : (
+            shown.map((entry) => (
+              <Section
+                key={entry.id}
+                title={
+                  <>
+                    <Icon name={entry.icon} mr={1} />
+                    {entry.name}
+                  </>
+                }
+              >
+                {entry.entries.length ? (
+                  list(entry.entries)
+                ) : (
+                  <Box color="label">
+                    Nothing here yet. Search in "All" to find more.
+                  </Box>
+                )}
+              </Section>
+            ))
+          )}
+        </Scroll>
+      </Stack.Item>
+    </Stack>
   );
 }
 
-type EntryListProps = { entries: Entry[]; onSpawn: (entry: Entry) => void };
+type AmountPickerProps = {
+  amount: Amount;
+  copies: number;
+  onChange: (amount: Amount) => void;
+};
 
-function EntryList(props: EntryListProps) {
-  const { entries, onSpawn } = props;
+function AmountPicker(props: AmountPickerProps) {
+  const { amount, copies, onChange } = props;
+  const presets = [1, 5, 10];
+  const [custom, setCustom] = useState(false);
+  const pick = (value: Amount) => {
+    setCustom(false);
+    onChange(value);
+  };
+  return (
+    <Stack align="center">
+      <Stack.Item>
+        {presets.map((value) => (
+          <Button
+            key={value}
+            selected={!custom && amount === value}
+            tooltip={
+              value === 1
+                ? 'One of anything; stacks of 1.'
+                : `${value} copies (at most ${copies}); stacks of ${value}.`
+            }
+            onClick={() => pick(value)}
+          >
+            {value}
+          </Button>
+        ))}
+        <Button
+          selected={!custom && amount === null}
+          tooltip="Stacks come as a full stack; anything else as one."
+          onClick={() => pick(null)}
+        >
+          Full stack
+        </Button>
+        <Button
+          selected={custom}
+          tooltip="Another amount (1-50)"
+          onClick={() => {
+            setCustom(true);
+            onChange(amount ?? 1);
+          }}
+        >
+          Other
+        </Button>
+      </Stack.Item>
+      {custom && (
+        <Stack.Item>
+          <RestrictedInput
+            autoFocus
+            autoSelect
+            width="3.5em"
+            minValue={1}
+            maxValue={50}
+            value={amount ?? 1}
+            onChange={(value) => onChange(Math.max(1, Math.round(value)))}
+          />
+        </Stack.Item>
+      )}
+    </Stack>
+  );
+}
+
+/** The spawn rate limit, visible before it bites. */
+function SpawnBudget() {
+  const { data } = useBackend<CreativeData>();
+  const { spawns_left, spawns_refill_in, limits } = data;
+  const refill =
+    spawns_left < limits.spawns && spawns_refill_in > 0
+      ? ` · refills in ${spawns_refill_in}s`
+      : '';
+  return (
+    <ProgressBar
+      value={spawns_left}
+      minValue={0}
+      maxValue={limits.spawns}
+      ranges={{
+        good: [limits.spawns / 2, Infinity],
+        average: [1, limits.spawns / 2],
+        bad: [-Infinity, 1],
+      }}
+    >
+      {spawns_left
+        ? `${plural(spawns_left, 'spawn')} left${refill}`
+        : `No spawns left${refill}`}
+    </ProgressBar>
+  );
+}
+
+type EntryGridProps = {
+  entries: Entry[];
+  amount: Amount;
+  inHand: boolean;
+  disabled: boolean;
+  onSpawn: (entry: Entry) => void;
+};
+
+function EntryGrid(props: EntryGridProps) {
+  const { data } = useBackend<CreativeData>();
+  const { entries, amount, inHand, disabled, onSpawn } = props;
+  const copies = data.limits.copies;
   return (
     <Box
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(16em, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(17em, 1fr))',
         gap: '0.25em',
       }}
     >
-      {entries.map((entry) => (
-        <Button
-          key={entry.path}
-          fluid
-          color="transparent"
-          tooltip={entry.path}
-          tooltipPosition="bottom"
-          onClick={() => onSpawn(entry)}
-        >
-          <Stack align="center">
-            <Stack.Item>
-              <DmIcon
-                icon={entry.icon}
-                icon_state={entry.icon_state}
-                width="32px"
-                height="32px"
-                fallback={<Icon name="cube" size={1.5} color="label" />}
-              />
-            </Stack.Item>
-            <Stack.Item
-              grow
+      {entries.map((entry) => {
+        const count = amountFor(entry, amount, copies);
+        const where = entry.item && inHand ? 'into your hand' : 'at your feet';
+        return (
+          <ImageButton
+            key={entry.path}
+            fluid
+            dmIcon={entry.icon}
+            dmIconState={entry.icon_state}
+            fallbackIcon="cube"
+            imageSize={32}
+            disabled={disabled}
+            tooltip={
+              <>
+                <Box bold>
+                  Click: {entry.stack ? `a stack of ${count}` : count} {where}
+                </Box>
+                <Box color="label">{entry.path}</Box>
+              </>
+            }
+            tooltipPosition="bottom"
+            buttonsAlt={
+              count > 1 ? (
+                <Box color="label" fontSize="0.85em" pr={0.5}>
+                  x{count}
+                </Box>
+              ) : undefined
+            }
+            onClick={() => onSpawn(entry)}
+          >
+            <Box
               style={{
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -487,15 +723,15 @@ function EntryList(props: EntryListProps) {
               }}
             >
               {entry.name}
-              {entry.stack && (
-                <Box inline color="label" ml={0.5}>
-                  (stack of {entry.max})
-                </Box>
-              )}
-            </Stack.Item>
-          </Stack>
-        </Button>
-      ))}
+            </Box>
+            {!!entry.hint && (
+              <Box color="label" fontSize="0.85em">
+                {entry.hint}
+              </Box>
+            )}
+          </ImageButton>
+        );
+      })}
     </Box>
   );
 }
@@ -513,61 +749,74 @@ function TeleportTab() {
     position,
     map_size,
     noclip,
+    can_go_back,
   } = data;
   const [x, setX] = useState(position?.x || 1);
   const [y, setY] = useState(position?.y || 1);
   const [z, setZ] = useState(position?.z || levels[0]?.z || 1);
   const [areaQuery, setAreaQuery] = useState('');
-  const levelName = (level: number) =>
-    levels.find((entry) => entry.z === level)?.name || `Level ${level}`;
+  const levelNames = levels.map((level) => level.name);
+  const levelsCollide = new Set(levelNames).size !== levelNames.length;
+  const levelName = (level: number) => {
+    const name =
+      levels.find((entry) => entry.z === level)?.name || `Level ${level}`;
+    return levelsCollide ? `${name} (${level})` : name;
+  };
   const matches = areas.filter(
     createSearch(areaQuery, (entry: AreaEntry) => entry.name),
   );
+  const areaNameCount: Record<string, number> = {};
+  for (const entry of areas) {
+    areaNameCount[entry.name] = (areaNameCount[entry.name] || 0) + 1;
+  }
 
   return (
-    <>
-      {!noclip && (
-        <NoticeBox info>
-          Without noclip you land on the nearest free spot, never inside a wall.
-        </NoticeBox>
-      )}
+    <Scroll>
       <Section
         title="Coordinates"
         buttons={
-          <Button
-            icon="crosshairs"
-            disabled={!position}
-            onClick={() => {
-              if (position) {
-                setX(position.x);
-                setY(position.y);
-                setZ(position.z);
-              }
-            }}
-          >
-            Use my position
-          </Button>
+          <>
+            <Button
+              icon="rotate-left"
+              disabled={!can_go_back}
+              tooltip="Back to where you were before your last teleport"
+              onClick={() => act('teleport_back')}
+            >
+              Back
+            </Button>
+            <Button
+              icon="crosshairs"
+              disabled={!position}
+              onClick={() => {
+                if (position) {
+                  setX(position.x);
+                  setY(position.y);
+                  setZ(position.z);
+                }
+              }}
+            >
+              Use my position
+            </Button>
+          </>
         }
       >
         <Stack align="center">
           <Stack.Item color="label">X</Stack.Item>
           <Stack.Item>
-            <NumberInput
-              width="4.5em"
+            <RestrictedInput
+              width="4em"
               minValue={1}
               maxValue={map_size.x}
-              step={1}
               value={x}
               onChange={(value) => setX(Math.round(value))}
             />
           </Stack.Item>
           <Stack.Item color="label">Y</Stack.Item>
           <Stack.Item>
-            <NumberInput
-              width="4.5em"
+            <RestrictedInput
+              width="4em"
               minValue={1}
               maxValue={map_size.y}
-              step={1}
               value={y}
               onChange={(value) => setY(Math.round(value))}
             />
@@ -577,10 +826,10 @@ function TeleportTab() {
             <Dropdown
               width="100%"
               selected={`${z}`}
-              displayText={`${levelName(z)} (${z})`}
+              displayText={levelName(z)}
               options={levels.map((level) => ({
                 value: `${level.z}`,
-                displayText: `${level.name} (${level.z})`,
+                displayText: levelName(level.z),
               }))}
               onSelected={(value) => setZ(Number(value))}
             />
@@ -594,6 +843,13 @@ function TeleportTab() {
             </Button>
           </Stack.Item>
         </Stack>
+        <Box color="label" mt={0.5}>
+          Landing spot:{' '}
+          {noclip
+            ? 'exactly there (noclip on)'
+            : 'the nearest free tile (noclip off)'}
+          .
+        </Box>
       </Section>
       <Section title="Players in this world">
         {players.length ? (
@@ -604,9 +860,11 @@ function TeleportTab() {
                   <Stack.Item grow>
                     <Icon name="user" mr={1} color="label" />
                     {player.name}
-                    <Box inline color="label" ml={1}>
-                      {levelName(player.z)}
-                    </Box>
+                    {levels.length > 1 && (
+                      <Box inline color="label" ml={1}>
+                        {levelName(player.z)}
+                      </Box>
+                    )}
                   </Stack.Item>
                   <Stack.Item>
                     <Button
@@ -663,7 +921,7 @@ function TeleportTab() {
         <Input
           fluid
           value={areaQuery}
-          placeholder={`Search ${areas.length} areas`}
+          placeholder={`Search ${plural(areas.length, 'area')}`}
           onChange={setAreaQuery}
         />
         <Stack vertical mt={0.5}>
@@ -672,9 +930,11 @@ function TeleportTab() {
               <Stack align="center">
                 <Stack.Item grow>
                   {entry.name}
-                  {levels.length > 1 && (
+                  {(levels.length > 1 || areaNameCount[entry.name] > 1) && (
                     <Box inline color="label" ml={1}>
-                      {levelName(entry.z)}
+                      {areaNameCount[entry.name] > 1
+                        ? `${levelName(entry.z)}, ${entry.path.split('/').pop()}`
+                        : levelName(entry.z)}
                     </Box>
                   )}
                 </Stack.Item>
@@ -693,7 +953,8 @@ function TeleportTab() {
           ))}
           {matches.length > 60 && (
             <Stack.Item color="label">
-              {matches.length - 60} more; type to narrow the list.
+              {plural(matches.length - 60, 'more area')}: type to narrow the
+              list.
             </Stack.Item>
           )}
           {!matches.length && (
@@ -701,7 +962,7 @@ function TeleportTab() {
           )}
         </Stack>
       </Section>
-    </>
+    </Scroll>
   );
 }
 
@@ -709,7 +970,7 @@ function TeleportTab() {
 
 function EventsTab() {
   const { act, data } = useBackend<CreativeData>();
-  const { events = [], events_left, limits } = data;
+  const { events = [], events_left, events_refill_in, limits } = data;
   const [query, setQuery] = useState('');
   const matches = events.filter(
     createSearch(
@@ -724,18 +985,32 @@ function EventsTab() {
     }
     groups[entry.category].push(entry);
   }
+  const budget = `Up to ${limits.events} every ${limits.event_window} seconds: ${events_left} left.`;
+
+  if (!events.length) {
+    return (
+      <Section fill>
+        <Box color="label">No events are available in this world.</Box>
+      </Section>
+    );
+  }
 
   return (
-    <>
-      <NoticeBox>
-        Events hit the whole world, other players in it included. Up to{' '}
-        {limits.events} every {limits.event_window} seconds: {events_left} left.
-      </NoticeBox>
+    <Scroll>
+      {events_left ? (
+        <NoticeBox>
+          Events hit the whole world, other players in it included. {budget}
+        </NoticeBox>
+      ) : (
+        <NoticeBox danger>
+          No events left right now: the next one in {events_refill_in}s.
+        </NoticeBox>
+      )}
       <Section>
         <Input
           fluid
           value={query}
-          placeholder={`Search ${events.length} events`}
+          placeholder={`Search ${plural(events.length, 'event')}`}
           onChange={setQuery}
         />
       </Section>
@@ -756,10 +1031,15 @@ function EventsTab() {
                     <Stack.Item>
                       <Button.Confirm
                         icon="play"
-                        width="5.5em"
+                        width="6em"
                         textAlign="center"
                         disabled={!events_left}
-                        confirmContent="Sure?"
+                        tooltip={
+                          events_left
+                            ? undefined
+                            : `Next event in ${events_refill_in}s`
+                        }
+                        confirmContent="Run for everyone?"
                         confirmIcon="bolt"
                         onClick={() => act('run_event', { path: entry.path })}
                       >
@@ -777,33 +1057,51 @@ function EventsTab() {
           <Box color="label">No event matches.</Box>
         </Section>
       )}
-    </>
+    </Scroll>
   );
 }
 
-// ---------------------------------------------------------------- Tools
+// ---------------------------------------------------------------- Kits
 
-function ToolsTab() {
+function KitsTab() {
   const { act, data } = useBackend<CreativeData>();
-  const { wand_available } = data;
+  const { wand_available, kit = [] } = data;
   return (
-    <>
-      <Section title="Basic tool kit">
-        <Stack align="center">
-          <Stack.Item grow>
-            <Box color="label">
-              A toolbelt with a power screwdriver, power crowbar, experimental
-              welder, multitool, cable coil, analyzer and T-ray scanner, plus
-              insulated gloves, an RCD loaded with matter and an RPD. The belt
-              and gloves are put on when the slots are free.
-            </Box>
-          </Stack.Item>
-          <Stack.Item>
-            <Button icon="toolbox" onClick={() => act('give_tools')}>
-              Get tool kit
-            </Button>
-          </Stack.Item>
-        </Stack>
+    <Scroll>
+      <Section
+        title="Tool kit"
+        buttons={
+          <Button icon="toolbox" onClick={() => act('give_tools')}>
+            Get tool kit
+          </Button>
+        }
+      >
+        <Box color="label" mb={0.5}>
+          The belt and gloves are put on when those slots are free; the rest
+          goes into your hands.
+        </Box>
+        <Box
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(12em, 1fr))',
+            gap: '0.25em',
+          }}
+        >
+          {kit.map((entry) => (
+            <Stack key={entry.path} align="center">
+              <Stack.Item>
+                <DmIcon
+                  icon={entry.icon}
+                  icon_state={entry.icon_state}
+                  width="32px"
+                  height="32px"
+                  fallback={<Icon name="cube" size={1.5} color="label" />}
+                />
+              </Stack.Item>
+              <Stack.Item grow>{entry.name}</Stack.Item>
+            </Stack>
+          ))}
+        </Box>
       </Section>
       <Section title="Tutorial wand">
         <Stack align="center">
@@ -817,7 +1115,11 @@ function ToolsTab() {
             <Button
               icon="wand-magic-sparkles"
               disabled={!wand_available}
-              tooltip={wand_available ? undefined : 'Coming soon'}
+              tooltip={
+                wand_available
+                  ? 'Puts the tutorial wand into your hand: click things with it to mark tutorial steps.'
+                  : 'Coming soon: the wand that places tutorial markers, triggers and actions.'
+              }
               onClick={() => act('give_wand')}
             >
               {wand_available ? 'Get tutorial wand' : 'Coming soon'}
@@ -825,6 +1127,6 @@ function ToolsTab() {
           </Stack.Item>
         </Stack>
       </Section>
-    </>
+    </Scroll>
   );
 }

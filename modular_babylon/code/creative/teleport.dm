@@ -72,6 +72,13 @@
 		destination = babylon_creative_free_turf(destination, user)
 		if(!destination)
 			return "There is no free spot there. Turn on noclip to go into walls."
+	// Leave whatever holds the body first: a chair or ridden vehicle, a mech or sealed vehicle,
+	// a closet (forceMove alone would leave the closet or mech behind with a stale occupant).
+	user.stop_pulling()
+	user.buckled?.unbuckle_mob(user, force = TRUE)
+	if(istype(user.loc, /obj/vehicle/sealed))
+		var/obj/vehicle/sealed/vehicle = user.loc
+		vehicle.mob_exit(user, silent = TRUE)
 	user.forceMove(destination)
 	return null
 

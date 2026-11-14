@@ -13,7 +13,7 @@ SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", 
           "sfw", "links", "storyteller", "moderation", "world_players", "interface", "music",
           "music_loops", "play_time", "testing_common",
           "creative/machine_types_stub", "creative/powers", "creative/spawning", "creative/teleport",
-          "creative/events", "creative/panel", "creative/testing_creative"}
+          "creative/events", "creative/supermatter", "creative/panel", "creative/testing_creative"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}
 STATION_ONLY = {"station_session", "station_round", "testing_station"}
