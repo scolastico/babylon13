@@ -135,6 +135,8 @@
 	var/ready_players = 0
 	var/total = 0
 	for(var/mob/dead/new_player/player as anything in GLOB.new_player_list)
+		if(!player.client)
+			continue
 		total++
 		if(player.ready == PLAYER_READY_TO_PLAY)
 			ready_players++
@@ -252,9 +254,10 @@
 /proc/babylon_title_additions(client/player, menu_ref)
 	. = {"<div class="babylon_brand">BABYLON13</div>"}
 	var/datum/babylon_save/session = GLOB.babylon_save
-	if(session.round_mode == "auto" && !babylon_round_on_hold())
-		. += {"<p class="babylon_round_status">Starting your tutorial…</p>"}
-		if(player && session.tutorial_spawn_failures[player.ckey] >= BABYLON_TUTORIAL_SPAWN_TRIES)
+	if(session?.round_mode == "auto" && !babylon_round_on_hold())
+		var/failed = player && session.tutorial_spawn_failures[player.ckey] >= BABYLON_TUTORIAL_SPAWN_TRIES
+		. += {"<p class="babylon_round_status">[failed ? "Your tutorial could not start." : "Starting your tutorial…"]</p>"}
+		if(failed)
 			. += {"<a class="menu_button babylon_start_round" href='byond://?src=[menu_ref];babylon_retry_tutorial=1'>RETRY TUTORIAL</a>"}
 		return
 	if(!babylon_round_on_hold())
@@ -265,13 +268,19 @@
 		var/list/counts = babylon_ready_counts()
 		. += {"<a class="menu_button babylon_start_round" href='byond://?src=[menu_ref];babylon_start_round=1'>START ROUND ([counts[1]] of [counts[2]] ready)</a>"}
 
-/// The ready counter is on the owner's and the admins' title screens: refresh theirs.
-/proc/babylon_refresh_starter_titles()
+/// The ready counter is on the owner's and the admins' title screens; everyone's status line
+/// depends on whether the owner is here. Refreshes the starters', or everyone's with all.
+/proc/babylon_refresh_starter_titles(all = FALSE)
 	if(!babylon_round_on_hold())
 		return
 	for(var/mob/dead/new_player/menu as anything in GLOB.new_player_list)
-		if(menu.client && menu.title_screen_is_ready && babylon_may_start_round(menu.client))
+		if(menu.client && menu.title_screen_is_ready && (all || babylon_may_start_round(menu.client)))
 			menu.update_title_screen()
+
+/// A player leaving the menu: the ready counter and the owner's presence changed for the others.
+/mob/dead/new_player/Logout()
+	. = ..()
+	addtimer(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_refresh_starter_titles), TRUE), 1 SECONDS)
 
 /proc/babylon_title_style()
 	return BABYLON_TITLE_STYLE
@@ -311,10 +320,10 @@
 			to_chat(src, span_notice("You start this round. Tick <b>READY</b> so you get a job, then press <b>Start round</b> when your friends are ready."))
 		else
 			to_chat(src, span_notice("[html_encode(babylon_round_status_text(client))] Set up your character in the meantime."))
-		babylon_refresh_starter_titles()
-	else if(session.round_mode == "auto")
+		babylon_refresh_starter_titles(TRUE)
+	else if(session?.round_mode == "auto")
 		to_chat(src, span_notice("Starting your tutorial…"))
-	else if(session.round_mode == "resume" && SSticker.HasRoundStarted())
+	else if(session?.round_mode == "resume" && SSticker.HasRoundStarted())
 		to_chat(src, span_notice("This round continues from the world's last autosave."))
 		INVOKE_ASYNC(session, TYPE_PROC_REF(/datum/babylon_save, return_to_resumed_round), client)
 	else if(SSticker.HasRoundStarted())
@@ -507,7 +516,10 @@
 	if(world.params["babylon-api"] && !babylon_supervisor_request(list("action" = "round_ended"))?["ok"])
 		log_world("Babylon: the supervisor did not confirm the round's end; it sees the exit as a stop.")
 	// tg already announces "The round has ended." on its own.
-	to_chat(world, span_notice("Read the round-end report; everyone returns to the Babylon lobby in [DisplayTimeText(delay)]."))
+	if(delay > 0)
+		to_chat(world, span_notice("Read the round-end report; everyone returns to the Babylon lobby in [DisplayTimeText(delay)]."))
+	else
+		to_chat(world, span_notice("Everyone returns to the Babylon lobby now."))
 	var/next_start = babylon_next_start_text()
 	if(next_start)
 		to_chat(world, span_notice(next_start))

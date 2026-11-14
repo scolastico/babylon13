@@ -98,7 +98,7 @@
 	var/list/before = babylon_ready_counts()
 	result["ready_starter_marked"] = mark_starter_ready(fake_player) && fake_player.ready == PLAYER_READY_TO_PLAY
 	var/list/after = babylon_ready_counts()
-	result["ready_counter_counts_them"] = after[1] == before[1] + 1 && after[2] == before[2]
+	result["ready_counter_ignores_clientless"] = after[1] == before[1] && after[2] == before[2]
 	result["observer_not_marked"] = !mark_starter_ready(null) && !mark_starter_ready(new /obj/item)
 	qdel(fake_player)
 	result["owner_status_text"] = babylon_round_status_for(TRUE, TRUE, "Owner Key") == "You start this round. Press START ROUND when everyone is ready."
@@ -170,4 +170,5 @@
 	result["setup_failure_text"] = boot_error == "This world's round could not start. Try starting it again; if it keeps failing, tell an admin."
 	boot_error = null
 	result["menu_says_starting"] = !!findtext(babylon_title_additions(null, "menuref"), "Starting your tutorial")
+	result["refresh_all_is_safe_in_a_running_round"] = isnull(babylon_refresh_starter_titles(TRUE))
 	return result
