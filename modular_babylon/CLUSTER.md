@@ -537,6 +537,33 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   Start round again; tutorial worlds show a RETRY TUTORIAL button after three failed
   spawns of a player.
 
+## Creative machines
+
+The Creative panel's spawn list offers four creative machines (purple tint, "creative" in
+the name). They are not mapped, researched or sold. In a world without Creative they are
+ordinary, inert machines and say "Creative mode is off in this world" on examine.
+**Alt + right-click** one to change its mode and setting.
+
+- **Creative SMES.** *Source*: never runs out of charge and outputs its output level (set
+  in the normal SMES window, up to 10 MW). *Sink*: absorbs all surplus power on the cable
+  it stands on and on its terminal's network. It needs no terminal.
+- **Creative canister.** *Source*: refills itself with its gas (any gas of the standard
+  list; oxygen by default, a nitrogen preset exists) to a fill pressure (default 4500 kPa,
+  100-9000), so its valve or a connector port never runs dry. *Void*: deletes all gas
+  inside it every atmos tick; on a connector port it drains the pipe network, e.g. as the
+  scrubbers' sink.
+- **Creative fluid tank** (plumbing; wrench it down, input west, output east like the
+  chemical tank). *Source*: stays full (400 u) of one reagent; only reagents the chem
+  synthesizer could make (no admin-only or ERP reagents). *Void*: destroys whatever its
+  input pulls in.
+- **Creative disposal unit.** *Source*: put on a disposal trunk, it sends one item down
+  the pipe every N seconds (default 10, 2-600) without needing pressure. Item types are
+  searched by path; only concrete items, no grenades, bombs, nuclear disks, MMIs, mob
+  holders or similar. *Void*: deletes everything that reaches it by pipe or is put inside;
+  mobs are put out on the floor, never deleted.
+
+The settings are saved with the world.
+
 ## Tutorials
 
 Players build a tutorial in a **Creative** world on a **station map** (a Creative
