@@ -166,9 +166,10 @@ class WorldPolicy(unittest.TestCase):
         # (never a tutorial world, never a tutorial snapshot). Task D2 fills capture_characters().
         text = (DM / "persistence_levels.dm").read_text(encoding="utf-8")
         body = re.search(r"^/datum/babylon_save/capture_session_state\(.*?(?=^\S)", text, re.M | re.S).group(0)
-        self.assertRegex(body, r'state\["characters"\] = babylon_world_saves_characters\(\) \? capture_characters\(\) : list\(\)')
+        self.assertRegex(body, r'state\["characters"\] = babylon_world_saves_characters\(for_tutorial\) \? capture_characters\(\) : list\(\)')
+        self.assertIn("capture_session_state(state, for_tutorial)", (DM / "persistence.dm").read_text(encoding="utf-8"))
         flags = (DM / "world_flags.dm").read_text(encoding="utf-8")
-        self.assertRegex(flags, r"(?m)^/proc/babylon_world_saves_characters\(\)\n\treturn !!GLOB\.babylon_world\?\.saves_characters\(\) && !GLOB\.babylon_save\?\.taking_tutorial_snapshot$")
+        self.assertRegex(flags, r"(?m)^/proc/babylon_world_saves_characters\(for_tutorial = FALSE\)\n\treturn !for_tutorial && !!GLOB\.babylon_world\?\.saves_characters\(\)$")
 
     def test_tutorial_text_limits_match(self):
         text = (DM / "tutorial/submit.dm").read_text(encoding="utf-8")

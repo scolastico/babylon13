@@ -109,9 +109,7 @@
 		flags.owner_ckey = "tutorialowner"
 		flags.persistent = FALSE
 		result["characters_saved_normally"] = babylon_world_saves_characters()
-		taking_tutorial_snapshot = TRUE
-		result["no_characters_while_snapshotting"] = !babylon_world_saves_characters()
-		taking_tutorial_snapshot = FALSE
+		result["no_characters_in_a_snapshot"] = !babylon_world_saves_characters(TRUE)
 		if(!babylon_tutorial_marker_turf("start"))
 			babylon_tutorial_test_place(/obj/babylon_tutorial/marker, tutorial_test_base(9), "start", list(), made)
 		var/latest_before = fexists("data/babylon/saves/latest.json") ? file2text("data/babylon/saves/latest.json") : null
@@ -133,7 +131,7 @@
 		result["snapshot_deleted"] = istext(generation) && !fexists("data/babylon/saves/[generation]/state.json")
 		var/latest_after = fexists("data/babylon/saves/latest.json") ? file2text("data/babylon/saves/latest.json") : null
 		result["latest_unchanged"] = latest_after == latest_before && last_save == last_save_before
-		result["flag_cleared"] = !taking_tutorial_snapshot && !busy
+		result["not_busy"] = !busy
 
 		// A refused copy also drops the snapshot.
 		fake.queries.Cut()
@@ -169,7 +167,6 @@
 		result["save_back_latest_unchanged"] = latest_after == latest_before && last_save == last_save_before
 	catch(var/exception/error)
 		result["error_[error]"] = FALSE
-	taking_tutorial_snapshot = FALSE
 	flags.build = was[1]
 	flags.creative = was[2]
 	flags.kind = was[3]

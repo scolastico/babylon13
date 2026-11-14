@@ -223,7 +223,7 @@
 		REMOVE_TRAIT(body, TRAIT_UI_BLOCKED, "babylon_checkpoint")
 	checkpoint_frozen = list()
 
-/datum/babylon_save/capture_session_state(list/state)
+/datum/babylon_save/capture_session_state(list/state, for_tutorial = FALSE)
 	var/list/levels = list()
 	for(var/z in persisted_levels())
 		var/datum/space_level/level = SSmapping.z_list[z]
@@ -235,7 +235,7 @@
 	state["round"] = list("started" = started ? TRUE : FALSE, "station_time" = started ? STATION_TIME_PASSED() : 0)
 	// The players' characters: Task D2 fills capture_characters(). Never in a tutorial world's
 	// save or a tutorial snapshot (arch-review M1; test_contracts.py checks this line).
-	state["characters"] = babylon_world_saves_characters() ? capture_characters() : list()
+	state["characters"] = babylon_world_saves_characters(for_tutorial) ? capture_characters() : list()
 
 /// The players' characters for state.json "characters" (Task D2). None yet.
 /datum/babylon_save/proc/capture_characters()

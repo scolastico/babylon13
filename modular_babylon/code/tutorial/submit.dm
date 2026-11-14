@@ -3,7 +3,7 @@
 // (world_flags.dm can_submit_tutorial(), can_save_back_tutorial()) decides where it works.
 //
 // Submit (the owner of a tutorial-capable ordinary world): the supervisor's cooldown is asked
-// (tutorial_submit_check), the world writes a tutorial snapshot (save_world(tutorial_snapshot =
+// (tutorial_submit_check), the world writes a tutorial snapshot (save_world(for_tutorial =
 // TRUE): forced even in a non-persistent world, no characters, never the world's checkpoint) and
 // the supervisor copies it into pending/ (tutorial_submit). Save back (an admin in a tutorial
 // edit world): the same snapshot replaces the pending tutorial's save (tutorial_save_back). Both
@@ -111,7 +111,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 
 /// Writes the tutorial snapshot: list("ok", "generation") or list("error").
 /datum/babylon_tutorial_submissions/proc/take_snapshot()
-	var/list/result = GLOB.babylon_save.save_world(force = TRUE, tutorial_snapshot = TRUE)
+	var/list/result = GLOB.babylon_save.save_world(force = TRUE, for_tutorial = TRUE)
 	if(!result?["ok"])
 		return list("ok" = FALSE, "error" = result?["error"] || "unknown error")
 	return result

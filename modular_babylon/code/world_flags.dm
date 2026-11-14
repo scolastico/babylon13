@@ -174,10 +174,10 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_stop_saves()
 	return !!GLOB.babylon_world?.stop_saves()
 
-/// The checkpoint being written now carries the players' characters: the policy table says so and
-/// it is not a tutorial snapshot (a submission or a save back, tutorial/submit.dm).
-/proc/babylon_world_saves_characters()
-	return !!GLOB.babylon_world?.saves_characters() && !GLOB.babylon_save?.taking_tutorial_snapshot
+/// A checkpoint keeps the players' characters: the policy table says so, and it is not a tutorial
+/// snapshot (for_tutorial: a submission or save back, tutorial/submit.dm, from any world).
+/proc/babylon_world_saves_characters(for_tutorial = FALSE)
+	return !for_tutorial && !!GLOB.babylon_world?.saves_characters()
 
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has

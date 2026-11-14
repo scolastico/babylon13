@@ -161,7 +161,7 @@ SUBSYSTEM_DEF(babylon_builder)
 		drones += drone
 	return drones_by_turf
 
-/datum/babylon_save/capture_session_state(list/state)
+/datum/babylon_save/capture_session_state(list/state, for_tutorial = FALSE)
 	// The owner's drone, also at the top level, as saves before multiplayer had it.
 	var/datum/babylon_player/owner = owner_player()
 	state["builder"] = !QDELETED(owner.builder) ? owner.builder?.babylon_save_id : null

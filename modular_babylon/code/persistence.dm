@@ -402,18 +402,16 @@
 	var/list/turf_metadata_cache = list()
 	/// The last successful save's result (generation, objects, levels, bytes, timings).
 	var/list/last_save_report
-	/// TRUE while a tutorial snapshot is written (save_world(tutorial_snapshot = TRUE)).
-	var/taking_tutorial_snapshot = FALSE
 
 /// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced.
-/// tutorial_snapshot (a tutorial submission or save back, tutorial/submit.dm) is forced and writes
-/// a generation that never becomes the world's checkpoint: no latest.json, no level reuse, no
-/// characters (babylon_world_saves_characters()). The caller deletes it once it was copied.
-/datum/babylon_save/proc/save_world(force = FALSE, tutorial_snapshot = FALSE)
+/// for_tutorial: a tutorial snapshot (a submission or save back, tutorial/submit.dm), forced, that
+/// never becomes the world's checkpoint (no latest.json, no level reuse) and keeps no characters
+/// (babylon_world_saves_characters()). The caller deletes it once it was copied.
+/datum/babylon_save/proc/save_world(force = FALSE, for_tutorial = FALSE)
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
-	if(!force && !tutorial_snapshot && !babylon_world_saves())
+	if(!force && !for_tutorial && !babylon_world_saves())
 		return list("error" = "This world is not saved")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
@@ -427,19 +425,17 @@
 	checkpoint_hold(TRUE)
 	sleep(1 TICKS)
 	var/list/result
-	taking_tutorial_snapshot = !!tutorial_snapshot
 	try
-		result = save_world_impl()
+		result = save_world_impl(for_tutorial)
 	catch(var/exception/error)
 		result = list("error" = "Checkpoint failed: [error]")
 		log_world("BABYLON SAVE ERROR: [error]")
-	taking_tutorial_snapshot = FALSE
 	if(!result["ok"] && draining)
 		draining = FALSE
 	release_checkpoint()
 	busy = FALSE
 	if(result["ok"])
-		if(!tutorial_snapshot)
+		if(!for_tutorial)
 			last_save_report = result
 		if(!draining)
 			to_chat_immediate(world, span_notice("Saved. Play resumes."))
@@ -531,7 +527,8 @@
 	return list()
 
 /// Adds the build's own session data (players, research ...) to a checkpoint's state.json.
-/datum/babylon_save/proc/capture_session_state(list/state)
+/// for_tutorial: a tutorial snapshot, which keeps no characters.
+/datum/babylon_save/proc/capture_session_state(list/state, for_tutorial = FALSE)
 	return
 
 /// Restores what capture_session_state saved, once every saved object exists again.
@@ -716,7 +713,7 @@
 			turf_data["z"] = z
 	return list("map_text" = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]", "records" = records, "turfs" = turfs)
 
-/datum/babylon_save/proc/save_world_impl()
+/datum/babylon_save/proc/save_world_impl(for_tutorial = FALSE)
 	var/list/levels = persisted_levels()
 	// Which levels changed is taken now, while the world is paused (changes from here on count
 	// for the next save).
@@ -752,7 +749,7 @@
 	// 7: non-item contents of closets and crates are saved (restore_lost_supermatter()).
 	// "records" and "turfs" are spliced in as JSON below, level by level.
 	var/list/state = list("version" = save_format_version(), "generation" = generation, "next_id" = next_id, "save_count" = save_count, "records" = "@babylon-records@", "turfs" = "@babylon-turfs@")
-	capture_session_state(state)
+	capture_session_state(state, for_tutorial)
 	state["sun"] = list("azimuth" = SSsun.azimuth, "azimuth_mod" = SSsun.azimuth_mod, "base_rotation" = SSsun.base_rotation)
 	state["play_time"] = play_time
 	checkpoint_capture_ms = (REALTIMEOFDAY - checkpoint_started) * 100
@@ -832,7 +829,7 @@
 	if(!complete)
 		busy = FALSE
 		return list("error" = "Save files could not be written")
-	if(taking_tutorial_snapshot)
+	if(for_tutorial)
 		// Only the supervisor's copy of it is kept: the world neither resumes nor reuses levels
 		// from it, and the levels it captured count as changed for the next real save.
 		level_save_failed()
