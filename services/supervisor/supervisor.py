@@ -27,7 +27,7 @@ from protocol import topic
 from checkpoints import Checkpoints, CheckpointError
 from map_overlay import prepare_fresh_map
 from world_storage import delete_world_data, reset_world_data, tutorial_snapshot_dir
-from constants import DEFAULTS, TUTORIAL_KINDS, WORLD_KIND
+from constants import DEFAULTS, TUTORIAL_KINDS, WORLD_KIND, world_policy
 from tutorials import SCHEMA as TUTORIAL_SCHEMA, GENERATION_RE, TutorialError, TutorialStore, seed_first_save, walk
 from catalog import load_catalog, public_catalog
 from logstream import Follower, log, world_source
@@ -1054,15 +1054,19 @@ class Supervisor:
             raise Denied("This tutorial does not exist or is no longer available")
         return row
 
+    def world_policy(self, world):
+        """What this world may do (constants.world_policy, the mirror of world_flags.dm)."""
+        try:
+            build = build_of(self.catalog, world["map"])
+        except Denied:
+            build = None
+        return world_policy(build, world["persistent"], world["creative"], world["kind"], world["map"])
+
     def tutorial_capable(self, world):
         """Tutorials come from normal creative worlds on the station build (spec 10)."""
         if world["kind"] != WORLD_KIND:
             raise Denied("A tutorial can't be submitted from a tutorial run")
-        try:
-            station = build_of(self.catalog, world["map"]) == "station"
-        except Denied:
-            station = False
-        if not station or not world["creative"]:
+        if not self.world_policy(world)["can_submit_tutorial"]:
             raise Denied("Tutorials can only be submitted from a Creative world on a station map "
                          "(a Creative Plane or a station). Babylon worlds can build, but not submit.")
 
@@ -1166,7 +1170,7 @@ class Supervisor:
         with self.lock, self.db:
             run = self.child(run_id, secret)
             world = self.world(run["world"])
-            if world["kind"] != "tutorial_edit":
+            if not self.world_policy(world)["can_save_back_tutorial"]:
                 raise Denied("Only a world that edits a pending tutorial can save back to it")
             actor = ckey(str(data.get("actor", "")))
             if actor not in self.admins:
@@ -1477,8 +1481,8 @@ class Supervisor:
         if run["id"] in self.stop_workers:
             return
         self.stop_workers.add(run["id"])
-        world = self.row("SELECT persistent, kind FROM worlds WHERE id=?", (run["world"],))
-        saved = bool(world) and world["persistent"] and world["kind"] not in TUTORIAL_KINDS
+        world = self.row("SELECT * FROM worlds WHERE id=?", (run["world"],))
+        saved = bool(world) and self.world_policy(world)["stop_saves"]
         log("Stopping %s (port %s): %s" % (self.describe(run["world"]), run["port"], "saving" if saved else "not saved"))
         self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
         self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))

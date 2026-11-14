@@ -449,12 +449,6 @@
 		waited += 1 SECONDS
 	return !busy
 
-/// This world saves checkpoints: it is persistent (the world's setting) and not a tutorial
-/// instance, which only lives while it runs. Other worlds never autosave, hide their save verbs
-/// and stop without a save.
-/proc/babylon_world_saves()
-	return babylon_persistence_enabled() && !GLOB.babylon_world?.is_tutorial()
-
 /// Starts the autosave countdown every autosave_interval (Babylon 15 minutes, station worlds the
 /// supervisor's babylon-autosave-minutes, default 30) while players are connected (both
 /// builds' tick_players()). Worlds that are not saved never count down.

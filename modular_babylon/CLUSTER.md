@@ -636,7 +636,8 @@ admins, ghosts and the new-player lobby get neither. The panel's tabs:
   wand.
 
 The **supermatter** stays spawnable (engine tutorials), but in creative and tutorial
-worlds a delamination only explodes, irradiates and causes hallucinations: it never
+worlds, and on every Creative Plane map (with or without Creative, like its creative
+machines), a delamination only explodes, irradiates and causes hallucinations: it never
 makes a singularity, a tesla ball or a resonance cascade.
 
 Creative players can still end a station round the normal way (calling the shuttle at

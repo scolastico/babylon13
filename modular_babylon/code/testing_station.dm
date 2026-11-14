@@ -23,7 +23,20 @@
 	// The Babylon rules (rules.dm) are not compiled in: normal tg rounds.
 	result["events_fire"] = !(SSevents.ss_flags & SS_NO_FIRE) && !(SSgamemode.ss_flags & SS_NO_FIRE)
 	result["several_levels"] = world.maxz > 1
-	result["saving_available"] = babylon_station_saving_available()
+	// The world-type policy (world_flags.dm): one table, and the G1b tutorial rules in it.
+	var/was_kind = flags.kind
+	var/was_creative = flags.creative
+	flags.kind = "world"
+	flags.creative = TRUE
+	var/submit_from_creative = flags.can_submit_tutorial() && !flags.can_save_back_tutorial()
+	flags.creative = FALSE
+	var/no_submit_without_creative = !flags.can_submit_tutorial()
+	flags.creative = TRUE
+	flags.kind = "tutorial_edit"
+	var/save_back_from_edit = flags.can_save_back_tutorial() && !flags.can_submit_tutorial()
+	flags.kind = was_kind
+	flags.creative = was_creative
+	result["tutorial_policy"] = submit_from_creative && no_submit_without_creative && save_back_from_edit
 	return result
 
 /// Station worlds run SPLURT's storytellers without a vote; Creative Plane and tutorials do not.

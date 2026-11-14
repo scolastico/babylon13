@@ -23,12 +23,7 @@
 	antag_divisor = 0
 	votable = FALSE
 
-/// This world runs only the inert Babylon storyteller and no tgstation random events.
-/proc/babylon_storyteller_inert()
-	if(!babylon_is_station_build())
-		return TRUE
-	var/datum/babylon_world/flags = GLOB.babylon_world
-	return flags.is_tutorial() || flags.is_creative_plane()
+// Which worlds run only the inert Babylon storyteller: babylon_storyteller_inert() (world_flags.dm).
 
 /// The storyteller this world runs: the inert one, or the station world's fixed one.
 /proc/babylon_world_storyteller()

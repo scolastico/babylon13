@@ -7,6 +7,30 @@ WORLD_KIND = WORLD_KINDS[0]
 # Kinds whose world starts from a tutorial snapshot instead of a player save.
 TUTORIAL_KINDS = ("tutorial", "tutorial_edit")
 
+
+
+def world_policy(build, persistent, creative, kind, map_id):
+    """What a world of this type may do: the supervisor's copy of the DM policy table in
+    modular_babylon/code/world_flags.dm (/datum/babylon_world). test_contracts.py checks that both
+    give the same answers for every world type."""
+    tutorial = kind in TUTORIAL_KINDS
+    plane = str(map_id or "").startswith("creative_plane")
+    creative = bool(creative)
+    tutorial_capable = build == "station" and creative
+    saves = bool(persistent) and not tutorial
+    return {
+        "creative_enabled": creative,
+        "tutorial_capable": tutorial_capable,
+        "can_submit_tutorial": tutorial_capable and kind == WORLD_KIND,
+        "can_save_back_tutorial": kind == "tutorial_edit",
+        "creative_machines_active": creative or tutorial or plane,
+        "delam_contained": creative or tutorial or plane,
+        "storyteller_inert": build == "babylon" or tutorial or plane,
+        "saves": saves,
+        "stop_saves": saves,
+    }
+
+
 # Configuration defaults used wherever the configuration does not name a value.
 DEFAULTS = {
     "kept_save_points_per_world": 4,

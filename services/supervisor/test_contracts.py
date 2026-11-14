@@ -10,7 +10,9 @@ from urllib.parse import parse_qs
 
 import test_driver
 import test_supervisor
-from constants import WORLD_KINDS
+import itertools
+
+from constants import WORLD_KINDS, world_policy
 from supervisor import CHILD_ACTIONS, Denied, Supervisor
 
 DM = Path(__file__).resolve().parents[2] / "modular_babylon/code"
@@ -112,6 +114,58 @@ class ChildParams(test_driver.DriverFixture):
         text = (DM / "world_flags.dm").read_text(encoding="utf-8")
         kinds = re.search(r'requested_kind in list\(([^)]*)\)', text).group(1)
         self.assertEqual(tuple(re.findall(r'"([a-z_]+)"', kinds)), WORLD_KINDS)
+
+
+def dm_policy():
+    """The world-type policy table of world_flags.dm: method name -> its return expression."""
+    text = (DM / "world_flags.dm").read_text(encoding="utf-8")
+    return dict(re.findall(r"^/datum/babylon_world/proc/(\w+)\(\)\n\treturn (.+)$", text, re.M))
+
+
+def dm_evaluate(policy, name, world):
+    """Evaluates one DM policy expression (&&, ||, !, ==, fields and other policy methods)."""
+    expression = policy[name]
+    expression = re.sub(r"is_tutorial\(\)", "(kind in ('tutorial', 'tutorial_edit'))", expression)
+    expression = re.sub(r"is_creative_plane\(\)", "(str(map_id).startswith('creative_plane'))", expression)
+    expression = re.sub(r"(\w+)\(\)", r"call('\1')", expression)
+    expression = expression.replace("&&", " and ").replace("||", " or ")
+    expression = re.sub(r"!(?!=)", " not ", expression)
+    scope = dict(world, call=lambda other: dm_evaluate(policy, other, world))
+    return bool(eval(expression, {"__builtins__": {"str": str}}, scope))
+
+
+class WorldPolicy(unittest.TestCase):
+    """world_flags.dm and constants.world_policy() answer the same for every world type."""
+
+    def test_same_rules_on_both_sides(self):
+        policy = dm_policy()
+        self.assertEqual(set(policy) - {"is_tutorial", "is_creative_plane"}, set(world_policy("station", 1, 1, "world", "x")))
+        for build, persistent, creative, kind, map_id in itertools.product(
+                ("babylon", "station"), (0, 1), (0, 1), WORLD_KINDS, ("babylon", "metastation", "creative_plane_m")):
+            world = dict(build=build, persistent=persistent, creative=creative, kind=kind, map_id=map_id)
+            expected = world_policy(build, persistent, creative, kind, map_id)
+            for name, value in expected.items():
+                with self.subTest(rule=name, **world):
+                    self.assertEqual(dm_evaluate(policy, name, world), value)
+
+    def test_rulings(self):
+        # A Creative Plane always contains a delamination, like its creative machines run.
+        plane = world_policy("station", 1, 0, "world", "creative_plane_s")
+        self.assertTrue(plane["delam_contained"] and plane["creative_machines_active"] and plane["storyteller_inert"])
+        self.assertTrue(world_policy("station", 1, 1, "world", "metastation")["can_submit_tutorial"])
+        self.assertFalse(world_policy("babylon", 1, 1, "world", "babylon")["can_submit_tutorial"])
+        self.assertTrue(world_policy("station", 0, 0, "tutorial_edit", "metastation")["can_save_back_tutorial"])
+        self.assertFalse(world_policy("station", 1, 1, "tutorial", "metastation")["saves"])
+
+    def test_world_type_rules_live_in_world_flags(self):
+        # The rules are defined once, in world_flags.dm; other modules only call them.
+        for path, text in dm_sources().items():
+            if path.name == "world_flags.dm":
+                continue
+            for rule in ("babylon_creative_machines_active", "babylon_delam_contained", "babylon_storyteller_inert",
+                         "babylon_world_saves", "babylon_stop_saves", "babylon_tutorial_capable", "babylon_creative_enabled"):
+                self.assertNotRegex(text, r"(?m)^/proc/%s\(" % rule, path.name)
+            self.assertNotIn("babylon_station_saving_available", text, path.name)
 
 
 if __name__ == "__main__":

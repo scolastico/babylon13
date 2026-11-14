@@ -45,17 +45,6 @@
 	if(world.params["babylon-lobby"])
 		src << link(world.params["babylon-lobby"])
 
-/// Whether station worlds can save and resume their round: the multi-z save engine
-/// (persistence_levels.dm). The stop and round-end messages depend on it.
-/proc/babylon_station_saving_available()
-	return TRUE
-
-/// Whether a managed stop saves first: only worlds that are saved (persistent, not tutorials).
-/proc/babylon_stop_saves()
-	if(!babylon_world_saves())
-		return FALSE
-	return !babylon_is_station_build() || babylon_station_saving_available()
-
 /// The chat line players see when the world stops; says truthfully whether it is saved.
 /proc/babylon_stop_message(saves)
 	if(saves)

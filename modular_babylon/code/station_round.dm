@@ -146,7 +146,7 @@
 /// only hear what is true for everyone.
 /proc/babylon_next_start_text(for_owner = FALSE)
 	// Only a world with a save to go back to picks up from it.
-	return babylon_next_start_message(babylon_station_saving_available() && babylon_world_saves() && !!GLOB.babylon_save?.last_save, for_owner)
+	return babylon_next_start_message(babylon_world_saves() && !!GLOB.babylon_save?.last_save, for_owner)
 
 /proc/babylon_next_start_message(saves, for_owner)
 	if(!saves)

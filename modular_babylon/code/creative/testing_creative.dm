@@ -135,14 +135,21 @@
 	var/made_tesla = tesla.effect_tesla(shard)
 	result["supermatter_contained"] = babylon_delam_contained() && !made_singulo && !made_tesla && !QDELETED(shard) \
 		&& !cascade.can_select(shard) && length(GLOB.singularities) == singularities
-	// Outside creative and tutorial worlds the delaminations are untouched.
+	// Outside creative and tutorial worlds and Creative Plane maps the delaminations are untouched;
+	// a Creative Plane map contains them even without the Creative flag (world_flags.dm ruling).
 	flags.creative = FALSE
 	var/kind = flags.kind
+	var/map_id = flags.map_id
 	flags.kind = "world"
+	flags.map_id = "metastation"
 	result["supermatter_normal_elsewhere"] = !babylon_delam_contained()
+	flags.map_id = "creative_plane_s"
+	result["supermatter_contained_on_planes"] = babylon_delam_contained() && babylon_creative_machines_active()
+	flags.map_id = "metastation"
 	flags.kind = "tutorial"
 	result["supermatter_contained_in_tutorials"] = babylon_delam_contained()
 	flags.kind = kind
+	flags.map_id = map_id
 	flags.creative = TRUE
 	result["rod_event_refused"] = istext(babylon_creative_run_event(body, "/datum/round_event_control/immovable_rod"))
 	result["blocked_ghost_pollers"] = babylon_creative_spawn_blocked(/obj/item/guardian_creator) && babylon_creative_spawn_blocked(/obj/item/slimepotion/sentience) \

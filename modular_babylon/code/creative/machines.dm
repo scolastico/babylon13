@@ -42,10 +42,8 @@ GLOBAL_VAR(babylon_creative_test_answers)
 		/obj/machinery/disposal/bin/babylon_creative/void,
 	)
 
-/// The machines' infinite behaviour runs: Creative worlds, tutorial instances and Creative
-/// Plane maps. Changing their settings stays Creative-only (babylon_creative_can_configure).
-/proc/babylon_creative_machines_active()
-	return babylon_creative_enabled() || !!GLOB.babylon_world?.is_tutorial() || !!GLOB.babylon_world?.is_creative_plane()
+// Whether the infinite behaviour runs is babylon_creative_machines_active() (world_flags.dm).
+// Changing the settings stays Creative-only (babylon_creative_can_configure).
 
 /// Shared examine lines: what the machine does, how to change it, or that it is inert here.
 /proc/babylon_creative_examine(list/examine_list, summary)

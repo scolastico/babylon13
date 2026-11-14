@@ -71,15 +71,82 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 	return FALSE
 #endif
 
+// ---------------------------------------------------------------------------------------------
+// The world-type policy: every rule that depends on what kind of world this is lives here, in one
+// table, as methods of /datum/babylon_world (read from build, persistent, creative, kind and the
+// map). The supervisor keeps a copy (services/supervisor/constants.py world_policy());
+// services/supervisor/test_contracts.py evaluates both for every world type and fails if they
+// differ, so keep each method a single "return" of a plain expression over those fields.
+// A new kind or map group is added here, and nowhere else.
+
+/// Every player gets the Creative panel.
+/datum/babylon_world/proc/creative_enabled()
+	return creative
+
+/// Tutorials can be played and edited here: the station build with Creative enabled.
+/datum/babylon_world/proc/tutorial_capable()
+	return build == "station" && creative
+
+/// A tutorial can be submitted from here (G1b): a tutorial-capable ordinary world.
+/datum/babylon_world/proc/can_submit_tutorial()
+	return tutorial_capable() && kind == "world"
+
+/// A save goes back to the pending tutorial from here (G1b): an admin's tutorial edit world.
+/datum/babylon_world/proc/can_save_back_tutorial()
+	return kind == "tutorial_edit"
+
+/// The creative machines' infinite behaviour runs (creative/machines.dm): Creative worlds,
+/// tutorial instances (an authored scenario keeps its creative power and air, though its players
+/// have no Creative panel) and Creative Plane maps (the map's own power and air, whatever the
+/// Creative flag).
+/datum/babylon_world/proc/creative_machines_active()
+	return creative || is_tutorial() || is_creative_plane()
+
+/// A supermatter delamination only explodes: no singularity, tesla ball or resonance cascade
+/// (creative/supermatter.dm). Wherever creative machines run, so a Creative Plane map always
+/// contains it, with or without the Creative flag.
+/datum/babylon_world/proc/delam_contained()
+	return creative || is_tutorial() || is_creative_plane()
+
+/// Only the inert Babylon storyteller runs, with no random events (storyteller.dm): the Babylon
+/// build, tutorial instances and Creative Plane maps.
+/datum/babylon_world/proc/storyteller_inert()
+	return build == "babylon" || is_tutorial() || is_creative_plane()
+
+/// Checkpoints are written (autosaves, the owner's save, a save on stop): persistent worlds that
+/// are not tutorial instances. A forced save (a tutorial submission) ignores it.
+/datum/babylon_world/proc/saves()
+	return persistent && !is_tutorial()
+
+/// A managed stop saves first: exactly the worlds that save.
+/datum/babylon_world/proc/stop_saves()
+	return saves()
+
+// Global shorthands of the policy table, safe before GLOB.babylon_world exists.
+
 /proc/babylon_creative_enabled()
-	return !!GLOB.babylon_world?.creative
+	return !!GLOB.babylon_world?.creative_enabled()
 
 /proc/babylon_persistence_enabled()
 	return !!GLOB.babylon_world?.persistent
 
-/// Tutorials can be played and edited here: the station build with Creative enabled.
 /proc/babylon_tutorial_capable()
-	return babylon_is_station_build() && babylon_creative_enabled()
+	return !!GLOB.babylon_world?.tutorial_capable()
+
+/proc/babylon_creative_machines_active()
+	return !!GLOB.babylon_world?.creative_machines_active()
+
+/proc/babylon_delam_contained()
+	return !!GLOB.babylon_world?.delam_contained()
+
+/proc/babylon_storyteller_inert()
+	return !!GLOB.babylon_world?.storyteller_inert()
+
+/proc/babylon_world_saves()
+	return !!GLOB.babylon_world?.saves()
+
+/proc/babylon_stop_saves()
+	return !!GLOB.babylon_world?.stop_saves()
 
 /// The world can admit players and answer the supervisor's status as ready. Babylon: the
 /// builder session has restored the world and booted. Station: the master controller has

@@ -1,11 +1,8 @@
 // The supermatter stays spawnable in creative worlds (engine tutorials need it), but in creative
-// and tutorial worlds a delamination never makes a singularity, a tesla ball or a resonance
-// cascade (crystal mass, evacuation rift, round end): those would eat or end the whole world.
-// The explosion, radiation, hallucinations and anomalies stay.
-
-/// Delaminations here only explode: the world is creative or a tutorial.
-/proc/babylon_delam_contained()
-	return babylon_creative_enabled() || !!GLOB.babylon_world?.is_tutorial()
+// and tutorial worlds and on Creative Plane maps (babylon_delam_contained(), world_flags.dm) a
+// delamination never makes a singularity, a tesla ball or a resonance cascade (crystal mass,
+// evacuation rift, round end): those would eat or end the whole world. The explosion, radiation,
+// hallucinations and anomalies stay.
 
 /datum/sm_delam/effect_singulo(obj/machinery/power/supermatter_crystal/sm)
 	if(babylon_delam_contained())
