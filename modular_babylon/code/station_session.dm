@@ -99,9 +99,8 @@ SUBSYSTEM_DEF(babylon_station)
 	player_key = ckey(player_key)
 	if(!player_key)
 		return null
-	var/datum/babylon_save/player = player_sessions[player_key]
+	var/datum/babylon_player/player = player_sessions[player_key]
 	if(!player)
-		player = new
-		player.owner_ckey = player_key
+		player = new(player_key)
 		player_sessions[player_key] = player
 	return player

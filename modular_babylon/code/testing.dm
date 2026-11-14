@@ -19,7 +19,8 @@
 	for(var/obj/item/paper/babylon/paper in world)
 		papers++
 	result["lore_papers"] = papers
-	result["return_before_destruct"] = builder.actions.Find(return_action) && builder.actions.Find(return_action) < builder.actions.Find(destruct_action)
+	var/datum/babylon_player/owner = owner_player()
+	result["return_before_destruct"] = owner.builder.actions.Find(owner.return_action) && owner.builder.actions.Find(owner.return_action) < owner.builder.actions.Find(owner.destruct_action)
 	qdel(hud)
 	qdel(ghost)
 	return result

@@ -22,7 +22,8 @@
 			return list("ready" = babylon_world_ready(), "error" = session.boot_error, "map" = SSmapping.current_map?.map_name, "build" = GLOB.babylon_world.build)
 #else
 			var/client/student = GLOB.directory[GLOB.babylon_save.owner_ckey]
-			return list("ready" = session.ready, "error" = session.boot_error, "map" = SSmapping.current_map?.map_name, "last_save" = session.last_save, "busy" = session.busy, "paused" = !Master.processing, "migration_notes" = session.migration_notes, "station_z" = session.station_z, "world_size" = list(world.maxx, world.maxy, world.maxz), "connected" = !!student, "controlling_drone" = student && student.mob == session.builder, "lobby_visible" = student ? winget(student, "title_browser", "is-visible") : null, "builder" = session.builder ? list("x" = session.builder.x, "y" = session.builder.y, "z" = session.builder.z, "health" = session.builder.health) : null)
+			var/mob/living/basic/drone/babylon/builder = session.owner_player()?.builder
+			return list("ready" = session.ready, "error" = session.boot_error, "map" = SSmapping.current_map?.map_name, "last_save" = session.last_save, "busy" = session.busy, "paused" = !Master.processing, "migration_notes" = session.migration_notes, "station_z" = session.station_z, "world_size" = list(world.maxx, world.maxy, world.maxz), "connected" = !!student, "controlling_drone" = student && student.mob == builder, "lobby_visible" = student ? winget(student, "title_browser", "is-visible") : null, "builder" = builder ? list("x" = builder.x, "y" = builder.y, "z" = builder.z, "health" = builder.health) : null)
 #endif
 		if("save")
 			return session.save_world()

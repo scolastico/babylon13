@@ -28,7 +28,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	switch(reference)
 #ifndef BABYLON_STATION
 		if("builder")
-			return GLOB.babylon_save.builder
+			return GLOB.babylon_save.owner_player()?.builder
 #endif
 		if("session")
 			return GLOB.babylon_save
@@ -353,13 +353,13 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	var/list/result = list()
 	result["text_format"] = babylon_play_time_text(3 HOURS + 7 MINUTES) == "3h 07m" && babylon_play_time_text(30 SECONDS) == "under a minute"
 #ifndef BABYLON_STATION
-	var/datum/babylon_save/player = new
+	var/datum/babylon_player/player = new("babylonsmokeplayer")
 	player.play_time = 42 MINUTES
 	var/list/snapshot = player_snapshot(player)
-	var/datum/babylon_save/restored = new
+	var/datum/babylon_player/restored = new("babylonsmokeplayer")
 	restore_player(restored, snapshot)
 	result["player_time_survives_a_checkpoint"] = restored.play_time == 42 MINUTES
-	var/datum/babylon_save/older = new
+	var/datum/babylon_player/older = new("babylonsmokeplayer")
 	restore_player(older, list())
 	result["older_checkpoints_start_at_zero"] = older.play_time == 0
 #endif
@@ -375,8 +375,8 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
 #else
 	// Someone playing counts for the world and for themselves.
-	var/datum/babylon_save/record = ensure_station_player("babylonsmokeplayer")
-	result["station_player_record"] = record?.owner_ckey == "babylonsmokeplayer" && player_sessions["babylonsmokeplayer"] == record
+	var/datum/babylon_player/record = ensure_station_player("babylonsmokeplayer")
+	result["station_player_record"] = record?.ckey == "babylonsmokeplayer" && player_sessions["babylonsmokeplayer"] == record
 	player_sessions -= "babylonsmokeplayer"
 #endif
 	return result

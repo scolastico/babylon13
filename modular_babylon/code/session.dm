@@ -1,7 +1,10 @@
 // Babylon's drone-builder session. Compiled only into babylon.dmb.
 
-/datum/babylon_save
+/// A player's drone. The owner's record keeps the fields older saves wrote at the top of
+/// state.json ("builder", "player"); capture_session_state() still writes them from it.
+/datum/babylon_player
 	var/mob/living/basic/drone/babylon/builder
+	var/turf/respawn_turf
 	var/respawn_pending = FALSE
 	var/respawn_ready_at = 0
 	var/list/drone_profile = list()
@@ -22,6 +25,10 @@
 	station_z = SSmapping.levels_by_trait(ZTRAIT_STATION)[1]
 	if(!prepared)
 		CRASH("Babylon restoration did not complete before simulation startup")
+	var/datum/babylon_player/owner = owner_player()
+	// The owner's spawn point is the world's (older saves kept the two in one field).
+	if(!respawn_turf)
+		respawn_turf = owner.respawn_turf
 	// Pick the original engineering spawn before removing all ghost-role props.
 	for(var/obj/effect/mob_spawn/ghost_role/drone/derelict/babylon/shell in world)
 		if(shell.z != station_z)
@@ -31,9 +38,9 @@
 		qdel(shell)
 	if(!valid_respawn_tile(respawn_turf))
 		respawn_turf = find_respawn_tile()
-	if(!builder && !respawn_pending && respawn_turf)
-		builder = new(respawn_turf)
-	if(!builder && !respawn_pending)
+	if(!owner.builder && !owner.respawn_pending && respawn_turf)
+		owner.builder = new(respawn_turf)
+	if(!owner.builder && !owner.respawn_pending)
 		for(var/turf/open/floor/tile in world)
 			if(tile.z == station_z && istype(get_area(tile), /area/ruin/space/bb13/engineering/sec_eng))
 				var/blocked = FALSE
@@ -41,17 +48,18 @@
 					if(obstacle.density)
 						blocked = TRUE
 				if(!blocked)
-					builder = new(tile)
+					owner.builder = new(tile)
 					break
-	if(!builder && !respawn_pending)
+	if(!owner.builder && !owner.respawn_pending)
 		CRASH("No safe Babylon drone spawn was found")
-	if(builder)
-		if(!respawn_turf)
-			respawn_turf = get_turf(builder)
-		if(builder.stat == DEAD && !respawn_pending)
-			begin_respawn(builder)
-		else if(!respawn_pending)
-			install_drone_actions()
+	if(owner.builder && !respawn_turf)
+		respawn_turf = get_turf(owner.builder)
+	owner.respawn_turf = respawn_turf
+	if(owner.builder)
+		if(owner.builder.stat == DEAD && !owner.respawn_pending)
+			owner.begin_respawn(owner.builder)
+		else if(!owner.respawn_pending)
+			owner.install_drone_actions()
 	SSticker.start_immediately = TRUE
 	for(var/obj/item/modular_computer/computer as anything in programs_to_resume)
 		var/list/record = programs_to_resume[computer]
@@ -92,7 +100,7 @@
 			catch(var/exception/error)
 				babylon_loop_failed("player [student?.ckey]", error)
 		for(var/player_key in player_sessions)
-			var/datum/babylon_save/player = player_sessions[player_key]
+			var/datum/babylon_player/player = player_sessions[player_key]
 			try
 				tick_player(player, babylon_ready_client(GLOB.directory[player_key]))
 			catch(var/exception/error)
@@ -137,7 +145,7 @@ SUBSYSTEM_DEF(babylon_builder)
 	if(!session.owner_ckey)
 		session.boot_error = "Set babylon-owner=<BYOND ckey> in world parameters. A world owner is required."
 		return SS_INIT_FAILURE
-	session.player_sessions[session.owner_ckey] = session
+	session.player_sessions[session.owner_ckey] = new /datum/babylon_player(session.owner_ckey)
 	babylon_apply_world_name()
 	if(!session.read_afk_timeout())
 		return SS_INIT_FAILURE
@@ -155,7 +163,7 @@ SUBSYSTEM_DEF(babylon_builder)
 
 /datum/babylon_save/checkpoint_hold(frozen)
 	for(var/player_key in player_sessions)
-		var/datum/babylon_save/player = player_sessions[player_key]
+		var/datum/babylon_player/player = player_sessions[player_key]
 		if(QDELETED(player.builder))
 			continue
 		if(frozen)
@@ -180,8 +188,10 @@ SUBSYSTEM_DEF(babylon_builder)
 	return drones_by_turf
 
 /datum/babylon_save/capture_session_state(list/state)
-	state["builder"] = !QDELETED(builder) ? builder?.babylon_save_id : null
-	state["player"] = list("respawn_pending" = respawn_pending, "respawn_remaining" = max(0, respawn_ready_at - world.time), "spawn_x" = respawn_turf?.x, "spawn_y" = respawn_turf?.y, "profile" = respawn_pending ? drone_profile.Copy() : capture_drone_profile())
+	// The owner's drone, also at the top level, as saves before multiplayer had it.
+	var/datum/babylon_player/owner = owner_player()
+	state["builder"] = !QDELETED(owner.builder) ? owner.builder?.babylon_save_id : null
+	state["player"] = list("respawn_pending" = owner.respawn_pending, "respawn_remaining" = max(0, owner.respawn_ready_at - world.time), "spawn_x" = owner.respawn_turf?.x, "spawn_y" = owner.respawn_turf?.y, "profile" = owner.respawn_pending ? owner.drone_profile.Copy() : owner.capture_drone_profile())
 	var/list/players = list()
 	for(var/player_key in player_sessions)
 		players[player_key] = player_snapshot(player_sessions[player_key])
@@ -199,10 +209,9 @@ SUBSYSTEM_DEF(babylon_builder)
 		players = list()
 		players[owner_ckey] = legacy_player
 	for(var/player_key in players)
-		var/datum/babylon_save/player = player_sessions[player_key]
+		var/datum/babylon_player/player = player_sessions[player_key]
 		if(!player)
-			player = new
-			player.owner_ckey = player_key
+			player = new(player_key)
 			player_sessions[player_key] = player
 		restore_player(player, players[player_key])
 	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
@@ -238,8 +247,9 @@ SUBSYSTEM_DEF(babylon_builder)
 	GLOB.babylon_save.managed_stop()
 
 /datum/babylon_save/proc/player_for_drone(mob/living/basic/drone/babylon/drone)
+	RETURN_TYPE(/datum/babylon_player)
 	for(var/player_key in player_sessions)
-		var/datum/babylon_save/player = player_sessions[player_key]
+		var/datum/babylon_player/player = player_sessions[player_key]
 		if(player.builder == drone)
 			return player
 	return null
@@ -251,25 +261,22 @@ SUBSYSTEM_DEF(babylon_builder)
 	var/client/student = GLOB.directory[player_key]
 	if(student?.babylon_showcase_visitor || student?.babylon_admin_spectator)
 		return null
-	var/datum/babylon_save/player = player_sessions[player_key]
+	var/datum/babylon_player/player = player_sessions[player_key]
 	if(player)
 		return player
 	var/turf/spawn_point = find_respawn_tile()
 	if(!spawn_point)
 		return null
-	player = new
-	player.owner_ckey = player_key
-	player.station_z = station_z
+	player = new(player_key)
 	player.respawn_turf = spawn_point
 	player.builder = new(spawn_point)
 	player_sessions[player_key] = player
 	return player
 
-/datum/babylon_save/proc/player_snapshot(datum/babylon_save/player)
+/datum/babylon_save/proc/player_snapshot(datum/babylon_player/player)
 	return list("builder" = !QDELETED(player.builder) ? player.builder.babylon_save_id : null, "respawn_pending" = player.respawn_pending, "respawn_remaining" = max(0, player.respawn_ready_at - world.time), "spawn_x" = player.respawn_turf?.x, "spawn_y" = player.respawn_turf?.y, "profile" = player.respawn_pending ? player.drone_profile.Copy() : player.capture_drone_profile(), "play_time" = player.play_time)
 
-/datum/babylon_save/proc/restore_player(datum/babylon_save/player, list/snapshot)
-	player.station_z = station_z
+/datum/babylon_save/proc/restore_player(datum/babylon_player/player, list/snapshot)
 	player.builder = restored_atoms[snapshot["builder"]]
 	player.respawn_pending = snapshot["respawn_pending"]
 	player.respawn_ready_at = player.respawn_pending ? world.time + snapshot["respawn_remaining"] : 0
@@ -292,12 +299,10 @@ SUBSYSTEM_DEF(babylon_builder)
 	drone.update_inv_internal_storage()
 	drone.update_worn_head()
 
-/datum/babylon_save/proc/tick_player(datum/babylon_save/player, client/student)
+/datum/babylon_save/proc/tick_player(datum/babylon_player/player, client/student)
 	// A spectating admin may still own a drone from an earlier visit; it is not taken over.
 	if(student?.babylon_showcase_visitor || student?.babylon_admin_spectator)
 		return
-	player.station_z = station_z
-	player.ready = ready
 	if(!player.respawn_turf)
 		player.respawn_turf = respawn_turf
 	if(!player.respawn_pending && QDELETED(player.builder))

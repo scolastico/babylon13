@@ -20,7 +20,7 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	var/next_id = 1
 	var/station_z
 	var/owner_ckey
-	// Owner uses this datum for legacy saves; other players have independent sessions.
+	/// ckey -> /datum/babylon_player: everyone who has played this world, the owner included.
 	var/list/player_sessions = list()
 	var/draining = FALSE
 	/// The round is over (station worlds, station_round.dm): the world stops without saving again.
@@ -46,6 +46,19 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 	var/list/state_fields = list("name", "desc", "dir", "pixel_x", "pixel_y", "density", "opacity", "anchored", "amount", "atom_integrity", "max_integrity", "panel_open", "opened", "locked", "welded", "bolts", "safe", "operating", "chargemode", "coverlocked", "has_electronics", "lighting", "equipment", "environ", "aidisabled", "shorted", "on", "enabled", "use_power", "target_pressure", "pressure_setting", "release_pressure", "valve_open", "input_level", "input_attempt", "output_level", "output_attempt", "charge", "maxcharge", "fuel", "lit", "welding", "max_fuel", "state", "d_state", "glass", "heat_proof_finished", "mineral", "created_name", "base_name", "cell_type", "cable_layer", "cable_color", "linked_dirs", "banned_links", "piping_layer", "pipe_color", "init_dir", "frequency", "id", "id_tag", "door_id", "siphoned_power", "siphon_max", "probability_mod", "health", "maxHealth", "real_name", "visualAppearance", "active_hand_index", "machine_stat", "stat", "mode", "temperature", "target_temperature", "thermostat", "build_type", "amount_per_transfer_from_this", "volume", "custom_price", "credits", "power_charge", "power_charge_max", "moles", "icon_state", "req_access", "req_one_access", "maximum_volume")
 	var/list/reference_fields = list("cell", "electronics", "circuit", "internal_storage", "head", "held_items", "stored_id", "inserted_disk", "connected_sensor", "cyclelinkedairlock", "close_others", "closeOther")
 	var/list/list_fields = list("req_access", "req_one_access", "accesses", "filter_types", "filter_type", "scrubbing", "ore_chance", "gas_percentage")
+
+/// One player's record in this world (GLOB.babylon_save.player_sessions[ckey]). Babylon adds the
+/// player's drone (session.dm), play_time.dm their play time.
+/datum/babylon_player
+	var/ckey
+
+/datum/babylon_player/New(ckey)
+	src.ckey = ckey
+
+/// The world owner's record, once they have one (Babylon: from SSbabylon_builder's start on).
+/datum/babylon_save/proc/owner_player()
+	RETURN_TYPE(/datum/babylon_player)
+	return player_sessions[owner_ckey]
 
 /// One step of the world's player loop, once a second while the world runs. Each build's
 /// session (session.dm, station_session.dm) supplies it; play_time.dm adds to it.
