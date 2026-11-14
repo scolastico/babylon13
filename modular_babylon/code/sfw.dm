@@ -159,7 +159,7 @@
 		return FALSE
 	if(design.id in babylon_erp_design_ids())
 		return TRUE
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 	if(babylon_unplayable_design(design))
 		return TRUE
 #endif

@@ -1,5 +1,9 @@
 // Optional Babylon build. Keep tgstation.dme identical to upstream.
+// BABYLON_BUILDER: any Babylon cluster world (this build and babylon-station.dme) and the upstream
+// hooks they share. BABYLON_DRONE: this build, Babylon's drone builder; the hooks and code that
+// only fit it test this positive define (never "not BABYLON_STATION").
 #define BABYLON_BUILDER
+#define BABYLON_DRONE
 #define FORCE_MAP "babylon13"
 #define MINIMAL_CENTCOM
 #define ABSOLUTE_MINIMUM

@@ -2,9 +2,10 @@
 // maps (the supervisor writes data/next_map.json), with the Babylon cluster modules that every
 // world shares. Babylon's drone-builder session and world rules stay in babylon.dme.
 // Keep tgstation.dme identical to upstream.
-// BABYLON_BUILDER enables the upstream hooks every Babylon cluster world needs (admission,
-// showcase visitors, persistence preloading ...); BABYLON_STATION turns off the ones that only
-// fit Babylon's drone builder (see modular_babylon/UPSTREAM_HOOKS.md).
+// BABYLON_BUILDER (any Babylon cluster world) enables the upstream hooks every Babylon cluster world
+// needs (admission, showcase visitors, persistence preloading ...); BABYLON_STATION marks this build.
+// The hooks that only fit Babylon's drone builder test BABYLON_DRONE, which only babylon.dme
+// defines (see modular_babylon/UPSTREAM_HOOKS.md).
 // The full CentCom stays: station rounds need its shuttle docks (emergency, cargo, ferry).
 #define BABYLON_BUILDER
 #define BABYLON_STATION

@@ -56,6 +56,26 @@ class BuildSplitTest(unittest.TestCase):
         for babylon_rule in ("FORCE_MAP", "AUTOSTART_GAME", "SKIP_SPACE_LEVELS", "SKIP_LAVALAND"):
             self.assertNotIn(babylon_rule, defines)
 
+    def test_exactly_one_game_build_define(self):
+        # BABYLON_BUILDER is any cluster world; each game build defines exactly one of the two
+        # build defines, and babylon.dm refuses (#error) a build with none or both.
+        for dme, own in (("babylon.dme", "BABYLON_DRONE"), ("babylon-station.dme", "BABYLON_STATION")):
+            defines = set(re.findall(r"^#define (\w+)", (ROOT / dme).read_text(), re.M))
+            self.assertIn("BABYLON_BUILDER", defines, dme)
+            self.assertEqual(defines & {"BABYLON_DRONE", "BABYLON_STATION"}, {own}, dme)
+        guard = (ROOT / "modular_babylon/__DEFINES/babylon.dm").read_text()
+        self.assertIn("#if defined(BABYLON_DRONE) && defined(BABYLON_STATION)\n#error", guard)
+        self.assertIn("#if !defined(BABYLON_DRONE) && !defined(BABYLON_STATION)\n#error", guard)
+
+    def test_drone_code_tests_the_positive_define(self):
+        # "Not the station build" would hand the drone rules to any third build.
+        negative = re.compile(r"#ifndef BABYLON_STATION|!\s*defined\(BABYLON_STATION\)")
+        for folder in ["code", "modular_babylon/code"] + sorted(p.name for p in ROOT.glob("modular_*") if p.is_dir()):
+            for path in (ROOT / folder).rglob("*.dm"):
+                # The compile-time guard itself checks for "neither define".
+                if path.name != "babylon.dm" and "BABYLON_STATION" in path.read_text(errors="ignore"):
+                    self.assertNotRegex(path.read_text(errors="ignore"), negative, path.relative_to(ROOT).as_posix())
+
     def test_test_builds_wrap_the_game_builds(self):
         for test, game in (("babylon-test.dme", "babylon.dme"), ("babylon-station-test.dme", "babylon-station.dme")):
             text = (ROOT / test).read_text()

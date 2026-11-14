@@ -6,9 +6,12 @@ upstream `tgstation.dme` is unchanged. The fifteen modified upstream DM files us
 hooks guarded by `BABYLON_BUILDER` and marked `BABYLON13`. Ordinary SPLURT builds
 compile those blocks out.
 
-Both Babylon builds define `BABYLON_BUILDER`; the station build also defines
-`BABYLON_STATION`. Hooks that only fit the drone builder are guarded with
-`#if defined(BABYLON_BUILDER) && !defined(BABYLON_STATION)`: the announcement
+Both Babylon builds define `BABYLON_BUILDER` (any Babylon cluster world). Each also
+defines exactly one game build define, checked at compile time in
+`modular_babylon/__DEFINES/babylon.dm`: `BABYLON_DRONE` (`babylon.dme`, the drone
+builder) or `BABYLON_STATION` (`babylon-station.dme`). Hooks that only fit the drone
+builder are guarded with the positive `#ifdef BABYLON_DRONE`, never with "not
+`BABYLON_STATION`", so a third build gets none of them by accident: the announcement
 suppression (`priority_announce.dm`), the round-start divergency report, and
 the 255x255 single-level sizing in `mapping.dm`. All other hooks (admission,
 showcase visitors, persistence preloading, material pruning, the Discord button,

@@ -1,6 +1,15 @@
 // Defines shared by every Babylon cluster build (babylon.dme, babylon-station.dme). Included
 // before modular_babylon/code/*.dm.
 
+// Exactly one game build define: BABYLON_DRONE (babylon.dme) or BABYLON_STATION
+// (babylon-station.dme). Code for one build tests its own define, never the absence of the other.
+#if defined(BABYLON_DRONE) && defined(BABYLON_STATION)
+#error Babylon: define only one of BABYLON_DRONE (babylon.dme) and BABYLON_STATION (babylon-station.dme).
+#endif
+#if !defined(BABYLON_DRONE) && !defined(BABYLON_STATION)
+#error Babylon: define BABYLON_DRONE (babylon.dme) or BABYLON_STATION (babylon-station.dme).
+#endif
+
 /// state.json "version" written by Babylon (drone builder) checkpoints, for migrations only. The
 /// layout (one map.dmm) is /datum/babylon_save/proc/writes_level_files(), not this number.
 #define BABYLON_STATE_VERSION 7

@@ -26,7 +26,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 
 /datum/babylon_debug/proc/resolve_target(reference)
 	switch(reference)
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 		if("builder")
 			return GLOB.babylon_save.owner_player()?.builder
 #endif
@@ -362,7 +362,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 /datum/babylon_save/proc/test_play_time()
 	var/list/result = list()
 	result["text_format"] = babylon_play_time_text(3 HOURS + 7 MINUTES) == "3h 07m" && babylon_play_time_text(30 SECONDS) == "under a minute"
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 	var/datum/babylon_player/player = new("babylonsmokeplayer")
 	player.play_time = 42 MINUTES
 	var/list/snapshot = player_snapshot(player)
@@ -407,7 +407,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	result["one_step_each"] = play_time == world_before + 7 SECONDS && owner.play_time == owner_before + 7 SECONDS
 	play_time = world_before
 	owner.play_time = owner_before
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 	result["watchdog_log_shows_it"] = !!findtext(GLOB.babylon_lore.render_core_log(), "time awake, this world")
 #else
 	// Someone playing counts for the world and for themselves.
@@ -446,7 +446,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	next_autosave_at = real_next_autosave
 	result["flags_restored"] = flags.persistent == real_persistent && flags.kind == real_kind && last_save == real_last_save
 	result["persistent_stop_saves"] = babylon_stop_saves() == babylon_world_saves()
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 	// Babylon hides the drone's save verbs in worlds that are not saved.
 	var/mob/living/basic/drone/babylon/drone = owner_player()?.builder
 	if(drone)

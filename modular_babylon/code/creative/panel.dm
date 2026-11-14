@@ -469,7 +469,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 
 /// Babylon: the player's drone is dead and a replacement is on its way (drone_recovery.dm).
 /proc/babylon_creative_respawn_pending(mob/user)
-#ifndef BABYLON_STATION
+#ifdef BABYLON_DRONE
 	var/datum/babylon_player/player = GLOB.babylon_save?.player_sessions[user?.ckey]
 	return !!player?.respawn_pending
 #else
