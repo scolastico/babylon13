@@ -127,6 +127,8 @@ var/global/list/lobby_config
 	var/list/cards = list()
 	/// Map catalog ids from the last list, with their names.
 	var/list/map_names = list()
+	/// Map catalog ids from the last list, with their build ("babylon" or "station").
+	var/list/map_builds = list()
 	var/player_limit = 4
 	var/browser_initialized = 0
 	var/request_revision = 0
@@ -183,12 +185,12 @@ var/global/list/lobby_config
 	var/list/response = world.Export("[lobby_config["api"]]/api?[list2params(query)]")
 	if(!response || !response["CONTENT"])
 		world.log << "Supervisor unavailable for [ckey] ([action])"
-		return list("error" = "Supervisor unavailable. Please try again shortly.", "unavailable" = TRUE)
+		return list("error" = "The world manager isn't responding. Try again in a moment.", "unavailable" = TRUE)
 	var/list/result
 	try
 		result = json_decode(file2text(response["CONTENT"]))
 	catch
-		return list("error" = "Invalid supervisor response.")
+		return list("error" = "The world manager sent an unexpected answer. Try again.")
 	return result
 
 /mob/lobby/proc/page_start()
@@ -197,6 +199,33 @@ var/global/list/lobby_config
 /// A number for the page; anything else from the supervisor becomes 0.
 /proc/lobby_number(value)
 	return isnum(value) ? value : 0
+
+/// "1 running world", "3 running worlds".
+/proc/lobby_plural(value, noun)
+	value = lobby_number(value)
+	return "[value] [noun][value == 1 ? "" : "s"]"
+
+/// JSON for a script: an inline <script> block or a value handed to a page function with
+/// output(). json_encode leaves "<", ">" and "&" as they are, so a world name such as
+/// "</script>" or "<!--<script>" would end (or comment out) the page's script and leave the
+/// lobby blank for everyone. Here they, and the JavaScript line separators U+2028/U+2029,
+/// become \uXXXX escapes, which JSON.parse and JavaScript read back unchanged.
+/// Every JSON that reaches a script goes through this (guarded by test_lobby_script_json.py).
+/proc/lobby_script_json(value)
+	var/static/list/escapes
+	if(!escapes)
+		escapes = list("<" = "\\u003c", ">" = "\\u003e", "&" = "\\u0026")
+		escapes[ascii2text(8232)] = "\\u2028"
+		escapes[ascii2text(8233)] = "\\u2029"
+	var/text = json_encode(value)
+	for(var/character in escapes)
+		text = replacetext(text, character, escapes[character])
+	return text
+
+/// Text with leading and trailing whitespace removed, as lobby.js trims it.
+/proc/lobby_trim(text)
+	var/static/regex/edges = regex(@"^\s+|\s+$", "g")
+	return istext(text) ? edges.Replace(text, "") : text
 
 /// A link parameter carrying a JSON payload, as lobby.js sends them.
 /proc/lobby_payload(list/payload)
@@ -208,7 +237,7 @@ var/global/list/lobby_config
 /// Shown instead of the world list while the server restarts (or its supervisor is
 /// unreachable). loading.js shows the same screen when the lobby connection itself is gone.
 /proc/lobby_restart_panel(title, message)
-	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite'><div class='spinner'></div><div class='brand'>BABYLON 13</div><h1>[html_encode(title)]</h1><p>[html_encode(message)]</p><p class='muted'>Every world is saved before the server goes down, and nothing is lost. A restart usually takes a minute or two. Once the server is back, press Reconnect.</p><a class='button primary' href='byond://winset?command=.reconnect'>Reconnect</a></section></div>"
+	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite'><div class='spinner'></div><div class='brand'>BABYLON 13</div><h1>[html_encode(title)]</h1><p>[html_encode(message)]</p><p class='muted'>Saved worlds keep their progress; worlds marked Not saved start fresh. A restart usually takes a minute or two. Once the server is back, press Reconnect.</p><a class='button primary' href='byond://winset?command=.reconnect'>Reconnect</a></section></div>"
 
 /mob/lobby/proc/show_loading(world_name, stage)
 	if(client)
@@ -250,7 +279,7 @@ var/global/list/lobby_config
 		var/selected = view_filter == tab
 		content += "<a class='[selected ? "active" : ""]' aria-current='[selected ? "page" : "false"]' data-stage='Loading worlds...' onclick='return beginAction(this)' href='?src=\ref[src];action=filter;payload=[lobby_payload(list("filter" = tab))]'>[tabs[tab]]</a>"
 	content += "</nav><h2 class='page-heading'>[tabs[view_filter]]</h2>"
-	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these even when the owner is away.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.")
+	var/list/descriptions = list("active" = "Worlds currently running, starting or stopping. Join an online world to continue building.", "mine" = "Worlds you own. Start an offline world, change its settings, or restore a saved checkpoint.", "shared" = "Worlds where you have membership. You can start these worlds even when the owner is away. On station maps the round itself waits for the owner.", "all" = "Worlds available to your account. Guests can join online worlds; owners, members and admins can start offline worlds.")
 	content += "<p class='muted'>[descriptions[view_filter]]</p>"
 	if(result["admin"])
 		content += "<p><span class='badge'>Server administrator</span> <small>Your account can see private worlds, bypass their admission restrictions and the per-owner world limits, and spectate worlds as an invisible ghost without a drone.</small></p>"
@@ -265,11 +294,13 @@ var/global/list/lobby_config
 	else
 		cards = list()
 		map_names = list()
+		map_builds = list()
 		var/list/maps = list()
 		for(var/list/map in result["maps"])
 			if(!istext(map["id"]))
 				continue
 			map_names[map["id"]] = "[map["name"]]"
+			map_builds[map["id"]] = map["build"] == "station" ? "station" : "babylon"
 			map["preview_url"] = map_preview(map)
 			maps += list(map)
 		var/rendered = ""
@@ -289,8 +320,9 @@ var/global/list/lobby_config
 			rendered += world_card(card, states)
 		content += "<div class='count'>Showing [visible] world[visible == 1 ? "" : "s"]</div>"
 		if(!visible)
-			var/list/empty = list("active" = "No worlds are active. Open My worlds or Browse worlds to find a station to start.", "mine" = "You have no worlds yet. Choose New world to create your first station.", "shared" = "No worlds have been shared with your account yet. Ask an owner to add you as a member.", "all" = "No worlds are available. Create one with New world, or ask an owner for membership.")
-			content += "<div class='empty'>[empty[view_filter]]</div>"
+			var/list/empty = list("active" = "No worlds are active. Open My worlds or Browse worlds to find a station to start.", "mine" = "You have no worlds yet.", "shared" = "No worlds have been shared with your account yet. Ask an owner to add you as a member.", "all" = "No worlds are available. Create one, or ask an owner for membership.")
+			var/create_button = view_filter == "shared" ? "" : "<p><button type='button' class='button primary' onclick='return lobbyOpenCreate()'>+ Create your first world</button></p>"
+			content += "<div class='empty'>[empty[view_filter]][create_button]</div>"
 		else
 			content += rendered
 		var/list/limits = result["limits"]
@@ -299,24 +331,33 @@ var/global/list/lobby_config
 		player_limit = lobby_number(limits["max_players_per_world"])
 		var/expiry = result["delete_unused_worlds_after_days"]
 		var/expiry_text = expiry ? "Unused stopped worlds are deleted after [lobby_number(expiry)] days." : "Automatic world expiry is disabled."
-		content += "<footer class='footer'>Server limits: [lobby_number(limits["max_running_worlds"])] running worlds; [lobby_number(limits["max_players_per_world"])] players per world; per owner [lobby_number(limits["max_worlds_per_player"])] saved worlds, [lobby_number(limits["max_total_worlds_per_player"])] worlds in total and [lobby_number(limits["max_running_worlds_per_player"])] running worlds.<br>Private worlds require membership. Your station continues from its last successful checkpoint; worlds marked Not saved start fresh every time.<br>[expiry_text]</footer>"
+		content += "<footer class='footer'>Server limits: [lobby_plural(limits["max_running_worlds"], "running world")]; [lobby_plural(limits["max_players_per_world"], "player")] per world; per owner [lobby_plural(limits["max_worlds_per_player"], "saved world")], [lobby_plural(limits["max_total_worlds_per_player"], "world")] in total and [lobby_plural(limits["max_running_worlds_per_player"], "running world")].<br>Private worlds require membership. Your station continues from its last successful checkpoint; worlds marked Not saved start fresh every time.<br>[expiry_text]</footer>"
 		// The dialogs (lobby.js) work from this; everything in it is escaped there.
-		state = list("ref" = "\ref[src]", "ckey" = ckey, "admin" = result["admin"] ? 1 : 0, "worlds" = result["worlds"], "maps" = maps, "limits" = limits, "player_limit" = player_limit)
+		var/list/discord = islist(result["discord"]) ? result["discord"] : list()
+		var/list/discord_state = list("link" = discord["link"] ? 1 : 0, "linked" = discord["linked"] ? 1 : 0, "name" = discord["name"], "require_create" = discord["require_create"] ? 1 : 0, "require_join" = discord["require_join"] ? 1 : 0)
+		state = list("ref" = "\ref[src]", "ckey" = ckey, "admin" = result["admin"] ? 1 : 0, "worlds" = result["worlds"], "maps" = maps, "limits" = limits, "player_limit" = player_limit, "discord" = discord_state)
 	render_page(content, revision, complete, state)
 
 /// One world in the list. Everything from the supervisor is encoded for where it lands:
 /// text and attributes with html_encode, link parameters with url_encode, numbers as numbers.
 /mob/lobby/proc/world_card(list/card, list/states)
+	var/static/list/access_labels = list("private" = "Private", "showcase" = "Showcase", "password" = "Password-protected", "public" = "Public")
+	var/static/list/role_labels = list("owner" = "Owner", "admin" = "Administrator", "member" = "Member", "guest" = "Guest")
 	var/id = html_encode(card["id"])
 	var/world_name = html_encode(card["name"])
 	var/manager = card["role"] == "owner" || card["role"] == "admin"
-	var/stopped = card["state"] == "stopped"
+	var/state = card["state"]
+	var/stopped = state == "stopped"
+	var/changing = state == "starting" || state == "stopping"
+	var/saved = !(isnum(card["persistent"]) && !card["persistent"])
+	var/round_over = state == "stopping" && card["stop_reason"] == "round_ended"
+	var/station = istext(card["map"]) && map_builds[card["map"]] == "station"
 	var/map_name = istext(card["map"]) ? (map_names[card["map"]] || card["map"]) : "Babylon"
-	var/badges = "<span class='badge [html_encode(card["state"])]'>[states[card["state"]] || "Unknown"]</span>"
+	var/badges = round_over ? "<span class='badge ended'>Round over</span>" : "<span class='badge [html_encode(state)]'>[states[state] || "Unknown"]</span>"
 	var/list/flags = list()
 	if(card["creative"])
 		flags += "<span class='badge creative' title='Everyone in this world has the Creative panel.'>Creative</span>"
-	if(isnum(card["persistent"]) && !card["persistent"])
+	if(!saved)
 		flags += "<span class='badge unsaved' title='This world is not saved and starts fresh every time.'>Not saved</span>"
 	if(card["kind"] && card["kind"] != "world")
 		flags += "<span class='badge'>Tutorial run</span>"
@@ -324,10 +365,16 @@ var/global/list/lobby_config
 	text += "<div class='flags'><span class='badge map'>[html_encode(map_name)]</span>[jointext(flags, "")]</div>"
 	if(card["description"])
 		text += "<p>[html_encode(card["description"])]</p>"
-	text += "<div class='meta'>Owner: [html_encode(card["owner"])] &nbsp; | &nbsp; Access: [html_encode(card["visibility"])] &nbsp; | &nbsp; [lobby_number(card["players"])]/[lobby_number(card["max_players"])] players online<br>Your role: <b>[html_encode(card["role"])]</b> &nbsp; | &nbsp; Last active: [html_encode(card["last_active"] || "Unknown")]"
-	text += isnum(card["persistent"]) && !card["persistent"] ? "<br>Not saved: starts fresh every time" : "<br>Last save: [html_encode(card["last_save"] || "None yet")]"
+	text += "<div class='meta'>Owner: [html_encode(card["owner"])] &nbsp; | &nbsp; Access: [html_encode(access_labels[card["visibility"]] || card["visibility"])] &nbsp; | &nbsp; [lobby_number(card["players"])]/[lobby_number(card["max_players"])] players online<br>Your role: <b>[html_encode(role_labels[card["role"]] || card["role"])]</b> &nbsp; | &nbsp; Last active: [html_encode(card["last_active"] || "Unknown")]"
+	text += saved ? "<br>Last save: [html_encode(card["last_save"] || "None yet")]" : "<br>Not saved: starts fresh every time"
 	text += "</div><div class='actions'>"
-	if(card["role"] != "guest" || !stopped)
+	if(round_over)
+		text += "<span class='card-hint'>Round over: the world is shutting down. Start it again to play on.</span>"
+	else if(state == "stopping")
+		text += "<span class='card-hint'>Stopping... you can rejoin in a moment.</span>"
+	else if(state == "starting")
+		text += "<span class='card-hint'>Starting... you can join in a moment.</span>"
+	else if(card["role"] != "guest" || !stopped)
 		var/join_label = stopped ? "Start and join" : (card["visibility"] == "showcase" && card["role"] == "guest" ? "Visit showcase" : "Join world")
 		var/needs_password = card["visibility"] == "password" && card["role"] == "guest"
 		text += "<a class='button primary' data-id='[id]' data-password='[needs_password ? 1 : 0]' data-world='[world_name]' data-stage='Preparing your connection...' onclick='return lobbyJoin(this)' href='?src=\ref[src];action=join;payload=[lobby_payload(list("world" = card["id"]))]'>[join_label]</a>"
@@ -336,20 +383,21 @@ var/global/list/lobby_config
 			var/spectate_label = stopped ? "Start and spectate" : "Spectate"
 			text += "<a class='button' data-id='[id]' data-password='0' data-spectate='1' data-world='[world_name]' data-stage='Preparing your connection...' onclick='return lobbyJoin(this)' href='?src=\ref[src];action=join;payload=[lobby_payload(list("world" = card["id"], "spectate" = 1))]'>[spectate_label]</a>"
 		if(card["visibility"] == "showcase" && card["role"] == "guest")
-			text += "<small>Visible ghost visit: explore and chat only. Membership is required to build.</small>"
+			text += station ? "<small>Visible ghost visit: look around and chat only. Membership is required to play.</small>" : "<small>Visible ghost visit: explore and chat only. Membership is required to build.</small>"
 	else
 		text += "<small>An owner, member or admin must start this world.</small>"
 	if(manager && (!card["kind"] || card["kind"] == "world"))
 		text += "<button type='button' class='button' data-id='[id]' onclick='return lobbyOpenWorld(\"edit\", this)'>Settings</button>"
+		text += "<button type='button' class='button' data-id='[id]' onclick='return lobbyOpenWorld(\"members\", this)'>Members</button>"
 		if(stopped)
-			text += "<button type='button' class='button' data-id='[id]' onclick='return lobbyOpenWorld(\"members\", this)'>Members</button>"
-			text += "<button type='button' class='button' data-id='[id]' onclick='return lobbyOpenWorld(\"checkpoints\", this)'>Saved checkpoints / rollback</button>"
-			text += "<button type='button' class='button danger' data-id='[id]' onclick='return lobbyOpenWorld(\"reset\", this)'>Reset</button>"
+			if(saved)
+				text += "<button type='button' class='button' data-id='[id]' onclick='return lobbyOpenWorld(\"checkpoints\", this)'>Checkpoints</button>"
+			text += "<button type='button' class='button danger push' data-id='[id]' onclick='return lobbyOpenWorld(\"reset\", this)'>Reset</button>"
 			text += "<button type='button' class='button danger' data-id='[id]' onclick='return lobbyOpenWorld(\"delete\", this)'>Delete world</button>"
-		else
-			text += "<button type='button' class='button danger' data-id='[id]' onclick='return lobbyOpenWorld(\"stop\", this)'>[isnum(card["persistent"]) && !card["persistent"] ? "Stop world" : "Save and force stop"]</button>"
+		else if(!changing)
+			text += "<button type='button' class='button danger push' data-id='[id]' onclick='return lobbyOpenWorld(\"stop\", this)'>[saved ? "Save and stop..." : "Stop world..."]</button>"
 	if(card["error"])
-		text += "<p class='notice'>[html_encode(card["error"])]</p>"
+		text += "<p class='card-error' role='alert'>[html_encode(card["error"])]</p>"
 	return text + "</div></section>"
 
 /mob/lobby/proc/render_page(content, revision, complete, list/state)
@@ -360,13 +408,11 @@ var/global/list/lobby_config
 		data["state"] = state
 	if(!browser_initialized)
 		data["complete"] = 1
-		// json_encode leaves "</script>" as is; inside the inline script it would end the script.
-		var/initial = replacetext(json_encode(json_encode(data)), "</", "<\\/")
-		var/shell = "[page_start()]<main id='browser-content'></main><div id='action-loading' style='display:none'>[loading_panel("Your world", "Working...")]</div><div id='connection-lost' style='display:none'>[lobby_restart_panel("Connection lost", "The connection to the server was lost, most likely because it is restarting.")]</div><div id='modal-root'></div><div id='toast-root' class='toasts' aria-live='polite'></div><script>renderLobby([initial]);</script></body></html>"
+		var/shell = "[page_start()]<main id='browser-content'></main><div id='action-loading' style='display:none'>[loading_panel("Your world", "Working...")]</div><div id='connection-lost' style='display:none'>[lobby_restart_panel("Connection lost", "The connection to the server was lost, most likely because it is restarting.")]</div><div id='modal-root'></div><div id='toast-root' class='toasts' aria-live='polite'></div><script>renderLobby([lobby_script_json(json_encode(data))]);</script></body></html>"
 		src << browse(shell, "window=mainwindow.browser")
 		browser_initialized = 1
 	else if(complete || signature != last_browser_content)
-		src << output(list2params(list(json_encode(data))), "mainwindow.browser:renderLobby")
+		src << output(list2params(list(lobby_script_json(data))), "mainwindow.browser:renderLobby")
 	last_browser_content = signature
 
 // --- Page requests ---------------------------------------------------------------------
@@ -443,7 +489,7 @@ var/global/list/lobby_config
 	request_revision++
 	if(action == "join" && !request)
 		var/list/card = istext(payload["world"]) ? cards[payload["world"]] : null
-		show_loading(card ? card["name"] : "Your world", "Contacting the supervisor and preparing your connection...")
+		show_loading(card ? card["name"] : "Your world", "Preparing your connection...")
 		sleep(1)
 	try
 		handle_action(action, payload, request)
@@ -468,7 +514,7 @@ var/global/list/lobby_config
 	responded = request
 	data["request"] = request
 	if(client)
-		src << output(list2params(list(json_encode(data))), "mainwindow.browser:lobbyResult")
+		src << output(list2params(list(lobby_script_json(data))), "mainwindow.browser:lobbyResult")
 
 /// Discord link state, requirements and the link/unlink/invite buttons.
 /mob/lobby/proc/discord_bar(list/discord)
@@ -484,8 +530,8 @@ var/global/list/lobby_config
 	var/requirement = length(required) ? "Required to [jointext(required, " and ")] worlds." : "Optional."
 	var/invite = discord_invite ? "<a class='button' href='?src=\ref[src];action=discord_invite'>Open our Discord</a>" : ""
 	if(discord["linked"])
-		return "<div class='discord linked'><b>Discord:</b> linked as <b>[html_encode(discord["name"])]</b>. <span class='buttons'><button type='button' class='button' onclick='return lobbyOpenDiscordUnlink()'>Unlink</button>[invite]</span></div>"
-	return "<div class='discord[length(required) ? " required" : ""]'><b>Discord:</b> not linked. [requirement] <span class='buttons'><button type='button' class='button primary' onclick='return lobbyOpenDiscordLink()'>Link Discord</button>[invite]</span></div>"
+		return "<div class='discord linked'><span><b>Discord:</b> linked as <b>[html_encode(discord["name"])]</b>.</span><span class='buttons'><button type='button' class='button' onclick='return lobbyOpenDiscordUnlink()'>Unlink</button>[invite]</span></div>"
+	return "<div class='discord[length(required) ? " required" : ""]'><span><b>Discord:</b> not linked. [requirement]</span><span class='buttons'><button type='button' class='button primary' onclick='return lobbyOpenDiscordLink()'>Link Discord</button>[invite]</span></div>"
 
 /// The create/edit fields of a payload, checked as the supervisor checks them.
 /// Returns the clean payload for the supervisor, or an error text.
@@ -638,7 +684,7 @@ var/global/list/lobby_config
 		respond(request, result["error"] ? list("error" = result["error"]) : list("ok" = 1, "notice" = "Checkpoint restored. Newer checkpoints deleted: [lobby_number(result["deleted"])]. Join to continue from this point."))
 	else if(action == "delete" || action == "reset")
 		// The page asks for the world's name before it sends these; checked here as well.
-		if(payload["confirm"] != 1 || payload["confirm_name"] != card["name"])
+		if(payload["confirm"] != 1 || !istext(payload["confirm_name"]) || lobby_trim(payload["confirm_name"]) != lobby_trim(card["name"]))
 			respond(request, list("error" = "Type the world's name to confirm."))
 			return
 		if(action == "delete")
