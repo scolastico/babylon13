@@ -1074,6 +1074,21 @@ class Supervisor:
             return max(self.config["startup_timeout_seconds"], self.config["station_startup_timeout_seconds"])
         return self.config["startup_timeout_seconds"]
 
+    def on_run_exited(self, run):
+        """The single place a run's end is handled: its process is gone (a stop, a round end or a crash).
+
+        Drops the run with its tickets and sessions and refreshes the world's checkpoints. Anything that
+        must happen once a world instance has ended belongs here."""
+        if run["state"] == "stopping":
+            log("%s stopped (port %s)" % (self.describe(run["world"]), run["port"]))
+        else:
+            log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+            self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
+            self.db.execute("DELETE FROM sessions WHERE run=?", (run["id"],))
+            self.maintain_checkpoints(run["world"])
+
     def tick(self):
         self.cleanup_unused_worlds()
         # Never hold the DB lock during network requests: a child may be redeeming a ticket.
@@ -1092,15 +1107,7 @@ class Supervisor:
                             self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
                         log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
                     continue
-                if run["state"] == "stopping":
-                    log("%s stopped (port %s)" % (self.describe(run["world"]), run["port"]))
-                else:
-                    log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
-                with self.lock, self.db:
-                    self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
-                    self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
-                    self.db.execute("DELETE FROM sessions WHERE run=?", (run["id"],))
-                    self.maintain_checkpoints(run["world"])
+                self.on_run_exited(run)
                 continue
             with self.lock, self.db:
                 current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
