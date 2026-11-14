@@ -46,3 +46,27 @@ The layout and the version are separate things:
 | `play_time` | DM (shared engine) | DM | Deciseconds the world was played. |
 
 DM writes booleans as `1`/`0` (BYOND `json_encode`). Readers accept `true` and `1` alike.
+
+## babylon_v7 and babylon_v5
+
+Golden checkpoints of the Babylon (drone builder) build from before the station rework, kept to
+prove that existing worlds still load. `babylon_v7/` (`map.dmm` and `state.json`, generation
+`save-20261114-165619-1`) was written unchanged by the `a9c41016abe` build of `babylon-test.dme`,
+with a scratch setup proc that only placed content before an ordinary managed stop saved the
+world (owner `fixtureowner`):
+
+- the owner's drone "Fixture owner drone" (`builder` `bb1620`) and a second player's drone
+  "Fixture friend drone" (`fixturefriend`) holding a wrench;
+- a closed "Fixture locker" with 7 iron sheets and a crowbar;
+- a secured "Fixture frame" with a tesla coil board and one capacitor already inserted;
+- the airlocks "Fixture airlock A" and "Fixture airlock B", paired by `closeOtherId`
+  `fixture_pair`;
+- research: `gas_compression` researched, `circuit_shells` the current target with 5 points.
+
+`babylon_v5/state.json` is the same checkpoint in the version 5 shape: `version` 5 and no
+`players` key, so the owner's record is the top-level `player` with the top-level `builder` (the
+legacy owner mapping). It loads with `babylon_v7/map.dmm`.
+
+`test_driver.py` checks that `Driver.prepare` stages both unchanged; `smoke_native.py` restores
+both in a real world (`test_legacy_babylon_restore`, testing.dm) and checks the content above.
+Never regenerate them with a newer build: their point is the old writer's output.

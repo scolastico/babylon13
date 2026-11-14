@@ -268,3 +268,41 @@
 	qdel(join)
 	qdel(ghost)
 	return result
+
+/// A checkpoint written by the build before the station rework (a9c41016abe, fixtures/babylon_v7,
+/// or its version 5 shape in fixtures/babylon_v5) restored into this build: the drones and their
+/// players, a closed locker with its contents, a machine frame with its board and progress, an
+/// airlock pair and research. version: the fixture's state.json version (5 or 7).
+/datum/babylon_save/proc/test_legacy_babylon_restore(version, researched, target)
+	var/list/result = list()
+	result["resumed_from_fixture"] = last_save == "save-20261114-165619-1"
+	var/datum/babylon_player/owner = owner_player()
+	result["owner_drone_restored"] = owner?.builder?.name == "Fixture owner drone" && !QDELETED(owner.builder)
+	var/datum/babylon_player/friend = player_sessions["fixturefriend"]
+	if(version >= 6)
+		result["friend_player_restored"] = friend?.builder?.name == "Fixture friend drone" && !!(locate(/obj/item/wrench) in friend.builder.get_all_contents())
+	else
+		// Version 5 has one player: the owner, from the top-level "player" and "builder".
+		result["only_the_owner_mapped"] = isnull(friend) && length(player_sessions) == 1
+	var/obj/structure/closet/locker
+	var/obj/structure/frame/machine/frame
+	var/list/airlocks = list()
+	for(var/atom/movable/thing in world)
+		switch(thing.name)
+			if("Fixture locker")
+				locker = thing
+			if("Fixture frame")
+				frame = thing
+			if("Fixture airlock A", "Fixture airlock B")
+				airlocks += thing
+	var/obj/item/stack/sheet/iron/iron = locker && (locate() in locker)
+	result["locker_contents"] = istype(locker) && !locker.opened && iron?.amount == 7 && !!(locate(/obj/item/crowbar) in locker)
+	result["frame_progress"] = istype(frame) && istype(frame.circuit, /obj/item/circuitboard/machine/tesla_coil) && frame.circuit.loc == frame \
+		&& frame.req_components?[/datum/stock_part/capacitor] == 0
+	var/paired = length(airlocks) == 2
+	for(var/obj/machinery/door/airlock/door as anything in airlocks)
+		paired = paired && door.closeOtherId == "fixture_pair" && length(door.close_others) == 1 && (door.close_others[1] in airlocks)
+	result["airlock_pair"] = paired
+	var/datum/techweb/science/web = locate(/datum/techweb/science) in SSresearch.techwebs
+	result["research"] = !!web?.researched_nodes[researched] && web.babylon_target == target
+	return result

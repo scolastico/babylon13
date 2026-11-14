@@ -238,6 +238,37 @@ def main():
             fields = {entry["entry"]: entry["value"] for entry in exported["entries"]}
             assert fields.get("ok") and fields.get("mode") == mode, fields
         stop(showcase_world)
+        # Checkpoints written by the build before the station rework (a9c41016abe) still load:
+        # the golden version 7 generation and its version 5 shape (fixtures/README.md).
+        legacy = {}
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        for version, state_dir in ((7, "babylon_v7"), (5, "babylon_v5")):
+            legacy_world = api("create", dict(name="Legacy v%d" % version, visibility="private"), actor="fixtureowner")["id"]
+            state = json.loads((fixtures / state_dir / "state.json").read_text())
+            assert state["version"] == version, state["version"]
+            generation_dir = data / "worlds" / legacy_world / "data/babylon/saves" / state["generation"]
+            generation_dir.mkdir(parents=True)
+            shutil.copy2(fixtures / "babylon_v7/map.dmm", generation_dir / "map.dmm")
+            shutil.copy2(fixtures / state_dir / "state.json", generation_dir / "state.json")
+            (generation_dir.parent / "latest.json").write_text(json.dumps({"generation": state["generation"]}))
+            api("join", {"world": legacy_world}, actor="fixtureowner")
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                legacy_run = current()
+                if legacy_run and legacy_run["state"] == "running":
+                    break
+                assert not (legacy_run and legacy_run["state"] == "error"), legacy_run
+                time.sleep(2)
+            restored = call(legacy_run, "session", "test_legacy_babylon_restore",
+                            [version, "gas_compression", state["research"]["target"]])
+            restored = {entry["entry"]: entry["value"] for entry in restored["entries"]}
+            assert restored and all(restored.values()), ("legacy v%d" % version, restored)
+            legacy["v%d" % version] = restored
+            api("stop", {"world": legacy_world}, actor="fixtureowner")
+            deadline = time.time() + 60
+            while time.time() < deadline and current():
+                time.sleep(1)
+            assert not current(), "Legacy child did not exit"
         report = dict(passed=True, real_child_start_stop=True, http_ticket_redemption=True,
                       afk_policy=True, showcase_read_only_visitor=True,
                       showcase_ticket_redemption=True,
@@ -245,7 +276,7 @@ def main():
                       second_inventory=True, second_respawn=True, enclosed_drone=True,
                       empty_respawn=True, ghost_hud_trimmed=True, physical_cafe_turfs=0,
                       lore_papers=expected_lore, return_button_order=True,
-                      generations=[generation, generation2])
+                      generations=[generation, generation2], legacy_saves=legacy)
         (data / "result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     finally:

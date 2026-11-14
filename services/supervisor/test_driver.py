@@ -1,7 +1,7 @@
 import json
-import shutil
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -177,6 +177,29 @@ class BabylonPrepare(DriverFixture):
         self.save_generation({"save_count": 1}, ["map.dmm"])
         self.driver.prepare(dict(self.world(), map="babylon"), RUN)
         self.assertEqual((self.root() / "_maps/babylon/active.dmm").read_text(), "map map.dmm")
+
+    def test_legacy_babylon_fixtures_are_staged(self):
+        """The golden pre-rework checkpoints (fixtures/babylon_v7, babylon_v5) are staged unchanged;
+        smoke_native.py restores them in a real world."""
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        for state_dir, version in (("babylon_v7", 7), ("babylon_v5", 5)):
+            with self.subTest(version=version):
+                state = json.loads((fixtures / state_dir / "state.json").read_text())
+                self.assertEqual(state["version"], version)
+                self.assertNotIn("levels", state)
+                self.assertEqual("players" in state, version >= 6)
+                self.assertEqual((state["builder"], state["generation"]), ("bb1620", "save-20261114-165619-1"))
+                saves = self.root() / "data/babylon/saves"
+                shutil.rmtree(saves, ignore_errors=True)
+                generation = saves / state["generation"]
+                generation.mkdir(parents=True)
+                shutil.copy2(fixtures / "babylon_v7/map.dmm", generation / "map.dmm")
+                shutil.copy2(fixtures / state_dir / "state.json", generation / "state.json")
+                (saves / "latest.json").write_text(json.dumps({"generation": state["generation"]}))
+                self.driver.prepare(dict(self.world(), map="babylon"), RUN)
+                self.assertEqual((self.root() / "_maps/babylon/active.dmm").read_bytes(),
+                                 (fixtures / "babylon_v7/map.dmm").read_bytes())
+                self.assertEqual(json.loads((self.root() / "data/babylon/resume-state.json").read_text()), state)
 
     def test_prepare_tutorial_uses_snapshot(self):
         snapshot = self.data / "tutorials/pending/tut1/save"
