@@ -25,7 +25,8 @@ class FakeDriver:
 
     def status(self, run):
         r = self.runs[run["id"]]
-        return dict(world=r["world"], run=r["id"], players=r["players"], ready=r["ready"])
+        return dict(world=r["world"], run=r["id"], players=r["players"], ready=r["ready"],
+                    draining=r.get("draining", False))
 
     def stop(self, run):
         if self.fail_save:
@@ -312,6 +313,35 @@ class Policies(unittest.TestCase):
         self.assertFalse(self.driver.alive(run))
         self.assertIsNone(self.s.last_save(w))
 
+    def test_stuck_stopping_run_returns_to_error_for_a_retry(self):
+        # A run left in "stopping" without a stop in progress, whose world still runs and is not
+        # draining (its stop failed or timed out), must not stay stuck: it goes to error, which
+        # lets Stop be pressed again.
+        w = self.create()
+        run = self.start(w)
+        with self.s.lock, self.s.db:
+            self.s.db.execute("UPDATE runs SET state='stopping' WHERE id=?", (run["id"],))
+        self.s.tick()
+        current = self.s.row("SELECT * FROM runs")
+        self.assertEqual(current["state"], "error")
+        self.assertIn("Press Stop again", current["error"])
+        self.s.dispatch("owner", "stop", {"world": w})
+        for _ in range(100):
+            if not self.s.stop_workers:
+                break
+            time.sleep(.01)
+        self.s.tick()
+        self.assertIsNone(self.s.row("SELECT * FROM runs"))
+
+    def test_draining_stopping_run_is_left_alone(self):
+        # A round's end (the world drains itself) stays stopping until the process exits.
+        w = self.create()
+        run = self.start(w)
+        self.s.round_ended(run["id"], run["secret"])
+        self.driver.runs[run["id"]]["draining"] = True
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "stopping")
+
     def test_list_shows_round_end_and_members_to_managers(self):
         w = self.create()
         self.s.dispatch("owner", "member", {"world": w, "member": "Friend", "role": "member"})
@@ -341,6 +371,8 @@ class Policies(unittest.TestCase):
         self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "running")
         self.assertEqual(self.s.round_ended(run["id"], run["secret"]), {"ok": True})
         self.assertEqual(self.s.round_ended(run["id"], run["secret"]), {"ok": True})
+        # The world drains itself before it reports the round's end (station_round.dm).
+        self.driver.runs[run["id"]]["draining"] = True
         current = self.s.row("SELECT * FROM runs")
         self.assertEqual((current["state"], current["error"]), ("stopping", None))
         # Nobody is admitted into a world whose round is over.

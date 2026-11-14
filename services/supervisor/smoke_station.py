@@ -321,8 +321,31 @@ def main():
         for log_file in (data / "worlds" / world).rglob("*.log"):
             text = log_file.read_text(errors="replace")
             assert "initialized without the required landmarks" not in text, log_file
+        entry = dict(before=before, after=after)
+        if after["transports"].count("icts_tram:"):
+            # A tram saved between stations drives back to a platform after the restore. Trams
+            # only run during a round (SStransport does not fire in the pre-round lobby).
+            assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+            wait_round_running(run)
+            entry["mid_trip"] = checks(run, "test_tram_mid_trip")
+            time.sleep(10)
+            stop(world)
+            run = wait_ready(world)
+            deadline = time.time() + 180
+            while True:
+                recovered = values(run, "test_station_links")
+                if recovered["trams_positioned"] or time.time() > deadline:
+                    break
+                time.sleep(5)
+            assert recovered["trams_positioned"], recovered
+            # It really was between stations: the restore drove it back (reset_stray_trams()).
+            reset_logged = any("saved between stations" in f.read_text(errors="replace")
+                               for f in (data / "worlds" / world).rglob("*.log"))
+            assert reset_logged, "the tram was not reset after the restore"
+            assert recovered["transports"] == after["transports"], (after["transports"], recovered["transports"])
+            entry["mid_trip_recovered"] = recovered
         stop(world)
-        return dict(before=before, after=after)
+        return entry
 
     def discard_child():
         """Kills a failed child so the next map can start (max_running_worlds is 1)."""

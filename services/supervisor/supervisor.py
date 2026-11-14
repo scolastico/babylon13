@@ -1551,6 +1551,12 @@ class Supervisor:
                 state = current["state"]
                 if state == "starting" and status.get("ready"):
                     state = "running"
+                stuck = (state == "stopping" and run["id"] not in self.stop_workers
+                         and not status.get("draining"))
+                if stuck:
+                    # No stop is running and the world is not on its way out: the stop failed or
+                    # timed out. Error (with the world kept) lets the owner or an admin retry Stop.
+                    state = "error"
                 if status.get("error"):
                     state = "error"
                 if state != current["state"]:
@@ -1564,8 +1570,11 @@ class Supervisor:
                         self.db.execute("DELETE FROM sessions WHERE ckey=? AND run=?", (session[0], run["id"]))
                 pending = self.row("SELECT count(*) n FROM tickets WHERE run=?", (run["id"],))["n"]
                 empty = None if players or pending or active else (current["empty_since"] or self.clock())
+                error = status.get("error") or current["error"]
+                if stuck:
+                    error = "The stop did not complete; the world is still running. Press Stop again."
                 self.db.execute("UPDATE runs SET state=?,players=?,empty_since=?,last_save=?,error=? WHERE id=?",
-                                (state, json.dumps(players), empty, status.get("last_save"), status.get("error") or current["error"], run["id"]))
+                                (state, json.dumps(players), empty, status.get("last_save"), error, run["id"]))
                 if status.get("last_save") and not status.get("busy"):
                     self.maintain_checkpoints(run["world"], expected=status["last_save"])
                 if state == "running" and empty and self.clock() - empty >= self.config["empty_grace_seconds"]:
