@@ -15,8 +15,8 @@
 	var/babylon_tutorial_npc_item = FALSE
 
 /// Atoms a checkpoint must not save: tutorial NPCs, everything they carry and their outfit's
-/// items wherever they are. The station build's checkpoint (D1) skips mobs and items for which
-/// this is TRUE.
+/// items wherever they are. The checkpoint asks every atom through babylon_skip_save()
+/// (persistence.dm), which is wired to this below.
 /proc/babylon_tutorial_skip_save(atom/thing)
 	if(isitem(thing))
 		var/obj/item/item = thing
@@ -28,6 +28,9 @@
 			if(body.babylon_tutorial_npc)
 				return TRUE
 	return FALSE
+
+/atom/babylon_skip_save()
+	return ..() || babylon_tutorial_skip_save(src)
 
 /// Awake: alive, not in crit, not unconscious or asleep.
 /proc/babylon_tutorial_awake(mob/living/body)
