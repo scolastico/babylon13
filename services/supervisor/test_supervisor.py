@@ -322,6 +322,9 @@ class Policies(unittest.TestCase):
         with self.s.lock, self.s.db:
             self.s.db.execute("UPDATE runs SET state='stopping' WHERE id=?", (run["id"],))
         self.s.tick()
+        # One tick is not enough: its status may be stale (see the fast-stop race test).
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "stopping")
+        self.s.tick()
         current = self.s.row("SELECT * FROM runs")
         self.assertEqual(current["state"], "error")
         self.assertIn("Press Stop again", current["error"])
@@ -332,6 +335,41 @@ class Policies(unittest.TestCase):
             time.sleep(.01)
         self.s.tick()
         self.assertIsNone(self.s.row("SELECT * FROM runs"))
+
+    def test_fast_stop_finishing_during_the_status_call_is_not_stuck(self):
+        # The race: tick() reads the status before managed_stop sets draining, the stop (one
+        # without a save) finishes and its worker is removed, and only then does tick() take the
+        # lock. The process exits a few seconds later. The run must stay stopping, never error.
+        w = self.create(persistent=0)
+        run = self.start(w)
+        with self.s.lock, self.s.db:
+            self.s.db.execute("UPDATE runs SET state='stopping' WHERE id=?", (run["id"],))
+        self.s.stop_workers.add(run["id"])
+        driver_status = self.driver.status
+
+        def stale_status(r):
+            answer = driver_status(r)  # read before managed_stop set draining
+            with self.s.lock:
+                self.s.stop_workers.discard(r["id"])  # the stop completes meanwhile
+            self.driver.runs[r["id"]]["draining"] = True
+            return answer
+        self.driver.status = stale_status
+        self.s.tick()
+        self.driver.status = driver_status
+        current = self.s.row("SELECT * FROM runs")
+        self.assertEqual((current["state"], current["error"]), ("stopping", None))
+        # The next tick sees the world draining: still not stuck.
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "stopping")
+        # Even a second stale tick without the worker does not count: the first was not suspect.
+        self.driver.runs[run["id"]]["draining"] = False
+        self.s.tick()
+        self.assertEqual(self.s.row("SELECT state FROM runs")["state"], "stopping")
+        # The process exits: an ordinary stop.
+        del self.driver.runs[run["id"]]
+        self.s.tick()
+        self.assertIsNone(self.s.row("SELECT * FROM runs"))
+        self.assertNotIn(run["id"], self.s.stuck_suspects)
 
     def test_draining_stopping_run_is_left_alone(self):
         # A round's end (the world drains itself) stays stopping until the process exits.

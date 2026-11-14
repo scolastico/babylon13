@@ -474,6 +474,8 @@ class Supervisor:
         self.db.execute("UPDATE worlds SET last_used=max(created,coalesce((SELECT max(at) FROM audit WHERE world=worlds.id),created)) WHERE last_used IS NULL")
         self.db.commit()
         self.stop_workers = set()
+        # Runs that looked stuck in "stopping" on the previous tick (see tick()).
+        self.stuck_suspects = set()
         self.next_cleanup = 0
         # Set by the Discord bot: membership(discord_id) -> True/False/None (unknown),
         # from its member cache only, because it is called while holding the lock.
@@ -1508,6 +1510,7 @@ class Supervisor:
         else:
             log("%s exited (port %s)" % (self.describe(run["world"]), run["port"]))
         with self.lock, self.db:
+            self.stuck_suspects.discard(run["id"])
             self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
             self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
             self.db.execute("DELETE FROM sessions WHERE run=?", (run["id"],))
@@ -1527,6 +1530,10 @@ class Supervisor:
         with self.lock:
             runs = [dict(r) for r in self.db.execute("SELECT * FROM runs")]
         for run in runs:
+            # Read before the status call: a stop that finishes during the call removes its worker,
+            # and the status may predate managed_stop's draining flag.
+            with self.lock:
+                had_stop_worker = run["id"] in self.stop_workers
             try:
                 status = self.driver.status(run)
                 if status.get("run") != run["id"] or status.get("world") != run["world"]:
@@ -1551,8 +1558,14 @@ class Supervisor:
                 state = current["state"]
                 if state == "starting" and status.get("ready"):
                     state = "running"
-                stuck = (state == "stopping" and run["id"] not in self.stop_workers
-                         and not status.get("draining"))
+                looks_stuck = (state == "stopping" and not had_stop_worker
+                               and run["id"] not in self.stop_workers and not status.get("draining"))
+                # Only on two consecutive ticks: a single stale status must not turn a stop into an error.
+                stuck = looks_stuck and run["id"] in self.stuck_suspects
+                if looks_stuck and not stuck:
+                    self.stuck_suspects.add(run["id"])
+                else:
+                    self.stuck_suspects.discard(run["id"])
                 if stuck:
                     # No stop is running and the world is not on its way out: the stop failed or
                     # timed out. Error (with the world kept) lets the owner or an admin retry Stop.
