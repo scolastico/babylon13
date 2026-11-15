@@ -1190,6 +1190,9 @@ function lobbyTutorialCard(tutorial, admin) {
     (editing ? '<span class="badge review" title="An administrator has an edit world of it open">Being edited</span>'
       : (pending ? '<span class="badge review">Pending review</span>' : '')) +
     (playing ? '<span class="badge running">' + (tutorial.playing === 'starting' ? 'Starting' : 'You are playing') + '</span>' : '') +
+    // A run that is ending or broke refuses Play until it is gone: say so before the click.
+    (tutorial.playing === 'stopping' ? '<span class="badge stopping" title="Your last run of it is still ending">Ending</span>' : '') +
+    (tutorial.playing === 'error' ? '<span class="badge error" title="Your run of it ran into a problem. Stop it under My worlds, then press Play again.">Problem</span>' : '') +
     '</span></div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
     '<div class="tutorial-meta">by <b>' + lobbyEsc(tutorial.author) + '</b>' +
     (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'Submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
@@ -1271,7 +1274,9 @@ function lobbyOpenTutorial(action, button) {
     lobbyToast('This tutorial is no longer available.', 'error');
     return false;
   }
-  return lobbyOpenModal({ type: 'tutorial', action: action, tutorial: tutorial.id, fields: {} });
+  // card: the tutorial as it was opened, so the dialog keeps its text when a refresh drops it
+  // (another admin accepted, rejected or deleted it) and the request then fails.
+  return lobbyOpenModal({ type: 'tutorial', action: action, tutorial: tutorial.id, card: tutorial, fields: {} });
 }
 
 var LOBBY_TUTORIAL_REQUESTS = {
@@ -1300,7 +1305,7 @@ function lobbyCopyLimitText(info) {
 }
 
 function lobbyTutorialHtml(modal) {
-  var tutorial = lobbyTutorial(modal.tutorial) || { title: '', author: '', map_name: '' };
+  var tutorial = lobbyTutorial(modal.tutorial) || modal.card || { title: '', author: '', map_name: '' };
   var title = '<b>' + lobbyEsc(tutorial.title) + '</b>';
   var by = ' by <b>' + lobbyEsc(tutorial.author) + '</b>';
   var map = lobbyEsc(tutorial.map_name || tutorial.map);

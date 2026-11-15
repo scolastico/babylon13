@@ -579,6 +579,48 @@ context.lobbyClose();
   assert.doesNotMatch(modalHtml(), /An admin is editing/);
   context.lobbyClose();
 
+  // A refusal while the tutorial is reserved (a save back or a snapshot read) stays in the dialog,
+  // which can be confirmed again once the reservation is gone.
+  const busy = [
+    ['accept', 'q2', 'An admin is saving this tutorial back right now. Try again in a moment.'],
+    ['reject', 'q2', 'This tutorial is being started or copied right now. Try again in a moment.'],
+    ['delete', 'p1', 'This tutorial is being started or copied right now. Try again in a moment.'],
+    ['edit', 'q1', 'The last edit session of this tutorial is still ending. Try again in a moment.'],
+  ];
+  for (const [action, id, refusal] of busy) {
+    context.lobbyOpenTutorial(action, button({ 'data-tutorial': id }));
+    context.lobbyTutorialConfirm();
+    sent = lastRequest();
+    assert.match(modalHtml(), /id="modal-confirm"[^>]* disabled><span class="spinner inline"/, action + ' shows it is busy');
+    context.lobbyResult(JSON.stringify({ request: sent.request, error: refusal }));
+    assert.ok(modal(), action + ' stays open on a refusal');
+    assert.equal(modal().busy, false, action + ' can be confirmed again');
+    assert.ok(modalHtml().includes('modal-error">' + refusal), action + ' shows the refusal');
+    assert.match(modalHtml(), new RegExp('Tutorial ' + id), action + ' keeps its summary');
+    before = navigations.length;
+    context.lobbyTutorialConfirm();
+    assert.equal(navigations.length, before + 1, action + ' is sent again');
+    context.lobbyResult(JSON.stringify({ request: lastRequest().request, ok: 1 }));
+    assert.equal(modal(), null);
+  }
+
+  // A tutorial dropped by a refresh while its dialog is open (another admin reviewed it):
+  // nothing is sent and the dialog still says which tutorial it was.
+  context.lobbyOpenTutorial('reject', button({ 'data-tutorial': 'q2' }));
+  renderTutorials(published.concat([pending[1]]), { admin: 1 });
+  expectNoRequest(() => context.lobbyTutorialConfirm(), 'a vanished tutorial is not sent');
+  assert.match(modalHtml(), /modal-error">This tutorial is no longer available\./);
+  assert.match(modalHtml(), /<b>Tutorial q2<\/b><br><small>by builder · IceBoxStation<\/small>/, 'the summary is kept');
+  context.lobbyClose();
+  renderTutorials(published.concat(pending), { admin: 1 });
+
+  // The player's own run that is ending or broke is shown on its card (Play is refused until then).
+  renderTutorials([tutorial('p1', { playing: 'stopping' }), tutorial('p3', { playing: 'error' })]);
+  assert.match(page(), /<span class="badge stopping"[^>]*>Ending<\/span>/);
+  assert.match(page(), /<span class="badge error" title="Your run of it ran into a problem\. Stop it under My worlds, then press Play again\.">Problem<\/span>/);
+  assert.doesNotMatch(page(), /Rejoin|You are playing/, 'neither is offered as a rejoin');
+  renderTutorials(published.concat(pending), { admin: 1 });
+
   // Empty states and a failed list.
   renderTutorials([]);
   assert.match(page(), /No tutorials have been published yet\. Want to be the first\? Build something in a Creative world on a station map, then submit it from the Creative panel\./);
