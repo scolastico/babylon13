@@ -254,6 +254,9 @@ Found and fixed (details in the commit messages):
   saved map, like lights and cameras. A contract test lists every random mapload default
   in upstream code. Re-checked: a Babylon restart now changes only the companion objects
   below (3342 -> 3355 records, before: about +480).
+- The combined suite afterwards caught a station world reporting ready up to a second
+  before it could save (a stop in that window skipped its save). Status ready is now the
+  session's ready flag in both builds.
 - The back-off refusal read "...corrupt Try again in 30 seconds." (missing full stop).
 
 Not fixed (needs a design decision, see the H1 report): objects that another object makes
