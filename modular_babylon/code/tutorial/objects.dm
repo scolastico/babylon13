@@ -181,35 +181,29 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	/// Ids of the objects whose links the last set_tutorial_id() rewrote.
 	var/list/last_rename_links = list()
 
-/// Replaces an id in every id and idlist setting. Returns the ids of the objects changed.
+/// Replaces an id in every setting that links to other objects. Returns the ids of the objects
+/// changed.
 /proc/babylon_tutorial_rewrite_links(old_id, new_id)
 	var/list/changed = list()
 	var/list/pending = list()
+	var/list/rename = list()
+	rename[old_id] = new_id
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		var/list/values = object.settings().Copy()
 		var/touched = FALSE
 		for(var/list/field as anything in babylon_tutorial_schema(object.type))
 			var/key = field["key"]
-			switch(field["type"])
-				if("id")
-					if(values[key] == old_id)
-						values[key] = new_id
-						touched = TRUE
-				if("idlist")
-					var/list/ids = values[key]
-					if(islist(ids) && (old_id in ids))
-						var/list/renamed = list()
-						for(var/id in ids)
-							renamed += id == old_id ? new_id : id
-						values[key] = renamed
-						touched = TRUE
+			if(!babylon_tutorial_links_field(field) || !(old_id in babylon_tutorial_value_ids(field, values[key])))
+				continue
+			values[key] = babylon_tutorial_value_renamed(field, values[key], rename)
+			touched = TRUE
 		if(touched)
 			pending[object] = values
 	// Every new value is a plain id swap, checked before anything is written: all or nothing.
 	for(var/obj/babylon_tutorial/object as anything in pending)
 		var/list/values = pending[object]
 		for(var/list/field as anything in babylon_tutorial_schema(object.type))
-			if(field["type"] in list("id", "idlist"))
+			if(babylon_tutorial_links_field(field))
 				var/list/cleaned = babylon_tutorial_clean_value(field, values[field["key"]])
 				if(cleaned["error"])
 					return null
@@ -217,6 +211,59 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 		object.store_settings(pending[object])
 		changed += object.tutorial_id
 	return changed
+
+/// Whether a field links to other tutorial objects by id. Every place that follows, checks or
+/// rewrites links (references, issues, renames, pasted copies) goes through this and the two
+/// procs below, so a new kind of link field only has to be taught here.
+/proc/babylon_tutorial_links_field(list/field)
+	return field["type"] in list("id", "idlist", "gateinputs")
+
+/// The ids a setting value links to, in order, each once.
+/proc/babylon_tutorial_value_ids(list/field, value)
+	var/list/ids = list()
+	switch(field["type"])
+		if("id")
+			if(istext(value) && length(value))
+				ids += value
+		if("idlist")
+			if(islist(value))
+				for(var/id in value)
+					if(istext(id) && length(id))
+						ids |= id
+		if("gateinputs")
+			if(islist(value))
+				for(var/list/entry in value)
+					for(var/key in list("id", "source"))
+						var/id = entry[key]
+						if(istext(id) && length(id))
+							ids |= id
+	return ids
+
+/// A setting value with its links renamed: rename is old id => new id; other ids stay.
+/proc/babylon_tutorial_value_renamed(list/field, value, list/rename)
+	switch(field["type"])
+		if("id")
+			return istext(value) && rename[value] ? rename[value] : value
+		if("idlist")
+			if(!islist(value))
+				return value
+			var/list/renamed = list()
+			for(var/id in value)
+				renamed += (istext(id) && rename[id]) || id
+			return renamed
+		if("gateinputs")
+			if(!islist(value))
+				return value
+			var/list/renamed = list()
+			for(var/list/entry in value)
+				var/list/copy = entry.Copy()
+				for(var/key in list("id", "source"))
+					var/id = copy[key]
+					if(istext(id) && rename[id])
+						copy[key] = rename[id]
+				renamed += list(copy)
+			return renamed
+	return value
 
 /// The fields of this kind's settings: a list of babylon_tutorial_field() lists.
 /obj/babylon_tutorial/proc/settings_schema()
@@ -236,15 +283,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	for(var/list/field as anything in babylon_tutorial_schema(type))
 		if(!babylon_tutorial_field_active(src, field))
 			continue
+		if(!babylon_tutorial_links_field(field))
+			continue
 		var/key = field["key"]
-		switch(field["type"])
-			if("id")
-				var/id = setting(key)
-				if(length(id))
-					refs[id] = key
-			if("idlist")
-				for(var/id in setting(key))
-					refs[id] = key
+		for(var/id in babylon_tutorial_value_ids(field, setting(key)))
+			refs[id] = key
 	return refs
 
 /// Problems with this object's settings, for the configure window: list(field key = message).
@@ -268,19 +311,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	for(var/list/field as anything in babylon_tutorial_schema(type))
 		if(!babylon_tutorial_field_active(src, field))
 			continue
+		if(!babylon_tutorial_links_field(field))
+			continue
 		var/key = field["key"]
-		var/list/ids
-		switch(field["type"])
-			if("id")
-				var/id = setting(key)
-				if(length(id))
-					ids = list(id)
-				else if(field["required"])
-					found[key] = "Choose an id."
-			if("idlist")
-				ids = setting(key)
-				if(!length(ids) && field["required"])
-					found[key] = "Add at least one id."
+		var/list/ids = babylon_tutorial_value_ids(field, setting(key))
+		if(!length(ids) && field["required"])
+			found[key] = field["type"] == "id" ? "Choose an id." : "Add at least one id."
 		for(var/id in ids)
 			var/obj/babylon_tutorial/other = babylon_tutorial_find(id)
 			if(!other)
@@ -361,8 +397,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 // ---------------------------------------------------------------------------------------------
 // Settings schema
 
-/// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist, zone or
-/// effects. options: list(list("value", "label")). filter: categories an id may refer to. when:
+/// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist,
+/// gateinputs (a number gate's inputs, gates.dm), zone or effects. options: list(list("value", "label")). filter: categories an id may refer to. when:
 /// list(other key = list(values)) — the field applies only while that setting has one of them.
 /proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null)
 	var/list/field = list("key" = key, "label" = label, "type" = type, "default" = default_value, "help" = help)
@@ -482,6 +518,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			if(length(ids) > BABYLON_TUTORIAL_IDLIST_MAX)
 				return list("error" = "At most [BABYLON_TUTORIAL_IDLIST_MAX] ids.")
 			return list("value" = ids)
+		if("gateinputs")
+			return babylon_tutorial_clean_gate_inputs(field, value)
 		if("zone")
 			if(!islist(value) || length(value) != 5)
 				return list("error" = "A zone needs two corners.")
@@ -583,7 +621,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 		if(object.tutorial_category == "trigger")
 			if(object.setting("starts") == "after" && length(object.setting("after")))
 				enabled_later[object.tutorial_id] = enabled_later[object.tutorial_id] || object.setting("after")
-			for(var/id in object.setting("actions"))
+			var/obj/babylon_tutorial/trigger/trigger = object
+			for(var/id in trigger.action_ids())
 				used_actions[id] = TRUE
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		if(object.tutorial_category == "trigger")
@@ -610,7 +649,7 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	for(var/obj/babylon_tutorial/trigger/candidate in GLOB.babylon_tutorial_objects)
 		if(candidate.setting("starts") == "after" && candidate.setting("after") == trigger.tutorial_id)
 			next |= candidate
-	for(var/id in trigger.setting("actions"))
+	for(var/id in trigger.action_ids())
 		var/obj/babylon_tutorial/action/toggle/toggle = babylon_tutorial_find(id)
 		if(istype(toggle) && toggle.setting("mode") == "enable")
 			for(var/enabled_id in toggle.setting("triggers"))
@@ -692,11 +731,30 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	return own_schema() + list(
 		babylon_tutorial_field("actions", "Actions", "idlist", list(), "The actions to run, in this order, when the trigger fires.", filter = list("action")),
 		babylon_tutorial_field("once", "Fire only once", "bool", 1, "Off: the trigger can fire again (every time its condition becomes true)."),
-		babylon_tutorial_field("starts", "Starts listening", "choice", "start", "When this trigger begins to watch for the players. \"After a trigger fired\" chains steps: one step's trigger starts listening once the step before it fired.", options = babylon_tutorial_options(list("start" = "At the beginning", "after" = "After a trigger fired", "manual" = "When an Enable action switches it on"))),
-		babylon_tutorial_field("after", "After", "id", "", "The trigger whose firing makes this one start listening.", filter = list("trigger"), when = list("starts" = list("after")), required = TRUE),
+	) + babylon_tutorial_listen_fields() + list(
 		babylon_tutorial_field("cooldown", "Cooldown (seconds)", "number", 0, "Shortest time between two firings.", min = 0, max = 600),
 		babylon_tutorial_field("delay", "Delay (seconds)", "number", 0, "Wait this long after firing before the first action runs.", min = 0, max = 600),
 	)
+
+/// "Starts listening" and "After": when a trigger (or gate) begins to watch.
+/proc/babylon_tutorial_listen_fields()
+	return list(
+		babylon_tutorial_field("starts", "Starts listening", "choice", "start", "When this trigger begins to watch for the players. \"After a trigger fired\" chains steps: one step's trigger starts listening once the step before it fired.", options = babylon_tutorial_options(list("start" = "At the beginning", "after" = "After a trigger fired", "manual" = "When an Enable action switches it on"))),
+		babylon_tutorial_field("after", "After", "id", "", "The trigger whose firing makes this one start listening.", filter = list("trigger"), when = list("starts" = list("after")), required = TRUE),
+	)
+
+/// Every action this trigger can run (a gate has three lists), each once.
+/obj/babylon_tutorial/trigger/proc/action_ids()
+	var/list/ids = list()
+	for(var/key in action_keys())
+		var/list/listed = setting(key)
+		if(islist(listed))
+			ids |= listed
+	return ids
+
+/// The settings that hold this trigger's action lists.
+/obj/babylon_tutorial/trigger/proc/action_keys()
+	return list("actions")
 
 /// The fields of this trigger kind (the common trigger fields are added after them).
 /obj/babylon_tutorial/trigger/proc/own_schema()
@@ -723,6 +781,10 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	return setting("starts") == "start"
 
 /obj/babylon_tutorial/trigger/summary()
+	return actions_summary()
+
+/// "runs a, b" for the overview.
+/obj/babylon_tutorial/trigger/proc/actions_summary()
 	var/list/actions = setting("actions")
 	return length(actions) ? "runs [jointext(actions, ", ")]" : "runs nothing yet"
 

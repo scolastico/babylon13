@@ -34,6 +34,7 @@ export type Field = {
     | 'typepath'
     | 'id'
     | 'idlist'
+    | 'gateinputs'
     | 'zone'
     | 'effects'
     | 'target';
@@ -51,6 +52,7 @@ export type Field = {
 
 export type IdEntry = {
   id: string;
+  kind?: string;
   kind_name: string;
   category: string;
   summary?: string;
@@ -62,6 +64,23 @@ export type Effect = {
   amount?: number;
   zone?: string;
   type?: string;
+};
+
+/** One input of a number gate: which trigger, and what its firing does to the number. */
+export type GateInput = {
+  id: string;
+  op: string;
+  amount: number;
+  source: string;
+};
+
+/** A gate's state in the running test run. */
+export type GateLive = {
+  running: boolean;
+  listening?: boolean;
+  state?: boolean;
+  value?: number | null;
+  stopped?: string | null;
 };
 
 export type ObjectData = {
@@ -95,6 +114,7 @@ export type ObjectData = {
   } | null;
   notice: { text: string; ok: boolean; id: number; key?: string } | null;
   picking: boolean;
+  gate?: GateLive;
   npc?: {
     name: string;
     health: number;
@@ -187,6 +207,7 @@ export const BabylonTutorialObject = () => {
             ))}
           </LabeledList>
         </Section>
+        {data.gate && <GateSection gate={data.gate} />}
         {data.kind === 'npc_spawner' && <NpcSection />}
         <Section>
           <Stack>
@@ -334,6 +355,10 @@ const FieldInput = (props: { field: Field }) => {
       );
     case 'idlist':
       return <IdListInput field={field} value={value || []} onChange={set} />;
+    case 'gateinputs':
+      return (
+        <GateInputsInput field={field} value={value || []} onChange={set} />
+      );
     case 'zone':
       return <ZoneInput field={field} value={value} />;
     case 'effects':
@@ -659,6 +684,189 @@ const ZoneInput = (props: { field: Field; value: number[] | null }) => {
         </>
       )}
     </Box>
+  );
+};
+
+/** Operations that use a value: a constant or another number gate's number. */
+export const operationTakesValue = (op: string) =>
+  ['set', 'add', 'sub', 'mul'].includes(op);
+
+/** A new number gate input: count up when the trigger fires. */
+export const defaultGateInput = (id: string): GateInput => ({
+  id,
+  op: 'up',
+  amount: 1,
+  source: '',
+});
+
+/** A number gate's inputs: per input the trigger, its operation and the value it uses. */
+const GateInputsInput = (props: {
+  field: Field;
+  value: GateInput[];
+  onChange: (value: GateInput[]) => void;
+}) => {
+  const { act, data } = useBackend<ObjectData>();
+  const { value } = props;
+  const operations = props.field.options || [];
+  const triggers = idChoices(props.field, data.ids);
+  const numberGates = data.ids.filter((entry) => entry.kind === 'number_gate');
+  const byId: Record<string, IdEntry> = {};
+  for (const entry of data.ids) {
+    byId[entry.id] = entry;
+  }
+  const update = (index: number, change: Partial<GateInput>) =>
+    props.onChange(
+      value.map((input, i) => (i === index ? { ...input, ...change } : input)),
+    );
+  const label = (op: string) =>
+    operations.find((option) => option.value === op)?.label ?? op;
+  return (
+    <Box>
+      {!value.length && <Box color="label">No inputs yet.</Box>}
+      {value.map((input, index) => (
+        <Box
+          key={index}
+          mb={0.75}
+          p={0.5}
+          style={{ background: 'rgba(255, 255, 255, 0.04)' }}
+        >
+          <Stack align="center">
+            <Stack.Item color="label">When</Stack.Item>
+            <Stack.Item grow>
+              <Dropdown
+                width="100%"
+                searchInput
+                selected={input.id}
+                color={byId[input.id] || !input.id ? undefined : 'average'}
+                displayText={
+                  byId[input.id]
+                    ? describeId(byId[input.id])
+                    : input.id
+                      ? `${input.id} (missing)`
+                      : 'Choose a trigger...'
+                }
+                options={triggers.map((entry) => ({
+                  displayText: describeId(entry),
+                  value: entry.id,
+                }))}
+                onSelected={(id: string) => update(index, { id })}
+              />
+            </Stack.Item>
+            <Stack.Item color="label">fires</Stack.Item>
+            <Stack.Item>
+              {byId[input.id] && (
+                <Button
+                  icon="up-right-from-square"
+                  tooltip="Open its settings"
+                  onClick={() => act('open', { id: input.id })}
+                />
+              )}
+              <Button
+                icon="trash"
+                color="transparent"
+                tooltip="Remove"
+                onClick={() =>
+                  props.onChange(value.filter((_, i) => i !== index))
+                }
+              />
+            </Stack.Item>
+          </Stack>
+          <Stack mt={0.5} align="center" wrap>
+            <Stack.Item>
+              <Dropdown
+                width="190px"
+                selected={label(input.op)}
+                options={operations.map((option) => ({
+                  displayText: option.label,
+                  value: option.value,
+                }))}
+                onSelected={(op: string) => update(index, { op })}
+              />
+            </Stack.Item>
+            {operationTakesValue(input.op) && (
+              <>
+                <Stack.Item>
+                  <Dropdown
+                    width="150px"
+                    selected={input.source || ''}
+                    displayText={
+                      input.source ? `${input.source}'s number` : 'a number'
+                    }
+                    options={[
+                      { displayText: 'a number', value: '' },
+                      ...numberGates.map((entry) => ({
+                        displayText: `${entry.id}'s number`,
+                        value: entry.id,
+                      })),
+                    ]}
+                    onSelected={(source: string) => update(index, { source })}
+                  />
+                </Stack.Item>
+                {!input.source && (
+                  <Stack.Item>
+                    <NumberInput
+                      value={input.amount ?? 1}
+                      minValue={-100000}
+                      maxValue={100000}
+                      step={1}
+                      width="80px"
+                      onChange={(amount: number) => update(index, { amount })}
+                    />
+                  </Stack.Item>
+                )}
+              </>
+            )}
+          </Stack>
+        </Box>
+      ))}
+      <Dropdown
+        width="100%"
+        searchInput
+        selected={null}
+        placeholder="Add an input..."
+        disabled={!triggers.length}
+        options={triggers.map((entry) => ({
+          displayText: describeId(entry),
+          value: entry.id,
+        }))}
+        onSelected={(id: string) =>
+          props.onChange([...value, defaultGateInput(id)])
+        }
+      />
+    </Box>
+  );
+};
+
+/** What a gate is in the running test run. */
+export const gateLiveText = (gate: GateLive, kind: string) => {
+  if (!gate.running) {
+    return 'No test run is running.';
+  }
+  if (!gate.listening) {
+    return `Not listening${kind === 'number_gate' ? ` (number ${gate.value})` : ''}.`;
+  }
+  const state = gate.state ? 'true' : 'false';
+  return kind === 'number_gate'
+    ? `Number ${gate.value}, condition ${state}.`
+    : `Currently ${state}.`;
+};
+
+const GateSection = (props: { gate: GateLive }) => {
+  const { data } = useBackend<ObjectData>();
+  const { gate } = props;
+  return (
+    <Section title="Test run">
+      <Box color={gate.running ? (gate.state ? 'good' : undefined) : 'label'}>
+        <Icon name={gate.state ? 'toggle-on' : 'toggle-off'} mr={1} />
+        {gateLiveText(gate, data.kind)}
+      </Box>
+      {gate.stopped && (
+        <Box color="bad" mt={0.5}>
+          <Icon name="circle-exclamation" mr={0.5} />
+          {gate.stopped}
+        </Box>
+      )}
+    </Section>
   );
 };
 

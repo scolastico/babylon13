@@ -49,11 +49,24 @@ export type TutorialObject = {
   refs: string[];
   issues: string[];
   actions?: string[] | null;
+  /** A gate's On false and On change lists. */
+  actions_false?: string[] | null;
+  actions_change?: string[] | null;
   starts?: string | null;
   after?: string | null;
 };
 
 export type Warning = { text: string; ref: string | null };
+
+/** A gate in the running test run. */
+export type GateState = {
+  id: string;
+  kind: string;
+  state: boolean;
+  value: number | null;
+  listening: boolean;
+  stopped: boolean;
+};
 
 export type WandData = {
   palette: PaletteGroup[];
@@ -75,6 +88,8 @@ export type WandData = {
     listening?: string[];
     steps?: string[];
     objective?: string | null;
+    gates?: GateState[];
+    gate_log?: string[];
   };
   notice: { text: string; ok: boolean; id: number } | null;
   area?: AreaData;
@@ -384,19 +399,36 @@ const CATEGORY_NAMES: Record<string, string> = {
   npc: 'NPCs',
 };
 
+/** Every action a trigger runs; a gate has three lists. Each id once. */
+export const allActions = (trigger: TutorialObject) => [
+  ...new Set([
+    ...(trigger.actions || []),
+    ...(trigger.actions_false || []),
+    ...(trigger.actions_change || []),
+  ]),
+];
+
+/** The labelled action lists of a trigger: one for a trigger, three for a gate. */
+export const actionLists = (trigger: TutorialObject) =>
+  trigger.kind.endsWith('_gate')
+    ? [
+        { label: 'On true', ids: trigger.actions || [] },
+        { label: 'On false', ids: trigger.actions_false || [] },
+        { label: 'On change', ids: trigger.actions_change || [] },
+      ].filter((list) => list.ids.length)
+    : [{ label: '', ids: trigger.actions || [] }].filter(
+        (list) => list.ids.length,
+      );
+
 /** Groups the objects as the tutorial flows: each trigger with its actions and the triggers that
  * listen after it; markers and NPCs; actions no trigger uses at the bottom. */
 export const buildFlow = (objects: TutorialObject[]) => {
   const triggers = objects.filter((object) => object.category === 'trigger');
   const used = new Set<string>();
-  for (const trigger of triggers) {
-    for (const id of trigger.actions || []) {
-      used.add(id);
-    }
-  }
   const usedBy: Record<string, string[]> = {};
   for (const trigger of triggers) {
-    for (const id of trigger.actions || []) {
+    for (const id of allActions(trigger)) {
+      used.add(id);
       usedBy[id] = [...(usedBy[id] || []), trigger.id];
     }
   }
@@ -490,18 +522,27 @@ const OverviewTab = () => {
                     ? 'listens when an Enable action switches it on'
                     : 'listens from the beginning'}
               </Box>
-              {(trigger.actions || []).map((id, index) => (
-                <Button
-                  key={`${trigger.ref}-${index}-${id}`}
-                  icon={byId[id]?.icon || 'question'}
-                  color={byId[id] ? undefined : 'average'}
-                  onClick={() => open(id)}
-                >
-                  {index + 1}. {id}
-                  {byId[id] ? ` — ${byId[id].kind_name}` : ' (missing)'}
-                </Button>
+              {actionLists(trigger).map((list) => (
+                <Box key={list.label}>
+                  {list.label && (
+                    <Box inline color="label" mr={0.5} fontSize="0.9em">
+                      {list.label}:
+                    </Box>
+                  )}
+                  {list.ids.map((id, index) => (
+                    <Button
+                      key={`${trigger.ref}-${list.label}-${index}-${id}`}
+                      icon={byId[id]?.icon || 'question'}
+                      color={byId[id] ? undefined : 'average'}
+                      onClick={() => open(id)}
+                    >
+                      {index + 1}. {id}
+                      {byId[id] ? ` — ${byId[id].kind_name}` : ' (missing)'}
+                    </Button>
+                  ))}
+                </Box>
               ))}
-              {!(trigger.actions || []).length && (
+              {!allActions(trigger).length && (
                 <Box color="average" fontSize="0.9em">
                   No actions yet.
                 </Box>
@@ -662,6 +703,20 @@ const TestTab = () => {
               <b>Objective on screen:</b> {test.objective}
             </Box>
           )}
+          {!!test.gates?.length && <GatesNow gates={test.gates} />}
+          {!!test.gate_log?.length && (
+            <Box mb={1}>
+              <Box bold mb={0.5} color="bad">
+                Gate loops stopped
+              </Box>
+              {test.gate_log.map((line, index) => (
+                <Box key={`${index}-${line}`} color="bad">
+                  <Icon name="circle-exclamation" mr={0.5} />
+                  {line}
+                </Box>
+              ))}
+            </Box>
+          )}
           {!!test.steps?.length && (
             <Box mb={1}>
               <Box bold mb={0.5}>
@@ -712,6 +767,32 @@ const TestTab = () => {
     </Section>
   );
 };
+
+/** How a gate stands in the test run: "true", "3 (false)", "not listening". */
+export const gateStateText = (gate: GateState) => {
+  const state = gate.state ? 'true' : 'false';
+  const shown = gate.value === null ? state : `${gate.value} (${state})`;
+  return gate.listening ? shown : `${shown}, not listening`;
+};
+
+const GatesNow = (props: { gates: GateState[] }) => (
+  <Box mb={1}>
+    <Box bold mb={0.5}>
+      Gates now
+    </Box>
+    {props.gates.map((gate) => (
+      <Box key={gate.id} color={gate.stopped ? 'bad' : undefined}>
+        <Icon
+          name={gate.kind === 'number_gate' ? 'calculator' : 'microchip'}
+          color={gate.state ? 'good' : 'label'}
+          mr={0.5}
+        />
+        {gate.id}: {gateStateText(gate)}
+        {gate.stopped ? ' — a loop was stopped here' : ''}
+      </Box>
+    ))}
+  </Box>
+);
 
 // ---------------------------------------------------------------- Notice
 

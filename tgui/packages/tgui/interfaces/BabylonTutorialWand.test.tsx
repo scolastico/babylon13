@@ -9,8 +9,11 @@ import {
 import { gameDataAtom, store } from '../events/store';
 
 import {
+  allActions,
   BabylonTutorialWand,
   buildFlow,
+  gateStateText,
+  type TutorialObject,
   type WandData,
 } from './BabylonTutorialWand';
 
@@ -232,5 +235,102 @@ describe('BabylonTutorialWand', () => {
     expect(
       screen.getByText('The tutorial wand only works in creative worlds.'),
     ).toBeDefined();
+  });
+
+  it('shows gates with their three action lists in the flow', () => {
+    show({ objects: [gate] });
+    openTab('Overview');
+    expect(screen.getByText('On true:')).toBeDefined();
+    expect(screen.getByText('On change:')).toBeDefined();
+    expect(screen.queryByText('On false:')).toBeNull();
+    expect(screen.getByText('1. bell (missing)')).toBeDefined();
+    expect(screen.getByText('1. tally (missing)')).toBeDefined();
+  });
+
+  it('shows the gates and stopped loops of a running test run', () => {
+    show({
+      test: {
+        running: true,
+        completed: false,
+        fired: 0,
+        players: 1,
+        listening: ['both'],
+        steps: [],
+        gates: [
+          {
+            id: 'both',
+            kind: 'logic_gate',
+            state: true,
+            value: null,
+            listening: true,
+            stopped: false,
+          },
+          {
+            id: 'valves',
+            kind: 'number_gate',
+            state: false,
+            value: 2,
+            listening: true,
+            stopped: true,
+          },
+        ],
+        gate_log: [
+          'loop stopped at valves: valves -> other -> valves (it was already updating in this wave).',
+        ],
+      },
+    });
+    openTab('Test run');
+    expect(screen.getByText('Gates now')).toBeDefined();
+    expect(screen.getByText('both: true', { exact: false })).toBeDefined();
+    expect(
+      screen.getByText('valves: 2 (false) — a loop was stopped here', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByText('loop stopped at valves', { exact: false }),
+    ).toBeDefined();
+  });
+});
+
+const gate: TutorialObject = {
+  ...data.objects[0],
+  ref: '[0x9]',
+  id: 'both',
+  kind: 'logic_gate',
+  kind_name: 'Logic gate',
+  summary: 'AND from a, b',
+  issues: [],
+  actions: ['bell'],
+  actions_false: [],
+  actions_change: ['tally'],
+};
+
+describe('tutorial wand helpers', () => {
+  it("counts a gate's On false and On change actions as used", () => {
+    const flow = buildFlow([
+      { ...gate, actions: [], actions_false: ['off'], actions_change: ['on'] },
+      { ...gate, ref: '[0xa]', id: 'off', kind: 'message', category: 'action' },
+      { ...gate, ref: '[0xb]', id: 'on', kind: 'message', category: 'action' },
+    ]);
+    expect(flow.unused).toEqual([]);
+    expect(flow.usedBy.off).toEqual(['both']);
+    expect(allActions({ ...gate, actions_change: ['bell'] })).toEqual(['bell']);
+  });
+
+  it('describes gate states', () => {
+    const base = {
+      id: 'g',
+      kind: 'number_gate',
+      state: true,
+      value: 3,
+      listening: true,
+      stopped: false,
+    };
+    expect(gateStateText(base)).toBe('3 (true)');
+    expect(gateStateText({ ...base, value: null, state: false })).toBe('false');
+    expect(gateStateText({ ...base, listening: false })).toBe(
+      '3 (true), not listening',
+    );
   });
 });

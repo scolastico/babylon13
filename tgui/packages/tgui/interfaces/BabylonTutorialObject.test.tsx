@@ -5,11 +5,14 @@ import { gameDataAtom, store } from '../events/store';
 import {
   BabylonTutorialObject,
   defaultEffect,
+  defaultGateInput,
   effectNeeds,
   type Field,
   fieldActive,
+  gateLiveText,
   idChoices,
   type ObjectData,
+  operationTakesValue,
 } from './BabylonTutorialObject';
 
 const schema: Field[] = [
@@ -218,5 +221,112 @@ describe('tutorial object helpers', () => {
       disease: true,
       reagent: false,
     });
+  });
+});
+
+const gateInputs: Field = {
+  key: 'inputs',
+  label: 'Inputs',
+  type: 'gateinputs',
+  default: [],
+  help: 'Each time an input fires, its operation changes the number.',
+  filter: ['trigger'],
+  options: [
+    { value: 'up', label: 'Count up (+1)' },
+    { value: 'add', label: 'Add' },
+    { value: 'reset', label: 'Reset to the start value' },
+  ],
+};
+
+const numberGate: Partial<ObjectData> = {
+  kind: 'number_gate',
+  kind_name: 'Number gate',
+  category: 'trigger',
+  schema: [
+    gateInputs,
+    {
+      key: 'actions_change',
+      label: 'On change',
+      type: 'idlist',
+      default: [],
+      help: 'Run whenever the number changes.',
+      filter: ['action'],
+    },
+  ],
+  ids: [
+    { id: 'valve1', kind: 'button', kind_name: 'Button', category: 'trigger' },
+    {
+      id: 'bonus',
+      kind: 'number_gate',
+      kind_name: 'Number gate',
+      category: 'trigger',
+    },
+    { id: 'hello', kind: 'message', kind_name: 'Message', category: 'action' },
+  ],
+  values: {
+    inputs: [
+      { id: 'valve1', op: 'up', amount: 1, source: '' },
+      { id: 'bonus', op: 'add', amount: 1, source: 'bonus' },
+      { id: 'gone', op: 'reset', amount: 1, source: '' },
+    ],
+    actions_change: ['hello'],
+  },
+  gate: { running: true, listening: true, state: true, value: 3 },
+};
+
+describe('gate editors', () => {
+  it('lists number gate inputs with their operations and values', () => {
+    show(numberGate);
+    expect(screen.getByText('On change:')).toBeDefined();
+    expect(screen.getByText('Count up (+1)')).toBeDefined();
+    expect(screen.getByText('Add')).toBeDefined();
+    expect(screen.getByText("bonus's number")).toBeDefined();
+    expect(screen.getByText('Reset to the start value')).toBeDefined();
+    expect(screen.getAllByPlaceholderText('gone (missing)').length).toBe(1);
+    expect(screen.getByText('hello — Message')).toBeDefined();
+  });
+
+  it("shows the gate's state in the running test run", () => {
+    show(numberGate);
+    expect(screen.getByText('Number 3, condition true.')).toBeDefined();
+    show({
+      ...numberGate,
+      gate: {
+        running: true,
+        listening: true,
+        state: false,
+        value: 2,
+        stopped: 'loop stopped at bonus: bonus -> bonus',
+      },
+    });
+    expect(
+      screen.getByText('loop stopped at bonus: bonus -> bonus'),
+    ).toBeDefined();
+  });
+
+  it('describes gate states and input defaults', () => {
+    expect(gateLiveText({ running: false }, 'logic_gate')).toBe(
+      'No test run is running.',
+    );
+    expect(
+      gateLiveText(
+        { running: true, listening: true, state: true },
+        'logic_gate',
+      ),
+    ).toBe('Currently true.');
+    expect(
+      gateLiveText(
+        { running: true, listening: false, state: false, value: 4 },
+        'number_gate',
+      ),
+    ).toBe('Not listening (number 4).');
+    expect(defaultGateInput('valve1')).toEqual({
+      id: 'valve1',
+      op: 'up',
+      amount: 1,
+      source: '',
+    });
+    expect(operationTakesValue('mul')).toBe(true);
+    expect(operationTakesValue('reset')).toBe(false);
   });
 });

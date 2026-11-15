@@ -3,8 +3,8 @@
 // when the first player spawns (station_round.dm); in a creative world the wand's Test run starts,
 // restarts and stops it for the whole world.
 //
-// Everything a run tracks (listening triggers, what fired, pending button presses, images,
-// objective, speech) is global: every player in the world sees the same arrows and objective,
+// Everything a run tracks (listening triggers, what fired, pending button presses, gate states
+// and numbers, images, objective, speech) is global: every player in the world sees the same arrows and objective,
 // including players who join mid-run. Triggers that react to a player fire when ANY player
 // satisfies them; actions that target "the player" hit EVERY living player (players.dm keeps who
 // the players are, by ckey, also while they are dead or a ghost). Stopping a run resets its state
@@ -154,6 +154,16 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/list/snapshots = list()
 	/// The builder a preview runs for: the run's only player.
 	var/mob/living/preview_mob
+	/// Gate => its state: a logic gate's output, a number gate's condition (gates.dm).
+	var/list/gate_states = list()
+	/// Number gate => its number in this run (missing: still its start value).
+	var/list/gate_values = list()
+	/// The gates being updated right now, outermost first: the current evaluation wave's path.
+	var/list/gate_wave = list()
+	/// Gate => why the run stopped a loop or an over-long chain at it (the wand shows it).
+	var/list/gate_stops = list()
+	/// Every stop, in order, for the Test run log.
+	var/list/gate_log = list()
 
 /datum/babylon_tutorial_run/New(test_run, mob/living/preview_for)
 	src.test_run = test_run
@@ -166,6 +176,7 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	for(var/obj/babylon_tutorial/trigger/trigger as anything in babylon_tutorial_objects_of("trigger"))
 		if(trigger.listens_at_start())
 			enabled[trigger] = world.time
+	settle_gates()
 
 /datum/babylon_tutorial_run/Destroy()
 	GLOB.babylon_tutorial_runs -= src
@@ -185,6 +196,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	hits.Cut()
 	bodies.Cut()
 	snapshots.Cut()
+	gate_states.Cut()
+	gate_values.Cut()
+	gate_wave.Cut()
+	gate_stops.Cut()
+	gate_log.Cut()
 	preview_mob = null
 	if(complete_screen)
 		SStgui.close_uis(complete_screen)
@@ -198,6 +214,9 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	last_fired -= object
 	last_state -= object
 	hits -= object
+	gate_states -= object
+	gate_values -= object
+	gate_stops -= object
 	if(current_trigger == object)
 		current_trigger = null
 	for(var/image/picture as anything in images)
@@ -244,6 +263,9 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		enabled[trigger] = world.time
 		// Its condition counts from now: a zone a player already stands in fires.
 		last_state -= trigger
+		// A gate takes the state its inputs give it now, without running actions.
+		if(istype(trigger, /obj/babylon_tutorial/trigger/gate))
+			settle_gates(trigger)
 	else
 		enabled -= trigger
 	hits -= trigger
@@ -288,9 +310,16 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		if(completed)
 			return
 
-/// Fires a trigger: what waited for it stops, the next step's triggers start listening and its
-/// actions run in order, each after its own delay.
+/// Fires a trigger: what waited for it stops, the next step's triggers start listening, its
+/// actions run in order, each after its own delay, and the gates it feeds see it fire.
 /datum/babylon_tutorial_run/proc/fire(obj/babylon_tutorial/trigger/trigger)
+	mark_fired(trigger)
+	run_actions(trigger, trigger.setting("actions"))
+	notify_gates(trigger, TRUE)
+
+/// Counts a firing: a once-trigger stops listening, what waited for it ends and the triggers
+/// "After" it start listening.
+/datum/babylon_tutorial_run/proc/mark_fired(obj/babylon_tutorial/trigger/trigger)
 	fired[trigger] = fired[trigger] + 1
 	last_fired[trigger] = world.time
 	if(trigger.setting("once"))
@@ -301,8 +330,12 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	clear_waiting_for(trigger)
 	for(var/obj/babylon_tutorial/trigger/next as anything in babylon_tutorial_triggers_after(trigger))
 		set_enabled(next, TRUE)
+
+/// Runs a list of action ids for a trigger in order, each after its own delay (the trigger's
+/// delay first).
+/datum/babylon_tutorial_run/proc/run_actions(obj/babylon_tutorial/trigger/trigger, list/ids)
 	var/wait = trigger.setting("delay") SECONDS
-	for(var/id in trigger.setting("actions"))
+	for(var/id in ids)
 		var/obj/babylon_tutorial/action/action = babylon_tutorial_find(id)
 		if(!istype(action))
 			continue

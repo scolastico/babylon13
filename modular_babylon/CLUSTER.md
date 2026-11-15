@@ -646,6 +646,25 @@ before it, so steps chain in the order you build them. Zone, holding and conditi
 triggers fire when their condition *becomes* true; a gas zone covers at most 1000
 tiles.
 
+**Gates** are triggers that never fire from players, only from other triggers (their
+**inputs**, picked by id). A gate is true or false. When it becomes true it fires like a
+trigger (**On true** actions; triggers "After" it start listening; gates fed by it see it
+fire), when it becomes false its **On false** actions run, and **On change** runs on every
+change. A gate only updates while it listens, and when it starts listening it takes the
+state its inputs give it without running actions.
+
+| Gate | True when |
+| --- | --- |
+| Logic gate | AND: all inputs, OR: any input, XOR: exactly one input, NOT: its one input is not true. A trigger input counts as true once it fired in this run; a gate input counts with its own state. |
+| Number gate | a condition on its number holds (equals, at least, at most, between). The number starts at a **Start value** for every run; each input has an operation that runs every time that input fires: count up, count down, set to, add, subtract, multiply by (a constant or another number gate's number at that moment) or reset to the start value. **On change** runs whenever the number changes. "N of M" is a number gate that counts up. |
+
+Gates update at once, in one wave: a trigger fires, the gates it feeds update, the gates
+those feed update, and so on. A gate that is already updating in the same wave (a loop,
+A -> B -> A) or a chain longer than 16 gates stops the wave at that gate; the Test run
+tab lists the stop and the gate's checks name it. The checks also warn while building when
+gates feed each other in a loop. Stopping or restarting a test run resets every gate's
+state and number.
+
 | Action | Does |
 | --- | --- |
 | Message | a green "Guide" box in every player's chat, or a speaker (NPC or marked object) says it to the players (a Guide box with the speaker's name for a player too far away, or when the speaker is out cold); `[player]` becomes each player's own name; optional **objective** that stays on every player's screen until the next one |
@@ -678,7 +697,7 @@ NPC is created again when the world starts and for every run.
 
 **Test run** (wand window) starts the world's run for everyone in the world, from the
 start marker (everyone is moved there) or where everyone stands, and shows which
-triggers listen now and how many players take part. Anyone who may use the wand can
+triggers listen now, every gate's state and number, and how many players take part. Anyone who may use the wand can
 start, restart or stop it; the other players are told. **Reset NPCs** (on by default)
 creates the NPCs again when a test starts. Stop resets the run, not the world. In a
 tutorial play instance the run starts by itself when the first player arrives at the

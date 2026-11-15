@@ -893,16 +893,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	for(var/list/field as anything in babylon_tutorial_schema(path))
 		var/key = field["key"]
 		var/value = values[key]
+		if(babylon_tutorial_links_field(field))
+			if(length(ids) && !isnull(value))
+				values[key] = babylon_tutorial_value_renamed(field, value, ids)
+			continue
 		switch(field["type"])
-			if("id")
-				if(istext(value) && ids?[value])
-					values[key] = ids[value]
-			if("idlist")
-				if(islist(value) && length(ids))
-					var/list/renamed = list()
-					for(var/id in value)
-						renamed += ids[id] || id
-					values[key] = renamed
 			if("zone")
 				var/list/zone = value
 				if(islist(zone) && length(zone) == 5 && zone[5] == clip.origin[3] \

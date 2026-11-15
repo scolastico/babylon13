@@ -29,7 +29,7 @@
 	if(setting("until") != "next")
 		return null
 	for(var/obj/babylon_tutorial/trigger/trigger in GLOB.babylon_tutorial_objects)
-		if((tutorial_id in trigger.setting("actions")) && !length(babylon_tutorial_triggers_after(trigger)))
+		if((tutorial_id in trigger.action_ids()) && !length(babylon_tutorial_triggers_after(trigger)))
 			return "No step comes after [trigger.tutorial_id], so this never ends before 10 minutes. Choose some seconds or a trigger."
 	return null
 

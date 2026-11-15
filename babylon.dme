@@ -47,6 +47,7 @@
 #include "modular_babylon/code/creative/panel.dm"
 #include "modular_babylon/code/tutorial/objects.dm"
 #include "modular_babylon/code/tutorial/triggers.dm"
+#include "modular_babylon/code/tutorial/gates.dm"
 #include "modular_babylon/code/tutorial/actions.dm"
 #include "modular_babylon/code/tutorial/npc.dm"
 #include "modular_babylon/code/tutorial/runtime.dm"

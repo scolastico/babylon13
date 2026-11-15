@@ -515,6 +515,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"refs" = refs,
 			"issues" = messages,
 			"actions" = object.tutorial_category == "trigger" ? object.setting("actions") : null,
+			"actions_false" = istype(object, /obj/babylon_tutorial/trigger/gate) ? object.setting("actions_false") : null,
+			"actions_change" = istype(object, /obj/babylon_tutorial/trigger/gate) ? object.setting("actions_change") : null,
 			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
 			"after" = object.tutorial_category == "trigger" && object.setting("starts") == "after" ? object.setting("after") : null,
 		))
@@ -532,7 +534,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		"warnings" = babylon_tutorial_overview_warnings(),
 		"picking" = zone_pick,
 		"has_start" = !!babylon_tutorial_marker_turf("start"),
-		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "players" = length(run.players()), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective) : list("running" = FALSE),
+		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "players" = length(run.players()), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective, "gates" = babylon_tutorial_gates_live(run), "gate_log" = run.gate_log.Copy(max(1, length(run.gate_log) - 4))) : list("running" = FALSE),
 		"notice" = notice,
 		"area" = area_session(user).window_data(),
 	)
@@ -754,7 +756,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	var/list/ids = list()
 	for(var/obj/babylon_tutorial/other as anything in GLOB.babylon_tutorial_objects)
 		if(other != object)
-			ids += list(list("id" = other.tutorial_id, "kind_name" = other.kind_name, "category" = other.tutorial_category, "summary" = other.summary()))
+			ids += list(list("id" = other.tutorial_id, "kind" = other.tutorial_kind, "kind_name" = other.kind_name, "category" = other.tutorial_category, "summary" = other.summary()))
 	var/turf/tile = get_turf(object)
 	var/obj/item/babylon_tutorial_wand/wand = wand_ref?.resolve()
 	var/list/data = list(
@@ -773,6 +775,10 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		var/atom/target = marker.target_atom()
 		data["target_choices"] = marker.target_choices()
 		data["target_now"] = isturf(target) ? "this tile" : "[target]"
+	if(istype(object, /obj/babylon_tutorial/trigger/gate))
+		var/obj/babylon_tutorial/trigger/gate/gate = object
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+		data["gate"] = run ? list("running" = TRUE, "listening" = run.is_enabled(gate), "state" = !!run.gate_states[gate], "value" = istype(gate, /obj/babylon_tutorial/trigger/gate/number) ? run.gate_number(gate) : null, "stopped" = run.gate_stops[gate]) : list("running" = FALSE)
 	if(istype(object, /obj/babylon_tutorial/npc_spawner))
 		var/obj/babylon_tutorial/npc_spawner/spawner = object
 		var/mob/living/carbon/human/npc = spawner.current_npc()
