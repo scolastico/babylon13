@@ -537,6 +537,37 @@ class Instances(TutorialFixture):
         # A new run of the tutorial starts a fresh instance.
         self.assertNotEqual(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"], world)
 
+    def test_edit_world_deleted_on_stop(self):
+        # The admin's edit world is unsaved like a play instance: stopping it deletes its row and
+        # files; the pending tutorial (and what was saved back to it) stays.
+        world, run = self.creative_run()
+        tid = self.submit(run)
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        root = self.data / "worlds" / edit
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "daemon.log").write_text("x")
+        self.stop(edit)
+        self.assertIsNone(self.instance(edit))
+        self.assertFalse(root.exists())
+        self.assertIsNone(self.s.row("SELECT * FROM world_deletions"))
+        self.assertEqual(self.tutorial(tid)["status"], "pending")
+        self.assertTrue((self.data / "tutorials/pending" / tid / "save/map.dmm").is_file())
+        # The next Edit starts a fresh world from the pending copy.
+        self.assertNotEqual(self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"], edit)
+
+    def test_copy_counts_against_the_total_world_limit(self):
+        tid = self.published()
+        self.s.config["max_total_worlds_per_player"] = 1
+        self.make("player", persistent=0)
+        with self.assertRaisesRegex(Denied, "total world limit"):
+            self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        self.assertEqual(self.s.row("SELECT count(*) n FROM worlds WHERE owner='player'")["n"], 1)
+        self.assertFalse(self.s.copying)
+        self.assertFalse(self.s.tutorial_readers)
+        # Play instances never count: a player at the limit can still play.
+        self.assertTrue(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["ok"])
+
     def test_instances_without_a_run_are_removed_at_startup(self):
         tid = self.published()
         world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
