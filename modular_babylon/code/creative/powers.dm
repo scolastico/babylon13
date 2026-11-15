@@ -16,6 +16,10 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 	var/babylon_creative_prior_incorporeal = FALSE
 	/// Fullbright (creative) is on: this body sees every tile lit, whatever the lighting.
 	var/babylon_creative_fullbright = FALSE
+	/// What sight / lighting cutoff the body had before X-ray / fullbright, and whether the sight hook is registered.
+	var/babylon_creative_prior_sight = 0
+	var/babylon_creative_prior_cutoff = 0
+	var/babylon_creative_sight_hooked = FALSE
 
 /proc/babylon_creative_godmode(mob/living/user)
 	return HAS_TRAIT_FROM(user, TRAIT_GODMODE, BABYLON_CREATIVE_TRAIT)
@@ -31,40 +35,64 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 /proc/babylon_creative_xray(mob/living/user)
 	return HAS_TRAIT_FROM(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
 
-/// X-ray: see turfs, objects and mobs through walls (tg's TRAIT_XRAY_VISION, our own trait source).
+/**
+ * X-ray: see turfs, objects and mobs through walls. Every living body type recomputes its sight
+ * its own way (carbon from the trait, silicons from their modules, simple animals from initial()),
+ * and only some read TRAIT_XRAY_VISION, so the power is applied by a hook on the sight update that
+ * every type ends in (COMSIG_MOB_UPDATE_SIGHT, see babylon_creative_apply_sight); the trait stays
+ * as the creative trait source (carbon reads it too, harmlessly).
+ */
 /proc/babylon_creative_set_xray(mob/living/user, enabled)
+	if(enabled == babylon_creative_xray(user))
+		return enabled
 	if(enabled)
+		user.babylon_creative_prior_sight = user.sight
 		ADD_TRAIT(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
 		GLOB.babylon_creative_powered |= WEAKREF(user)
 	else
 		REMOVE_TRAIT(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
-	return babylon_creative_xray(user)
+		user.set_sight(user.babylon_creative_prior_sight)
+	babylon_creative_sync_sight_hook(user)
+	return enabled
 
-/// Fullbright: the lighting plane's cutoff is raised to fully bright. Carbon bodies get it from
-/// their sight update (every update recomputes the cutoff, so a signal hook keeps it); any other
-/// living body has its cutoff set directly.
+/**
+ * Fullbright: the lighting plane's cutoff is raised to fully bright (same hook as X-ray). The
+ * cutoff from before is put back on off, for the body types that never recompute it.
+ */
 /proc/babylon_creative_set_fullbright(mob/living/user, enabled)
 	if(enabled == user.babylon_creative_fullbright)
 		return enabled
 	user.babylon_creative_fullbright = enabled
 	if(enabled)
+		user.babylon_creative_prior_cutoff = user.lighting_cutoff
 		GLOB.babylon_creative_powered |= WEAKREF(user)
-		if(iscarbon(user))
-			user.RegisterSignal(user, COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS, TYPE_PROC_REF(/mob/living, babylon_creative_fullbright_cutoff))
-		else
-			user.lighting_cutoff = LIGHTING_CUTOFF_FULLBRIGHT
 	else
-		if(iscarbon(user))
-			user.UnregisterSignal(user, COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS)
-		else
-			user.lighting_cutoff = initial(user.lighting_cutoff)
-	user.update_sight()
+		user.lighting_cutoff = user.babylon_creative_prior_cutoff
+	babylon_creative_sync_sight_hook(user)
 	return enabled
 
-/// Runs inside the carbon sight update, before the cutoff is applied to the screen.
-/mob/living/proc/babylon_creative_fullbright_cutoff(datum/source, list/return_list)
+/// Hooks the body's sight update while X-ray or fullbright is on, unhooks it when both are off,
+/// and applies the change at once.
+/proc/babylon_creative_sync_sight_hook(mob/living/user)
+	var/wanted = babylon_creative_xray(user) || user.babylon_creative_fullbright
+	if(wanted && !user.babylon_creative_sight_hooked)
+		user.RegisterSignal(user, COMSIG_MOB_UPDATE_SIGHT, TYPE_PROC_REF(/mob/living, babylon_creative_apply_sight))
+		user.babylon_creative_sight_hooked = TRUE
+	else if(!wanted && user.babylon_creative_sight_hooked)
+		user.UnregisterSignal(user, COMSIG_MOB_UPDATE_SIGHT)
+		user.babylon_creative_sight_hooked = FALSE
+	user.update_sight()
+	if(wanted)
+		user.babylon_creative_apply_sight(user) // bodies without a client skip the update itself
+
+/// Runs at the end of every living body's sight update, before the cutoff reaches the screen.
+/mob/living/proc/babylon_creative_apply_sight(datum/source)
 	SIGNAL_HANDLER
-	lighting_cutoff = LIGHTING_CUTOFF_FULLBRIGHT
+	if(babylon_creative_xray(src))
+		set_sight(sight | SEE_TURFS | SEE_MOBS | SEE_OBJS)
+	if(babylon_creative_fullbright)
+		lighting_cutoff = LIGHTING_CUTOFF_FULLBRIGHT
+		sync_lighting_plane_cutoff()
 
 /proc/babylon_creative_set_noclip(mob/living/user, enabled)
 	if(enabled == user.babylon_creative_noclip)

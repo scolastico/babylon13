@@ -248,6 +248,21 @@
 		result["distro_pressurised"] = distro_pressure > 1000
 		// The air mixer's 21 % oxygen / 79 % nitrogen.
 		result["distro_is_air"] = oxygen_share > 0.18 && oxygen_share < 0.24
+	// Spec #13: every main-room scrubber is on the one pipeline that ends at the void canister's port,
+	// so what they take in really drains.
+	var/obj/machinery/portable_atmospherics/canister/babylon_creative/void
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
+		if(babylon_on_plane(canister) && canister.creative_mode == "void")
+			void = canister
+	var/datum/pipeline/drain = void?.connected_port?.parents?[1]
+	var/main_scrubbers = 0
+	var/main_scrubbers_drain = !!drain
+	for(var/obj/machinery/atmospherics/components/unary/vent_scrubber/scrubber as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_scrubber))
+		if(babylon_on_plane(scrubber) && !istype(get_area(scrubber), /area/station/babylon/creative_plane/utilities))
+			main_scrubbers++
+			if(scrubber.parents[1] != drain)
+				main_scrubbers_drain = FALSE
+	result["main_room_scrubbers_drain_to_void"] = main_scrubbers >= 8 && main_scrubbers_drain
 	var/turf/open/middle = get_turf(respawn_turf)
 	var/datum/gas_mixture/air = middle?.return_air()
 	result["still_breathable"] = !!air && air.return_pressure() > 90 && air.return_pressure() < 120
