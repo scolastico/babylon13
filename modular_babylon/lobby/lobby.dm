@@ -112,13 +112,14 @@ var/global/list/lobby_config
 	. = ..()
 	var/rejoin = query["babylon_rejoin"]
 	var/static/regex/world_id = regex(@"^[0-9a-f]{32}$")
-	// A world sent the player back with a reason (only known codes: the text is the lobby's own).
-	var/static/list/world_notices = list("admission_timeout" = "The world took too long to let you in. Press Join to try again.")
+	// A world sent the player back with a reason (only known codes: the text is the lobby's own,
+	// worded for the button that sent them there, which their returning mob remembers).
+	var/static/list/world_notices = list("admission_timeout" = "admission")
 	var/world_notice = world_notices[query["babylon_notice"]]
 	spawn(1)
 		if(src)
 			if(world_notice)
-				mob:notice = world_notice
+				mob:set_notice(lobby_retry_notice(world_notice, mob:last_retry), TRUE)
 			mob:show_browser()
 			if(istext(rejoin) && world_id.Find(rejoin))
 				world.log << "[ckey] returned to rejoin world [rejoin]"
@@ -129,6 +130,13 @@ var/global/list/lobby_config
 	var/busy = 0
 	var/view_filter = "active"
 	var/notice = ""
+	/// The notice is a problem (role alert, like the other errors on the page), not a confirmation.
+	var/notice_alert = FALSE
+	/// How the player was last sent to a world ("join", "play" or "edit"): a notice that sends them
+	/// back says which button to press (lobby_retry_notice). Empty on a fresh mob (neutral wording).
+	var/last_retry = ""
+	/// The text each live message (by key) was last drawn with its role: see announce().
+	var/list/announced = list()
 	var/list/cards = list()
 	/// Map catalog ids from the last list, with their names.
 	var/list/map_names = list()
@@ -164,6 +172,8 @@ var/global/list/lobby_config
 	browser_initialized = 0
 	last_browser_content = ""
 	sent_previews = list()
+	// A new connection has heard nothing yet.
+	announced = list()
 	busy = 0
 	request_revision++
 	var/generation = ++poll_generation
@@ -341,13 +351,13 @@ var/global/list/lobby_config
 	if(result["admin"])
 		content += "<p><span class='badge'>Server administrator</span> <small>Your account can see private worlds, bypass their admission restrictions and the per-owner world limits, and spectate worlds as an invisible ghost without a drone.</small></p>"
 	if(result["server_notice"])
-		content += "<p class='notice' role='alert'><b>[html_encode(result["server_notice"])]</b></p>"
+		content += "<p class='notice'[announce("server_notice", result["server_notice"], "alert")]><b>[html_encode(result["server_notice"])]</b></p>"
 	content += discord_bar(result["discord"])
 	if(notice)
-		content += "<p class='notice' role='status'>[html_encode(notice)]</p>"
+		content += "<p class='notice'[announce("notice", notice, notice_alert ? "alert" : "status")]>[html_encode(notice)]</p>"
 	var/list/state
 	if(result["error"])
-		content += "<p class='notice'>[html_encode(result["error"])]</p>"
+		content += "<p class='notice'[announce("list_error", result["error"], "alert")]>[html_encode(result["error"])]</p>"
 	else
 		cards = list()
 		map_names = list()
@@ -467,7 +477,7 @@ var/global/list/lobby_config
 	else if(manager && !stopped && !changing)
 		text += "<button type='button' class='button danger push' data-id='[id]' onclick='return lobbyOpenWorld(\"stop\", this)'>Stop tutorial...</button>"
 	if(card["error"])
-		text += "<p class='card-error' role='alert'>[html_encode(card["error"])]</p>"
+		text += "<p class='card-error'[announce("card:[id]", card["error"], "alert")]>[html_encode(card["error"])]</p>"
 	return text + "</div></section>"
 
 /mob/lobby/proc/render_page(content, revision, complete, list/state)
@@ -577,7 +587,7 @@ var/global/list/lobby_config
 /// Without a request (a plain link) the answer becomes the page notice.
 /mob/lobby/proc/respond(request, list/data)
 	if(!request)
-		notice = data["error"] || data["notice"] || ""
+		set_notice(data["error"] || data["notice"], !!data["error"])
 		return
 	if(responded == request)
 		return
@@ -645,8 +655,24 @@ var/global/list/lobby_config
 		clean["map"] = map
 	return clean
 
+/// The page notice; alert for a problem, so it is announced like the page's other errors.
+/mob/lobby/proc/set_notice(text, alert = FALSE)
+	notice = text || ""
+	notice_alert = alert
+	// A new notice is announced even when its text repeats the last one.
+	announced -= "notice"
+
+/// The role attribute of a live message the first time it is drawn with this text. The poll
+/// replaces the whole page whenever anything on it changes, and a redrawn role='alert' can be
+/// announced again; later redraws leave the role out, so a message is announced once.
+/mob/lobby/proc/announce(key, text, role)
+	if(announced[key] == text)
+		return ""
+	announced[key] = text
+	return " role='[role]'"
+
 /mob/lobby/proc/handle_action(action, list/payload, request)
-	notice = ""
+	set_notice("")
 	if(action == "filter")
 		if(payload["filter"] in list("active", "mine", "shared", "all", "tutorials"))
 			view_filter = payload["filter"]
@@ -708,7 +734,11 @@ var/global/list/lobby_config
 				respond(request, list("error" = "Use a password of at most 128 characters."))
 				return
 			join["password"] = password
-		join_world(id, card["name"], join, request)
+		// A tutorial run joined from its card (or rejoined after a hidden-window bounce) keeps the
+		// tutorial wording in the notices that send the player back.
+		var/static/list/retry_by_kind = list("tutorial" = "play", "tutorial_edit" = "edit")
+		var/tutorial_retry = istext(card["kind"]) ? retry_by_kind[card["kind"]] : null
+		join_world(id, card["name"], join, request, retry = tutorial_retry || "join")
 		return
 	if(card["role"] != "owner" && card["role"] != "admin")
 		respond(request, list("error" = "Only the owner or a server administrator can do that."))
@@ -781,7 +811,7 @@ var/global/list/lobby_config
 		while(client && world.time < deadline)
 			var/list/status = api("list")
 			if(status["error"])
-				notice = status["error"]
+				set_notice(status["error"], TRUE)
 				return
 			var/list/current
 			for(var/list/item in status["worlds"])
@@ -789,13 +819,13 @@ var/global/list/lobby_config
 					current = item
 					break
 			if(!current || current["state"] == "stopped")
-				notice = saved ? "World saved and stopped." : "World stopped."
+				set_notice(saved ? "World saved and stopped." : "World stopped.")
 				return
 			if(current["error"] || current["state"] == "error")
-				notice = current["error"] || "The world could not stop. Check its status before trying again."
+				set_notice(current["error"] || "The world could not stop. Check its status before trying again.", TRUE)
 				return
 			sleep(10)
-		notice = "Shutdown is still in progress. Check the world status before joining again."
+		set_notice("Shutdown is still in progress. Check the world status before joining again.", TRUE)
 
 // --- Tutorials ------------------------------------------------------------------------
 // The Tutorials tab: lobby.js draws the cards and dialogs from state["tutorials"]; the actions
@@ -812,6 +842,10 @@ var/global/list/lobby_config
 	// The state of the player's own run of it, and of an admin edit session.
 	for(var/key in list("playing", "editing"))
 		clean[key] = (item[key] in list("starting", "running", "stopping", "error")) ? item[key] : null
+	// The tutorial a pending one was copied from (admins only): the card's "Based on" line.
+	var/list/based_on = item["based_on"]
+	if(islist(based_on) && istext(based_on["title"]) && istext(based_on["author"]))
+		clean["based_on"] = list("title" = based_on["title"], "author" = based_on["author"])
 	return clean
 
 /// The tutorials for the page: list("tutorials" = items) or list("error" = text).
@@ -855,7 +889,7 @@ var/global/list/lobby_config
 		var/world_name = istext(result["name"]) ? result["name"] : title
 		var/stage = action == "tutorial_edit" ? "Starting the edit world from the pending copy..." : "Preparing your tutorial..."
 		show_loading(world_name, stage)
-		join_world(world_id, world_name, list("world" = world_id), 0, stage, "Startup is taking longer than expected. Open Tutorials and press Play again.")
+		join_world(world_id, world_name, list("world" = world_id), 0, stage, action == "tutorial_edit" ? "edit" : "play")
 		return
 	var/list/notices = list(
 		"tutorial_copy" = "[title] was copied to My worlds. Start it there to keep building.",
@@ -869,8 +903,8 @@ var/global/list/lobby_config
 
 /// Asks the supervisor for a ticket until the world runs, then sends the player there.
 /// A dialog's request is answered after the first reply; later problems become the page notice.
-/// A tutorial passes its own loading stage and timeout notice.
-/mob/lobby/proc/join_world(id, world_name, list/join, request = 0, stage = "Starting world and restoring its checkpoint...", timeout_notice = "Startup is taking longer than expected. Check the world status and try Join again.")
+/// A tutorial passes its own loading stage, and how it is tried again (retry, see lobby_retry_notice).
+/mob/lobby/proc/join_world(id, world_name, list/join, request = 0, stage = "Starting world and restoring its checkpoint...", retry = "join")
 	var/deadline = world.time + 3600
 	while(client && world.time < deadline)
 		var/list/result = api("join", join)
@@ -882,12 +916,37 @@ var/global/list/lobby_config
 			request = 0
 		if(result["address"])
 			world.log << "[ckey] sent to world [world_name] ([id])"
+			last_retry = retry
 			src << link(result["address"])
-			notice = "Connection offered. If you cancelled it, click Join again."
+			set_notice(lobby_retry_notice("offered", retry))
 			return
 		show_loading(world_name, stage)
 		sleep(20)
-	notice = timeout_notice
+	set_notice(lobby_retry_notice("timeout", retry), TRUE)
+
+/// A notice that sends the player back to a world, worded for the button that does it: Join on a
+/// world card, Rejoin (or Play) on a tutorial card, Edit on a pending tutorial.
+/// reason: "admission" (the world took too long to let them in), "offered" or "timeout".
+/// retry: "join", "play" or "edit" (anything else gets a neutral wording).
+/proc/lobby_retry_notice(reason, retry)
+	var/static/list/how = list(
+		"join" = "press Join",
+		"play" = "open Tutorials and press Rejoin (or Play, if it has ended)",
+		"edit" = "open Tutorials and press Edit on the pending tutorial",
+	)
+	// A fresh mob (the lobby restarted meanwhile) does not know which button it was.
+	var/action = istext(retry) ? how[retry] : null
+	if(!action)
+		action = "go back to the world or tutorial you chose"
+	var/sentence = "[uppertext(copytext(action, 1, 2))][copytext(action, 2)]"
+	switch(reason)
+		if("admission")
+			return "The world took too long to let you in. [sentence] to try again."
+		if("offered")
+			return "Connection offered. If you cancelled it, [action] to try again."
+	if(retry == "join")
+		return "Startup is taking longer than expected. Check the world status and try Join again."
+	return "Startup is taking longer than expected. [sentence] to try again."
 
 /mob/lobby/verb/open_lobby()
 	set name = "Open Babylon lobby"

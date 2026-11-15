@@ -2,6 +2,7 @@
 and copy (lobby actions), and the end of tutorial instances."""
 import json
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -537,6 +538,37 @@ class Instances(TutorialFixture):
         # A new run of the tutorial starts a fresh instance.
         self.assertNotEqual(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"], world)
 
+    def test_edit_world_deleted_on_stop(self):
+        # The admin's edit world is unsaved like a play instance: stopping it deletes its row and
+        # files; the pending tutorial (and what was saved back to it) stays.
+        world, run = self.creative_run()
+        tid = self.submit(run)
+        edit = self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"]
+        self.s.tick()
+        root = self.data / "worlds" / edit
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "daemon.log").write_text("x")
+        self.stop(edit)
+        self.assertIsNone(self.instance(edit))
+        self.assertFalse(root.exists())
+        self.assertIsNone(self.s.row("SELECT * FROM world_deletions"))
+        self.assertEqual(self.tutorial(tid)["status"], "pending")
+        self.assertTrue((self.data / "tutorials/pending" / tid / "save/map.dmm").is_file())
+        # The next Edit starts a fresh world from the pending copy.
+        self.assertNotEqual(self.s.dispatch("admin", "tutorial_edit", {"tutorial": tid})["world"], edit)
+
+    def test_copy_counts_against_the_total_world_limit(self):
+        tid = self.published()
+        self.s.config["max_total_worlds_per_player"] = 1
+        self.make("player", persistent=0)
+        with self.assertRaisesRegex(Denied, "total world limit"):
+            self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        self.assertEqual(self.s.row("SELECT count(*) n FROM worlds WHERE owner='player'")["n"], 1)
+        self.assertFalse(self.s.copying)
+        self.assertFalse(self.s.tutorial_readers)
+        # Play instances never count: a player at the limit can still play.
+        self.assertTrue(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["ok"])
+
     def test_instances_without_a_run_are_removed_at_startup(self):
         tid = self.published()
         world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
@@ -1004,6 +1036,42 @@ class Robustness(TutorialFixture):
         self.assertEqual(items[tid]["based_on"], based_on)
         self.assertIsNone(items[original]["based_on"])
         self.assertNotIn("based_on", self.s.dispatch("player", "tutorials", {})["tutorials"][0])
+
+    def test_lobby_forwards_every_field_the_page_reads(self):
+        # Contract (the DM item builder can't run here): every field lobby.js reads from a tutorial
+        # comes from the supervisor's real list item and is forwarded by lobby.dm's
+        # lobby_tutorial_item; a field it drops never reaches the page, whatever the JS test injects.
+        lobby = Path(__file__).resolve().parents[2] / "modular_babylon/lobby"
+        script = (lobby / "lobby.js").read_text(encoding="utf-8")
+        dm = (lobby / "lobby.dm").read_text(encoding="utf-8")
+        builder = re.search(r"^/proc/lobby_tutorial_item\(.*?(?=^\S)", dm, re.M | re.S).group(0)
+        # clean["x"] = ..., "x" = item["x"] / lobby_number(item["x"]), and for(var/key in list("x", ...)).
+        forwarded = set(re.findall(r'clean\["(\w+)"\]', builder))
+        forwarded |= set(re.findall(r'"(\w+)" = [\w(]*item\["\1"\]', builder))
+        for keys in re.findall(r"for\(var/key in list\(([^)]*)\)\)", builder):
+            forwarded |= set(re.findall(r'"(\w+)"', keys))
+        # Fields read through any name for a tutorial: tutorial.x, current.x, tutorials[i].x, ...
+        read = set(re.findall(r"\b(?:tutorial|current|tutorials\[\w+\])\.(\w+)", script))
+        read -= {"length"}
+        nested = set(re.findall(r"\bbased_on\.(\w+)", script))
+        self.assertIn("based_on", read)
+        self.assertEqual(read - forwarded, set(), "fields lobby.js reads that lobby.dm drops")
+        based_on_kept = set(re.findall(r'"(\w+)" = based_on\["\1"\]', builder))
+        self.assertEqual(nested - based_on_kept, set(), "based_on fields lobby.js reads that lobby.dm drops")
+        # The page escapes them as text: lobby.dm keeps only text (or drops based_on whole).
+        for field in nested:
+            self.assertIn('istext(based_on["%s"])' % field, builder)
+        # The page state carries the list (and who may review) from the Tutorials tab's builder.
+        page_state = re.search(r"^/mob/lobby/proc/show_browser\(.*?(?=^\S)", dm, re.M | re.S).group(0)
+        for key in set(re.findall(r"\blobbyState\.(tutorials\w*|admin)\b", script)):
+            self.assertRegex(page_state, r'(state\["%s"\] =|"%s" = )' % (key, key), key)
+        # ...and the supervisor sends them all (an admin's item for a copied, pending tutorial).
+        original = self.published()
+        copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": original})["id"]
+        tid = self.submit(self.start(copied, "player"), actor="player", title="Extended")
+        item = next(i for i in self.s.dispatch("admin", "tutorials", {})["tutorials"] if i["id"] == tid)
+        self.assertEqual(read - set(item), set(), "fields lobby.js reads that the supervisor does not send")
+        self.assertEqual(nested - set(item["based_on"]), set())
 
 
 class SnapshotCopiedAtPrepare(test_driver.DriverFixture):
