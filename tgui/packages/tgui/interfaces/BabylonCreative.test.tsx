@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { gameDataAtom, store } from '../events/store';
 
@@ -84,6 +84,8 @@ const data: CreativeData = {
   godmode: true,
   godmode_elsewhere: false,
   noclip: false,
+  xray: false,
+  fullbright: true,
   dead: false,
   health: 85,
   body: 'Maintenance drone',
@@ -115,8 +117,46 @@ describe('BabylonCreative', () => {
     act(() => render(<BabylonCreative />));
     expect(screen.getByText('Godmode')).toBeDefined();
     expect(screen.getByText('Noclip')).toBeDefined();
+    expect(screen.getByText('X-ray')).toBeDefined();
+    expect(screen.getByText('Fullbright')).toBeDefined();
     expect(screen.getByText('Heal fully')).toBeDefined();
     expect(screen.getByText('Godmode on: nothing can hurt you.')).toBeDefined();
+  });
+
+  it('sends xray and fullbright from their own rows, each with its own state', () => {
+    const sent: string[] = [];
+    mock.module('../events/act', () => ({
+      sendAct: (action: string) => {
+        sent.push(action);
+      },
+    }));
+    act(() => render(<BabylonCreative />));
+    // Each toggle row: the name, then its own On/Off button (xray off, fullbright on here).
+    const rowButton = (name: string) => {
+      const row = screen.getByText(name).closest('div')?.parentElement
+        ?.parentElement as HTMLElement;
+      const buttons = row.querySelectorAll('.Button');
+      return buttons[buttons.length - 1] as HTMLElement;
+    };
+    expect(rowButton('X-ray').textContent).toContain('Off');
+    expect(rowButton('Fullbright').textContent).toContain('On');
+    expect(rowButton('Noclip').textContent).toContain('Off');
+    expect(rowButton('Godmode').textContent).toContain('On');
+    act(() => {
+      fireEvent.click(rowButton('X-ray'));
+    });
+    act(() => {
+      fireEvent.click(rowButton('Fullbright'));
+    });
+    expect(sent).toEqual(['xray', 'fullbright']);
+    // The header's quick toggles send the same actions.
+    act(() => {
+      fireEvent.click(document.querySelector('.fa-eye')!.closest('.Button')!);
+      fireEvent.click(
+        document.querySelector('.fa-lightbulb')!.closest('.Button')!,
+      );
+    });
+    expect(sent.slice(2)).toEqual(['xray', 'fullbright']);
   });
 
   it('shows the curated spawn categories', () => {

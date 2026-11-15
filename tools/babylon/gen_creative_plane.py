@@ -10,8 +10,14 @@ Along the south edge (local coordinates: u east, v north, 0,0 = the floor's sout
 - utility room (south-west corner, walls u 0..8, v 1..7, glass door south; area ".../utilities"
   with its own APC, together with the SMES corner): a creative O2 source and a creative N2
   source canister on connector ports feed an air mixer, whose supply line runs two vents; two
-  scrubbers drain into a creative void canister. Ordinary pipes, all on layer 3. A plaque on
-  its south wall explains the machines.
+  scrubbers drain into a creative void canister. Ordinary pipes: the supply network on layer 3,
+  the scrubber network on layer 4 (so both can share one route). A plaque on its south wall
+  explains the machines.
+- air distribution: both networks leave the room through its door and follow the main cable
+  (south edge, middle column) under the catwalk floor, plus a ring one tile inside the walls
+  (east column, north row, west column above the room), also catwalk. Supply vents and
+  scrubbers stand one tile inside the ring, evenly spread over the four sides, each facing the
+  ring pipe next to it.
 - creative SMES (source, full charge) at u 10 with an unwired terminal north of it; its cable
   joins the main cable along the south edge (catwalk floor) and a spine up the middle column.
 - the plane's APC on the south wall, on the main cable.
@@ -58,7 +64,11 @@ N2_CANISTER = ('/obj/machinery/portable_atmospherics/canister/babylon_creative/n
 VOID_CANISTER = '/obj/machinery/portable_atmospherics/canister/babylon_creative/void{\n\tcreative_mode = "void"\n\t}'
 MIXER = "/obj/machinery/atmospherics/components/trinary/mixer/airmix{\n\tdir = %d\n\t}" % EAST
 SUPPLY = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/visible"
-SCRUBBERS = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/visible"
+SCRUBBERS = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/visible/layer4"
+# Under the catwalk floor the pipes are hidden (the catwalk shows them to a builder).
+SUPPLY_HIDDEN = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/hidden"
+SCRUBBERS_HIDDEN = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/hidden/layer4"
+SUPPLY_LAYER, SCRUBBER_LAYER = 3, 4
 DOOR = '/obj/machinery/door/airlock/public/glass{\n\tname = "Utilities"\n\t}'
 PLAQUE = ('/obj/structure/plaque/static_plaque{\n\tdesc = "Power and air for this plane: a creative SMES (source) feeds the '
           'main cable; creative oxygen and nitrogen canisters feed the vents through an air mixer, and the scrubbers drain '
@@ -74,8 +84,8 @@ def directed(path, direction):
     return "%s{\n\tdir = %d\n\t}" % (path, direction)
 
 
-def port(direction):
-    return directed("/obj/machinery/atmospherics/components/unary/portables_connector/visible", direction)
+def port(direction, layer4=False):
+    return directed("/obj/machinery/atmospherics/components/unary/portables_connector/visible" + ("/layer4" if layer4 else ""), direction)
 
 
 def vent(direction):
@@ -83,7 +93,7 @@ def vent(direction):
 
 
 def scrubber(direction):
-    return directed("/obj/machinery/atmospherics/components/unary/vent_scrubber/on", direction)
+    return directed("/obj/machinery/atmospherics/components/unary/vent_scrubber/on/layer4", direction)
 
 
 def floor_origin(size):
@@ -125,7 +135,7 @@ def layout(size):
             if u in (0, 8) or v in (1, 7):
                 put(u, v, turf=ROOM_WALL)
     # Door south onto the main cable; the room's APC is fed through it.
-    put(4, 1, DOOR, CABLE, turf=FLOOR)
+    put(4, 1, DOOR, CABLE, turf=CATWALK)
     put(4, 2, CABLE)
     put(5, 2, APC, CABLE)
     put(6, 1, PLAQUE)
@@ -145,8 +155,15 @@ def layout(size):
         room(a, 3, SCRUBBERS)
     room(3, 4, scrubber(SOUTH))
     room(5, 4, scrubber(SOUTH))
-    room(6, 3, port(WEST), VOID_CANISTER)
+    room(6, 3, port(WEST, layer4=True), VOID_CANISTER)
     room(0, 4, AIR_ALARM)
+
+    # Both networks leave through the door (u 4) over the cable tiles v 2, 1 and 0: down from the
+    # supply line (v 3) and the scrubber line (v 5).
+    room(3, 0, SUPPLY, SCRUBBERS)
+    room(3, 1, SCRUBBERS)
+    room(3, 2, SCRUBBERS)
+    put(4, 1, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
 
     # Spawn pad: 5x5 dark floor centred on the spine, v 2..6.
     centre = (middle, 4)
@@ -160,7 +177,42 @@ def layout(size):
                 put(*position, LATEJOIN)
             elif abs(du) in (0, 2) and abs(dv) in (0, 2):
                 put(*position, ASSISTANT)
+    distribution(tiles, put, size)
     return tiles
+
+
+def distribution(tiles, put, size):
+    """Pipes along the cable and the wall ring, and the vents and scrubbers beside the ring."""
+    middle = size // 2
+    last = size - 1
+    route = [(u, 0) for u in range(4, size)]                    # south edge: the main cable's run
+    route += [(middle, v) for v in range(1, size)]              # the middle column: the cable's spine
+    route += [(last, v) for v in range(1, size)]                # east column
+    route += [(u, last) for u in range(0, last)]                # north row
+    route += [(0, v) for v in range(8, last)]                   # west column above the utility room
+    seen = set()
+    for u, v in route:
+        if (u, v) in seen:
+            continue
+        seen.add((u, v))
+        if tiles[(u, v)][0] == FLOOR:
+            tiles[(u, v)][0] = CATWALK
+        put(u, v, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
+
+    # Devices: one tile inside the ring, facing the ring pipe. Per side the free spots are
+    # picked evenly, alternating vent and scrubber, so every side has both.
+    sides = {
+        "south": ([(u, 1) for u in range(14, size - 3) if u != middle], SOUTH),
+        "east": ([(last - 1, v) for v in range(4, size - 3)], EAST),
+        "north": ([(u, last - 1) for u in range(3, size - 3) if u != middle], NORTH),
+        "west": ([(1, v) for v in range(10, size - 3)], WEST),
+    }
+    count = max(4, size // 12 // 2 * 2)  # an even number per side: S 4, M 8, L 16
+    for name, (spots, facing) in sides.items():
+        free = [p for p in spots if not tiles[p][1] and tiles[p][0] == FLOOR]
+        for index in range(count):
+            spot = free[(2 * index + 1) * len(free) // (2 * count)]
+            put(*spot, vent(facing) if index % 2 == 0 else scrubber(facing))
 
 
 def tile_text(turf, objects, area):

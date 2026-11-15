@@ -140,7 +140,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 
 /datum/action/babylon_creative
 	name = "Creative"
-	desc = "Open the Creative panel: godmode, noclip, spawning, teleporting, events and tools."
+	desc = "Open the Creative panel: godmode, noclip, X-ray, fullbright, spawning, teleporting, events and tools."
 	button_icon = 'modular_babylon/icons/babylon_creative.dmi'
 	button_icon_state = "creative"
 	show_to_observers = FALSE
@@ -157,7 +157,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 /client/proc/babylon_creative_panel()
 	set name = "Creative panel"
 	set category = "Babylon"
-	set desc = "Godmode, noclip, spawning, teleporting, events and tools for this creative world."
+	set desc = "Godmode, noclip, X-ray, fullbright, spawning, teleporting, events and tools for this creative world."
 	babylon_creative_open(mob)
 
 /datum/babylon_creative_panel
@@ -249,6 +249,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 	data["godmode"] = !!(body && babylon_creative_godmode(body))
 	data["godmode_elsewhere"] = !!(body && HAS_TRAIT(body, TRAIT_GODMODE) && !babylon_creative_godmode(body))
 	data["noclip"] = !!body?.babylon_creative_noclip
+	data["xray"] = !!(body && babylon_creative_xray(body))
+	data["fullbright"] = !!body?.babylon_creative_fullbright
 	data["dead"] = body?.stat == DEAD
 	data["health"] = body ? clamp(round(100 * body.health / max(1, body.maxHealth)), -100, 100) : 0
 	data["body"] = body ? body.name : ""
@@ -335,6 +337,14 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 			if(get_turf(body) != before)
 				return report("Noclip off. You were moved out of the wall to the nearest free spot.")
 			return report("Noclip off.")
+		if("xray")
+			var/enabled = babylon_creative_set_xray(body, !babylon_creative_xray(body))
+			babylon_creative_log(body, "turned X-ray [enabled ? "on" : "off"].")
+			return report(enabled ? "X-ray on: you see through walls." : "X-ray off.")
+		if("fullbright")
+			var/enabled = babylon_creative_set_fullbright(body, !body.babylon_creative_fullbright)
+			babylon_creative_log(body, "turned fullbright [enabled ? "on" : "off"].")
+			return report(enabled ? "Fullbright on: everything is lit." : "Fullbright off.")
 		if("heal")
 			if(babylon_creative_respawn_pending(body))
 				return report("Your body is being replaced; heal the new one once it arrives.", FALSE)

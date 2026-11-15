@@ -144,7 +144,7 @@ class CreativePlaneTest(unittest.TestCase):
                     (cx, cy, entry), = find(full, grid, path)
                     canisters[path.rsplit("/", 1)[1]] = entry
                     tile = keys[grid[(cx, cy)]]
-                    self.assertIn("/obj/machinery/atmospherics/components/unary/portables_connector/visible", tile)
+                    self.assertTrue(any(t.startswith("/obj/machinery/atmospherics/components/unary/portables_connector/visible") for t in tile))
                     self.assertIn(plane.UTILITY_AREA, tile)
                 self.assertIn("creative_gas = /datum/gas/oxygen", canisters["babylon_creative"])
                 self.assertIn("creative_gas = /datum/gas/nitrogen", canisters["nitrogen"])
@@ -153,33 +153,154 @@ class CreativePlaneTest(unittest.TestCase):
                     self.assertIn("creative_pressure = 4500", canisters[name])
                 self.assertIn('creative_mode = "void"', canisters["void"])
 
+    PIPING = "/obj/machinery/atmospherics/"
+
+    def atmos(self, size_id):
+        """Pipes {layer: {(x, y)}}, devices [(kind, x, y, dir, layer)] of a committed map."""
+        keys, full, grid = self.maps[size_id]
+        pipes = {3: set(), 4: set()}
+        devices = []
+        for position, key in grid.items():
+            for path in keys[key]:
+                if not path.startswith(self.PIPING):
+                    continue
+                layer = 4 if path.endswith("/layer4") else 3
+                if "/pipe/smart/" in path:
+                    pipes[layer].add(position)
+                else:
+                    devices.append((path, position, layer))
+        found = []
+        for path, position, layer in devices:
+            for entry in full[grid[position]]:
+                if entry.split("{", 1)[0].strip() == path:
+                    found.append((path, position[0], position[1], direction(entry), layer))
+        return pipes, sorted(found)
+
+    @staticmethod
+    def reach(pipes, start):
+        """The tiles of one pipe layer connected to `start` (adjacent smart pipes join)."""
+        reached, frontier = {start}, [start]
+        while frontier:
+            x, y = frontier.pop()
+            for dx, dy in STEP.values():
+                nxt = (x + dx, y + dy)
+                if nxt in pipes and nxt not in reached:
+                    reached.add(nxt)
+                    frontier.append(nxt)
+        return reached
+
     def test_atmos_connections(self):
         # Every unary device points at a pipe or device; the mixer gets N2 west, O2 south.
         keys, full, grid = self.maps["m"]
-        piping = "/obj/machinery/atmospherics/"
-
-        def piping_at(x, y):
-            return [t for t in keys[grid[(x, y)]] if t.startswith(piping)]
-
-        unary = []
-        for path in ("components/unary/portables_connector/visible", "components/unary/vent_pump/on",
-                     "components/unary/vent_scrubber/on"):
-            unary += find(full, grid, piping + path)
-        self.assertEqual(len(unary), 3 + 2 + 2)
-        for x, y, entry in unary:
-            step = STEP[direction(entry)]
-            self.assertTrue(piping_at(x + step[0], y + step[1]), entry)
-        (mx, my, mixer), = find(full, grid, piping + "components/trinary/mixer/airmix")
+        pipes, devices = self.atmos("m")
+        unary = [d for d in devices if "/unary/" in d[0]]
+        for path, x, y, facing, layer in unary:
+            step = STEP[facing]
+            target = (x + step[0], y + step[1])
+            self.assertTrue(target in pipes[layer] or any(t.startswith(self.PIPING) for t in keys[grid[target]]), (path, x, y))
+        (mx, my, mixer), = find(full, grid, self.PIPING + "components/trinary/mixer/airmix")
         self.assertEqual(direction(mixer), EAST)
         self.assertIn("/nitrogen", " ".join(keys[grid[(mx - 1, my)]]))
         self.assertTrue(any(t == "/obj/machinery/portable_atmospherics/canister/babylon_creative" for t in keys[grid[(mx, my - 1)]]))
         self.assertIn(plane.SUPPLY, keys[grid[(mx + 1, my)]])
-        # Supply and scrubber pipes never touch (smart pipes on one layer would join them).
-        supply = {(x, y) for x, y, _ in find(full, grid, plane.SUPPLY)}
-        scrubbers = {(x, y) for x, y, _ in find(full, grid, plane.SCRUBBERS)}
-        for x, y in supply:
-            for dx, dy in STEP.values():
-                self.assertNotIn((x + dx, y + dy), scrubbers)
+        # Supply (layer 3) and scrubber (layer 4) pipes are on different layers, so they never join,
+        # and every pipe tile of the network is a pipe of its own layer only.
+        self.assertTrue(pipes[3] and pipes[4])
+        self.assertEqual(plane.SUPPLY_LAYER, 3)
+        self.assertEqual(plane.SCRUBBER_LAYER, 4)
+        for path in (plane.SUPPLY, plane.SUPPLY_HIDDEN):
+            self.assertFalse(path.endswith("layer4"))
+        for path in (plane.SCRUBBERS, plane.SCRUBBERS_HIDDEN):
+            self.assertTrue(path.endswith("/layer4"))
+        for position, key in grid.items():
+            on = keys[key]
+            has_supply = plane.SUPPLY in on or plane.SUPPLY_HIDDEN in on
+            has_scrub = plane.SCRUBBERS in on or plane.SCRUBBERS_HIDDEN in on
+            self.assertEqual(position in pipes[3], has_supply)
+            self.assertEqual(position in pipes[4], has_scrub)
+
+    def test_air_distribution_reaches_every_vent_and_scrubber(self):
+        # Supply: the mixer's output pipe reaches every vent's pipe; scrubbers: every scrubber's pipe
+        # reaches the void canister's port. Nothing is left dangling.
+        for size_id, size in plane.SIZES.items():
+            with self.subTest(size_id):
+                keys, full, grid = self.maps[size_id]
+                pipes, devices = self.atmos(size_id)
+                (mx, my, _), = find(full, grid, self.PIPING + "components/trinary/mixer/airmix")
+                supply = self.reach(pipes[3], (mx + 1, my))
+                self.assertEqual(supply, pipes[3], "supply pipes not one network from the mixer")
+                (vx, vy, _), = find(full, grid, "/obj/machinery/portable_atmospherics/canister/babylon_creative/void")
+                scrubbers = self.reach(pipes[4], (vx - 1, vy))
+                self.assertEqual(scrubbers, pipes[4], "scrubber pipes not one network from the void port")
+                vents = [d for d in devices if d[0] == self.PIPING + "components/unary/vent_pump/on"]
+                drains = [d for d in devices if d[0].startswith(self.PIPING + "components/unary/vent_scrubber/on")]
+                self.assertGreaterEqual(len(vents), 2 + 4 * 2)
+                self.assertGreaterEqual(len(drains), 2 + 4 * 2)
+                for path, x, y, facing, layer in vents:
+                    self.assertEqual(layer, plane.SUPPLY_LAYER)
+                    step = STEP[facing]
+                    self.assertIn((x + step[0], y + step[1]), supply, (x, y))
+                for path, x, y, facing, layer in drains:
+                    self.assertEqual(layer, plane.SCRUBBER_LAYER)
+                    step = STEP[facing]
+                    self.assertIn((x + step[0], y + step[1]), scrubbers, (x, y))
+
+    def test_pipes_follow_the_cable_under_catwalk(self):
+        for size_id, size in plane.SIZES.items():
+            with self.subTest(size_id):
+                keys, full, grid = self.maps[size_id]
+                pipes, _ = self.atmos(size_id)
+                x0, y0 = plane.floor_origin(size)
+                local = lambda p: (p[0] - x0, p[1] - y0)  # noqa: E731
+                cables = {local((x, y)) for x, y, _ in find(full, grid, plane.CABLE)}
+                middle = size // 2
+                for layer in (3, 4):
+                    tiles = {local(p) for p in pipes[layer]}
+                    # Along the cable: the south edge from the door east, and the whole middle column.
+                    for u in range(4, size):
+                        self.assertIn((u, 0), tiles)
+                    for v in range(1, size):
+                        self.assertIn((middle, v), tiles)
+                    # Every pipe tile outside the utility room lies on catwalk floor (or under the
+                    # spawn pad, as the cable's spine does) and the shared ones are the cable's tiles.
+                    for position in pipes[layer]:
+                        u, v = local(position)
+                        if 0 <= u <= 8 and 1 <= v <= 7:
+                            continue
+                        turf = keys[grid[position]][-2]
+                        self.assertIn(turf, (plane.CATWALK, plane.PAD), (u, v))
+                        if (u, v) in cables and turf != plane.PAD:
+                            self.assertEqual(turf, plane.CATWALK)
+                    self.assertTrue((tiles & cables) >= {(u, 0) for u in range(4, size)})
+                # The cable's own catwalk tiles that the pipes share keep their cable.
+                for u, v in {local(p) for p in pipes[3]} & cables:
+                    self.assertIn(plane.CABLE, keys[grid[(x0 + u, y0 + v)]])
+
+    def test_vents_and_scrubbers_spread_near_the_outer_walls(self):
+        for size_id, size in plane.SIZES.items():
+            with self.subTest(size_id):
+                pipes, devices = self.atmos(size_id)
+                x0, y0 = plane.floor_origin(size)
+                sides = {"south": [], "north": [], "east": [], "west": []}
+                for path, x, y, facing, layer in devices:
+                    u, v = x - x0, y - y0
+                    if "/vent_pump/" not in path and "/vent_scrubber/" not in path:
+                        continue
+                    if 0 <= u <= 8 and 1 <= v <= 7:
+                        continue  # the utility room's own devices
+                    side = {SOUTH: "south", NORTH: "north", EAST: "east", WEST: "west"}[facing]
+                    # One tile inside the wall ring, facing it.
+                    wall_gap = {"south": v, "north": size - 1 - v, "west": u, "east": size - 1 - u}[side]
+                    self.assertEqual(wall_gap, 1, (path, u, v))
+                    sides[side].append((u if side in ("south", "north") else v, layer))
+                for side, entries in sides.items():
+                    self.assertGreaterEqual(len([1 for _, layer in entries if layer == 3]), 2, side)
+                    self.assertGreaterEqual(len([1 for _, layer in entries if layer == 4]), 2, side)
+                    positions = sorted(p for p, _ in entries)
+                    # Evenly spread: devices cover most of the side, without long gaps.
+                    self.assertGreaterEqual(positions[-1] - positions[0], size * 0.4, side)
+                    gaps = [b - a for a, b in zip(positions, positions[1:])]
+                    self.assertLessEqual(max(gaps), size * 0.5, side)
 
     def test_map_json(self):
         for size_id, size in plane.SIZES.items():

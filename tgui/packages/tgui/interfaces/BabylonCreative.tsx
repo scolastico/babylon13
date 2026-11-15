@@ -70,6 +70,8 @@ export type CreativeData = {
   godmode: boolean;
   godmode_elsewhere: boolean;
   noclip: boolean;
+  xray: boolean;
+  fullbright: boolean;
   dead: boolean;
   health: number;
   body: string;
@@ -176,10 +178,10 @@ export const BabylonCreative = () => {
   );
 };
 
-/** Godmode and noclip, reachable from every tab. */
+/** Godmode, noclip, X-ray and fullbright, reachable from every tab. */
 const QuickToggles = () => {
   const { act, data } = useBackend<CreativeData>();
-  const { godmode, godmode_elsewhere, noclip } = data;
+  const { godmode, godmode_elsewhere, noclip, xray, fullbright } = data;
   return (
     <>
       <Button
@@ -198,6 +200,18 @@ const QuickToggles = () => {
         selected={noclip}
         tooltip={`Noclip: ${noclip ? 'on' : 'off'} (click to toggle)`}
         onClick={() => act('noclip')}
+      />
+      <Button
+        icon="eye"
+        selected={xray}
+        tooltip={`X-ray: ${xray ? 'on' : 'off'} (click to toggle)`}
+        onClick={() => act('xray')}
+      />
+      <Button
+        icon="lightbulb"
+        selected={fullbright}
+        tooltip={`Fullbright: ${fullbright ? 'on' : 'off'} (click to toggle)`}
+        onClick={() => act('fullbright')}
       />
     </>
   );
@@ -263,6 +277,8 @@ function SelfTab() {
     godmode,
     godmode_elsewhere,
     noclip,
+    xray,
+    fullbright,
     dead,
     health,
     body,
@@ -317,6 +333,20 @@ function SelfTab() {
             enabled={noclip}
             description="Move through walls, machines and anything else. Turning it off moves you out of any wall to the nearest free spot."
             onToggle={() => act('noclip')}
+          />
+          <PowerToggle
+            icon="eye"
+            name="X-ray"
+            enabled={xray}
+            description="See through walls: turfs, objects and creatures show through anything."
+            onToggle={() => act('xray')}
+          />
+          <PowerToggle
+            icon="lightbulb"
+            name="Fullbright"
+            enabled={fullbright}
+            description="Everything is fully lit for you, however dark the place."
+            onToggle={() => act('fullbright')}
           />
         </Stack>
       </Section>

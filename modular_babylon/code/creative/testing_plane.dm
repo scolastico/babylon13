@@ -118,15 +118,33 @@
 	var/list/mixers = SSmachines.get_machines_by_type(/obj/machinery/atmospherics/components/trinary/mixer/airmix)
 	var/obj/machinery/atmospherics/components/trinary/mixer/airmix/mixer = length(mixers) == 1 ? mixers[1] : null
 	result["air_mixer_connected"] = !!mixer && mixer.on && !!mixer.nodes[1] && !!mixer.nodes[2] && !!mixer.nodes[3]
+	// Two vents and two scrubbers in the atmos room, and (spec #13) a spread of them in the main
+	// room, every one connected to its pipe.
 	var/vents = 0
-	for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
-		if(babylon_on_plane(vent) && vent.on && vent.nodes[1])
-			vents++
 	var/scrubbers = 0
+	var/room_vents = 0
+	var/room_scrubbers = 0
+	var/connected_all = TRUE
+	for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
+		if(!babylon_on_plane(vent))
+			continue
+		if(!vent.on || !vent.nodes[1])
+			connected_all = FALSE
+			continue
+		vents++
+		if(istype(get_area(vent), /area/station/babylon/creative_plane/utilities))
+			room_vents++
 	for(var/obj/machinery/atmospherics/components/unary/vent_scrubber/scrubber as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_scrubber))
-		if(babylon_on_plane(scrubber) && scrubber.on && scrubber.nodes[1])
-			scrubbers++
-	result["two_vents_two_scrubbers"] = vents == 2 && scrubbers == 2
+		if(!babylon_on_plane(scrubber))
+			continue
+		if(!scrubber.on || !scrubber.nodes[1])
+			connected_all = FALSE
+			continue
+		scrubbers++
+		if(istype(get_area(scrubber), /area/station/babylon/creative_plane/utilities))
+			room_scrubbers++
+	result["two_vents_two_scrubbers"] = room_vents == 2 && room_scrubbers == 2
+	result["main_room_vents_and_scrubbers"] = connected_all && vents - room_vents >= 8 && scrubbers - room_scrubbers >= 8
 	// The canisters reconnect to their ports by themselves (mapload, restored saves), but a
 	// player's wrench sticks. Exercised on the void canister, then restored.
 	var/obj/machinery/portable_atmospherics/canister/babylon_creative/void
@@ -212,15 +230,39 @@
 		result["smes_stays_full"] = capacity > 0 && smes.total_charge() >= capacity * 0.99
 		var/distro_pressure = 0
 		var/oxygen_share = 0
+		// Spec #13: the main room's vents (outside the atmos room) get the mixer's air through
+		// the long supply run, not only the vents beside the mixer.
+		var/main_vents = 0
+		var/main_vents_supplied = TRUE
 		for(var/obj/machinery/atmospherics/components/unary/vent_pump/vent as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_pump))
 			if(babylon_on_plane(vent))
 				var/datum/gas_mixture/pipe_air = vent.airs[1]
 				distro_pressure = max(distro_pressure, pipe_air.return_pressure())
 				var/total = pipe_air.total_moles()
 				oxygen_share = total ? (pipe_air.moles[/datum/gas/oxygen] || 0) / total : 0
+				if(!istype(get_area(vent), /area/station/babylon/creative_plane/utilities))
+					main_vents++
+					if(pipe_air.return_pressure() < 100 || oxygen_share < 0.18 || oxygen_share > 0.24)
+						main_vents_supplied = FALSE
+		result["main_room_vents_supplied"] = main_vents >= 8 && main_vents_supplied
 		result["distro_pressurised"] = distro_pressure > 1000
 		// The air mixer's 21 % oxygen / 79 % nitrogen.
 		result["distro_is_air"] = oxygen_share > 0.18 && oxygen_share < 0.24
+	// Spec #13: every main-room scrubber is on the one pipeline that ends at the void canister's port,
+	// so what they take in really drains.
+	var/obj/machinery/portable_atmospherics/canister/babylon_creative/void
+	for(var/obj/machinery/portable_atmospherics/canister/babylon_creative/canister as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/portable_atmospherics/canister/babylon_creative))
+		if(babylon_on_plane(canister) && canister.creative_mode == "void")
+			void = canister
+	var/datum/pipeline/drain = void?.connected_port?.parents?[1]
+	var/main_scrubbers = 0
+	var/main_scrubbers_drain = !!drain
+	for(var/obj/machinery/atmospherics/components/unary/vent_scrubber/scrubber as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/atmospherics/components/unary/vent_scrubber))
+		if(babylon_on_plane(scrubber) && !istype(get_area(scrubber), /area/station/babylon/creative_plane/utilities))
+			main_scrubbers++
+			if(scrubber.parents[1] != drain)
+				main_scrubbers_drain = FALSE
+	result["main_room_scrubbers_drain_to_void"] = main_scrubbers >= 8 && main_scrubbers_drain
 	var/turf/open/middle = get_turf(respawn_turf)
 	var/datum/gas_mixture/air = middle?.return_air()
 	result["still_breathable"] = !!air && air.return_pressure() > 90 && air.return_pressure() < 120
