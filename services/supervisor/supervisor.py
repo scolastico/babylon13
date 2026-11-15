@@ -546,6 +546,8 @@ class Supervisor:
         self.stop_workers = set()
         # Runs that looked stuck in "stopping" on the previous tick (see tick()).
         self.stuck_suspects = set()
+        # Runs whose exit was handled (on_run_exited), so a second tick that sees it does nothing.
+        self.exited_runs = set()
         self.next_cleanup = 0
         # Set by the Discord bot: membership(discord_id) -> True/False/None (unknown),
         # from its member cache only, because it is called while holding the lock.
@@ -1954,6 +1956,11 @@ class Supervisor:
         instance (play or edit) is deleted with its files: it only lives while it runs. Anything that
         must happen once a world instance has ended belongs here."""
         with self.lock:
+            # Two ticks can see the same exit (the shutdown loop ticks beside the monitor thread):
+            # only the first one handles it.
+            if run["id"] in self.exited_runs:
+                return
+            self.exited_runs.add(run["id"])
             name = self.describe(run["world"])  # One connection for every thread: read under the lock.
         log("%s %s (port %s)" % (name, "stopped" if run["state"] == "stopping" else "exited", run["port"]))
         with self.lock, self.db:

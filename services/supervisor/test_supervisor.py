@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from supervisor import Denied, Supervisor
 
@@ -113,6 +114,22 @@ class Policies(unittest.TestCase):
         run = self.start(w, "friend")
         token = self.ticket(w, "admin")
         self.assertEqual(self.s.redeem(run["id"], run["secret"], token, "admin")["role"], "admin")
+
+    def test_an_exit_seen_by_two_ticks_is_handled_once(self):
+        # The container's shutdown loop ticks beside the monitor thread: both can see one exit.
+        w = self.create()
+        run = self.start(w)
+        del self.driver.runs[run["id"]]
+        logged = []
+        maintained = []
+        real = self.s.maintain_checkpoints
+        with patch("supervisor.log", logged.append), \
+                patch.object(self.s, "maintain_checkpoints", lambda world: maintained.append(world) or real(world)):
+            self.s.on_run_exited(dict(run))
+            self.s.on_run_exited(dict(run))
+        self.assertEqual(len([line for line in logged if "(port" in line]), 1, logged)
+        self.assertEqual(maintained, [w])
+        self.assertIsNone(self.s.row("SELECT * FROM runs WHERE id=?", (run["id"],)))
 
     def test_showcase_guest_visits_while_members_and_admins_play(self):
         world = self.s.dispatch("owner", "create", dict(name="Showcase", visibility="showcase", max_players=2))["id"]
