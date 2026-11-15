@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import time
 
 from constants import TUTORIAL_SNAPSHOT_MARKER
 from world_storage import TUTORIAL_ID_RE
@@ -208,6 +209,16 @@ class TutorialStore:
         if purge:
             shutil.rmtree(trash, ignore_errors=True)
 
+    def quarantine(self, status, tid):
+        """Moves a tutorial out of the store into orphaned/<id>-<status>-<stamp>, never deleting it:
+        a tutorial without a database row may be a lost or restored database, not a leftover.
+        An administrator can move it back (with its row) or delete it. Returns the new path."""
+        source = self.directory(status, tid)
+        target = walk(self.status_root("orphaned"), "%s-%s-%s-%s" % (tid, status, time.strftime("%Y%m%d-%H%M%S"),
+                                                                     secrets.token_hex(2)))
+        source.rename(target)
+        return target
+
     def clean_trash(self):
         trash = self.root / "deleted"
         if trash.is_dir() and not is_link(trash):
@@ -220,9 +231,10 @@ class TutorialStore:
 
 def reconcile_store(store, known_ids):
     """Startup repair of what an interrupted supervisor left in the tutorial store (the copies run
-    outside its lock): staging copies are deleted, tutorials without a database row (known_ids:
-    every row's id) go to the trash, and an interrupted save-back swap is undone. Returns what it
-    did, as (action, path) pairs for the log."""
+    outside its lock): staging copies are deleted, and an interrupted save-back swap is undone.
+    Tutorials without a database row (known_ids: every row's id) are never deleted: a lost, empty
+    or older database would otherwise wipe every tutorial. They are moved to orphaned/ instead
+    (TutorialStore.quarantine). Returns what it did, as (action, path) pairs for the log."""
     done = []
     for status in STATUSES:
         root = store.root / status
@@ -238,8 +250,9 @@ def reconcile_store(store, known_ids):
             if not TUTORIAL_ID_RE.fullmatch(entry.name) or not entry.is_dir():
                 continue
             if entry.name not in known_ids:
-                store.remove(status, entry.name, purge=False)
-                done.append(("moved a tutorial without a database row to the trash", entry))
+                target = store.quarantine(status, entry.name)
+                done.append(("WARNING: no database row for this tutorial (lost or restored database?); "
+                             "moved it, undeleted, to " + str(target), entry))
                 continue
             save, staging, old = entry / "save", entry / "save.staging", entry / "save.old"
             if old.is_dir() and not is_link(old) and not save.exists():

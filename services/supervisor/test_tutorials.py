@@ -184,23 +184,49 @@ class Submit(TutorialFixture):
         self.assertEqual(self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")["ok"], True)
 
     def test_startup_repairs_the_tutorial_store(self):
-        # An interrupted supervisor leaves staging copies, tutorials without a row and a half-swapped
-        # save back; the next start cleans them up.
+        # An interrupted supervisor leaves staging copies and a half-swapped save back; the next
+        # start cleans them up. A tutorial without a row is never deleted (the database may have
+        # been lost or restored): it is moved, whole, to orphaned/ and logged.
         world, run = self.creative_run()
         tid = self.submit(run)
         pending = self.data / "tutorials/pending"
         (pending / ".abc.staging/save").mkdir(parents=True)
         orphan = pending / ("f" * 32)
         (orphan / "save").mkdir(parents=True)
+        (orphan / "save/map.dmm").write_text("player work")
         (pending / tid / "save").rename(pending / tid / "save.old")
         (pending / tid / "save.staging").mkdir()
-        restarted = Supervisor(self.s.config, test_supervisor.FakeDriver(), lambda: self.now)
+        with unittest.mock.patch("supervisor.log") as log:
+            restarted = Supervisor(self.s.config, test_supervisor.FakeDriver(), lambda: self.now)
         self.addCleanup(restarted.db.close)
         self.assertFalse((pending / ".abc.staging").exists())
         self.assertFalse(orphan.exists())
-        self.assertFalse(any((self.data / "tutorials/deleted").iterdir()))
+        quarantined = list((self.data / "tutorials/orphaned").iterdir())
+        self.assertEqual(len(quarantined), 1)
+        self.assertTrue(quarantined[0].name.startswith("f" * 32 + "-pending-"))
+        self.assertEqual((quarantined[0] / "save/map.dmm").read_text(), "player work")
+        self.assertTrue(any("no database row" in str(call) and str(quarantined[0]) in str(call)
+                            for call in log.call_args_list))
+        self.assertFalse((self.data / "tutorials/deleted").exists() and any((self.data / "tutorials/deleted").iterdir()))
         self.assertTrue((pending / tid / "save/map.dmm").is_file())
         self.assertFalse((pending / tid / "save.old").exists() or (pending / tid / "save.staging").exists())
+
+    def test_startup_with_a_lost_database_keeps_every_tutorial(self):
+        # The database is gone (a fresh volume, a bad mount): every tutorial on disk lacks its row.
+        # All of them are quarantined, none deleted; a published one included.
+        tid = self.published()
+        world, run = self.creative_run("other")
+        pending_tid = self.submit(run, "other")
+        self.s.db.close()
+        (self.data / "supervisor.sqlite3").unlink()
+        for suffix in ("-wal", "-shm"):
+            (self.data / ("supervisor.sqlite3" + suffix)).unlink(missing_ok=True)
+        restarted = Supervisor(self.s.config, test_supervisor.FakeDriver(), lambda: self.now)
+        self.s = restarted
+        names = sorted(p.name for p in (self.data / "tutorials/orphaned").iterdir())
+        self.assertEqual([n.split("-")[0] for n in names], sorted([tid, pending_tid]))
+        for name in names:
+            self.assertTrue((self.data / "tutorials/orphaned" / name / "save/map.dmm").is_file())
 
     def test_submit_check_and_actor_must_own_the_world(self):
         world, run = self.creative_run()
@@ -514,6 +540,7 @@ class Instances(TutorialFixture):
         self.s.db.commit()
         self.s.db.close()
         self.s = Supervisor(self.config, self.driver, lambda: self.now)
+        self.s.background_launches = False
         self.assertIsNone(self.instance(world))
         self.s.tick()
         self.assertIsNone(self.s.row("SELECT * FROM world_deletions"))
