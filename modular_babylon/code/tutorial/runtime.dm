@@ -164,6 +164,13 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/list/gate_stops = list()
 	/// Every stop, in order, for the Test run log.
 	var/list/gate_log = list()
+	/// Gates that started listening since the last check (gates.dm settle_pending_gates()).
+	var/list/gate_pending = list()
+	/// Gate updates made in the current wave, and whether the wave ran out of them.
+	var/gate_wave_updates = 0
+	var/gate_wave_stopped = FALSE
+	/// Level trigger (zone, holding, condition) feeding a listening gate => its sampled state.
+	var/list/level_states = list()
 
 /datum/babylon_tutorial_run/New(test_run, mob/living/preview_for)
 	src.test_run = test_run
@@ -176,7 +183,8 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	for(var/obj/babylon_tutorial/trigger/trigger as anything in babylon_tutorial_objects_of("trigger"))
 		if(trigger.listens_at_start())
 			enabled[trigger] = world.time
-	settle_gates()
+			if(istype(trigger, /obj/babylon_tutorial/trigger/gate))
+				gate_started(trigger)
 
 /datum/babylon_tutorial_run/Destroy()
 	GLOB.babylon_tutorial_runs -= src
@@ -199,8 +207,13 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	gate_states.Cut()
 	gate_values.Cut()
 	gate_wave.Cut()
+	if(length(gate_stops))
+		// The stopped gates' issues ("Test run: loop stopped ...") go away.
+		babylon_tutorial_changed()
 	gate_stops.Cut()
 	gate_log.Cut()
+	gate_pending.Cut()
+	level_states.Cut()
 	preview_mob = null
 	if(complete_screen)
 		SStgui.close_uis(complete_screen)
@@ -217,6 +230,8 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	gate_states -= object
 	gate_values -= object
 	gate_stops -= object
+	gate_pending -= object
+	level_states -= object
 	if(current_trigger == object)
 		current_trigger = null
 	for(var/image/picture as anything in images)
@@ -259,15 +274,18 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	// A trigger that fires only once stays done: loops of steps cannot revive it.
 	if(enable && fired[trigger] && trigger.setting("once"))
 		return
+	var/is_gate = istype(trigger, /obj/babylon_tutorial/trigger/gate)
 	if(enable)
+		// A gate that starts listening is evaluated at the next check (gates.dm).
+		if(is_gate && !is_enabled(trigger))
+			gate_started(trigger)
 		enabled[trigger] = world.time
 		// Its condition counts from now: a zone a player already stands in fires.
 		last_state -= trigger
-		// A gate takes the state its inputs give it now, without running actions.
-		if(istype(trigger, /obj/babylon_tutorial/trigger/gate))
-			settle_gates(trigger)
 	else
 		enabled -= trigger
+		if(is_gate)
+			gate_stopped(trigger)
 	hits -= trigger
 
 /// A player's event for a listening trigger (a press, a use, a phrase).
@@ -288,6 +306,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	continue_pointing()
 	prune_timers()
 	sync_objective()
+	if(completed)
+		return
+	// Gates first: live inputs are sampled, gates that started listening are evaluated.
+	sample_levels()
+	settle_pending_gates()
 	if(completed)
 		return
 	for(var/obj/babylon_tutorial/trigger/trigger as anything in enabled.Copy())
@@ -315,7 +338,10 @@ SUBSYSTEM_DEF(babylon_tutorial)
 /datum/babylon_tutorial_run/proc/fire(obj/babylon_tutorial/trigger/trigger)
 	mark_fired(trigger)
 	run_actions(trigger, trigger.setting("actions"))
-	notify_gates(trigger, TRUE)
+	// A level trigger (zone ...) reaches its gates through sample_levels(), live, whether or not
+	// it listens itself: notifying here too would count its firing twice.
+	if(!trigger.is_level())
+		notify_gates(trigger, TRUE)
 
 /// Counts a firing: a once-trigger stops listening, what waited for it ends and the triggers
 /// "After" it start listening.

@@ -220,6 +220,7 @@ var/global/babylon_byond_1686_slot_pad_station_test_5
 var/global/babylon_byond_1686_slot_pad_station_test_6
 var/global/babylon_byond_1686_slot_pad_station_test_7
 var/global/babylon_byond_1686_slot_pad_station_test_8
+var/global/babylon_byond_1686_slot_pad_station_test_9
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 #endif

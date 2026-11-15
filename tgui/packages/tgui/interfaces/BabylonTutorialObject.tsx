@@ -48,6 +48,8 @@ export type Field = {
   base?: string;
   required?: boolean;
   placeholder?: string;
+  /** Gate inputs: each trigger is marked live, latched or gate. */
+  input_modes?: boolean;
 };
 
 export type IdEntry = {
@@ -56,6 +58,8 @@ export type IdEntry = {
   kind_name: string;
   category: string;
   summary?: string;
+  /** How a trigger counts as a gate input. */
+  input_mode?: 'live' | 'latched' | 'gate';
 };
 
 export type Effect = {
@@ -417,6 +421,18 @@ export const idChoices = (field: Field, ids: IdEntry[]) =>
 export const describeId = (entry: IdEntry) =>
   `${entry.id} — ${entry.kind_name}${entry.summary ? `: ${entry.summary}` : ''}`;
 
+const INPUT_MODES: Record<string, string> = {
+  live: 'live: true while it holds',
+  latched: 'latched: true once it fired',
+  gate: "gate: the gate's state",
+};
+
+/** A trigger as a gate input: described, with how it counts (live, latched, gate). */
+export const describeInput = (entry: IdEntry) =>
+  entry.input_mode
+    ? `${describeId(entry)} [${INPUT_MODES[entry.input_mode]}]`
+    : describeId(entry);
+
 const IdPicker = (props: {
   field: Field;
   value: string;
@@ -481,6 +497,7 @@ const IdListInput = (props: {
     (entry) => !value.includes(entry.id),
   );
   const offersNew = !!props.field.filter?.includes('action');
+  const describe = props.field.input_modes ? describeInput : describeId;
   const move = (index: number, delta: number) => {
     const next = [...value];
     const [entry] = next.splice(index, 1);
@@ -504,7 +521,7 @@ const IdListInput = (props: {
                 style={{ whiteSpace: 'normal' }}
                 onClick={() => act('open', { id })}
               >
-                {describeId(byId[id])}
+                {describe(byId[id])}
               </Button>
             ) : (
               <Box color="average">{id} (missing)</Box>
@@ -547,7 +564,7 @@ const IdListInput = (props: {
               }))
             : []),
           ...choices.map((entry) => ({
-            displayText: describeId(entry),
+            displayText: describe(entry),
             value: entry.id,
           })),
         ]}
@@ -740,13 +757,13 @@ const GateInputsInput = (props: {
                 color={byId[input.id] || !input.id ? undefined : 'average'}
                 displayText={
                   byId[input.id]
-                    ? describeId(byId[input.id])
+                    ? describeInput(byId[input.id])
                     : input.id
                       ? `${input.id} (missing)`
                       : 'Choose a trigger...'
                 }
                 options={triggers.map((entry) => ({
-                  displayText: describeId(entry),
+                  displayText: describeInput(entry),
                   value: entry.id,
                 }))}
                 onSelected={(id: string) => update(index, { id })}
@@ -826,7 +843,7 @@ const GateInputsInput = (props: {
         placeholder="Add an input..."
         disabled={!triggers.length}
         options={triggers.map((entry) => ({
-          displayText: describeId(entry),
+          displayText: describeInput(entry),
           value: entry.id,
         }))}
         onSelected={(id: string) =>

@@ -650,17 +650,23 @@ tiles.
 **inputs**, picked by id). A gate is true or false. When it becomes true it fires like a
 trigger (**On true** actions; triggers "After" it start listening; gates fed by it see it
 fire), when it becomes false its **On false** actions run, and **On change** runs on every
-change. A gate only updates while it listens, and when it starts listening it takes the
-state its inputs give it without running actions.
+change. A gate only updates while it listens: firings before that (also the one that makes
+it start listening) are not counted. When it starts listening it is evaluated at the next
+check, once: if it holds, it becomes true, runs On true and fires (like a zone that starts
+listening with a player already inside); if not, it runs On false. On change does not run for
+that first evaluation. A gate switched off by a Disable action turns
+false without running its own actions; the gates it feeds see it become false.
 
 | Gate | True when |
 | --- | --- |
-| Logic gate | AND: all inputs, OR: any input, XOR: exactly one input, NOT: its one input is not true. A trigger input counts as true once it fired in this run; a gate input counts with its own state. |
-| Number gate | a condition on its number holds (equals, at least, at most, between). The number starts at a **Start value** for every run; each input has an operation that runs every time that input fires: count up, count down, set to, add, subtract, multiply by (a constant or another number gate's number at that moment) or reset to the start value. **On change** runs whenever the number changes. "N of M" is a number gate that counts up. |
+| Logic gate | AND: all inputs, OR: any input, XOR: exactly one input, NOT: its one input is not true. Zone, holding and condition inputs are **live**: true while their condition holds (checked every second, also when that trigger itself no longer listens). Button, say, used on, timer and start inputs are **latched**: true once they fired in this run. A gate input counts with its own state. The input pickers mark each input live, latched or gate. |
+| Number gate | a condition on its number holds (equals, at least, at most, between). The number starts at a **Start value** for every run; each input has an operation that runs every time that input fires: count up, count down, set to, add, subtract, multiply by (a constant or another number gate's number at that moment) or reset to the start value. A
+live input "fires" each time its condition becomes true (each entry into a zone). **On change** runs whenever the number changes. "N of M" is a number gate that counts up. |
 
 Gates update at once, in one wave: a trigger fires, the gates it feeds update, the gates
 those feed update, and so on. A gate that is already updating in the same wave (a loop,
-A -> B -> A) or a chain longer than 16 gates stops the wave at that gate; the Test run
+A -> B -> A), a chain longer than 16 gates or more than 256 gate updates from one firing
+stops the wave at that gate; the Test run
 tab lists the stop and the gate's checks name it. The checks also warn while building when
 gates feed each other in a loop. Stopping or restarting a test run resets every gate's
 state and number.

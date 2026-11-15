@@ -400,8 +400,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 /// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist,
 /// gateinputs (a number gate's inputs, gates.dm), zone or effects. options: list(list("value", "label")). filter: categories an id may refer to. when:
 /// list(other key = list(values)) — the field applies only while that setting has one of them.
-/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null)
+/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null, input_modes = FALSE)
 	var/list/field = list("key" = key, "label" = label, "type" = type, "default" = default_value, "help" = help)
+	if(input_modes)
+		// Gate inputs: the window marks each trigger live, latched or gate.
+		field["input_modes"] = TRUE
 	if(is_name)
 		field["name"] = TRUE
 	if(max_tiles)
@@ -775,6 +778,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	if(key == "starts" && isnull(settings()["starts"]) && settings()["enabled_at_start"] == 0)
 		return "manual"
 	return ..()
+
+/// A level trigger (zone, holding, condition) has a condition that holds or not at any moment:
+/// as a gate input it is live. Event triggers (start, button, say, used on, timer) are latched.
+/// The same split as edge_triggered: level kinds fire when their condition becomes true.
+/obj/babylon_tutorial/trigger/proc/is_level()
+	return edge_triggered
 
 /// Whether the trigger listens as soon as a run starts.
 /obj/babylon_tutorial/trigger/proc/listens_at_start()

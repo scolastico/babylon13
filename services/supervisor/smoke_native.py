@@ -14,6 +14,13 @@ from smoke_stability import restore_cycles
 from supervisor import Driver, Supervisor, serve
 
 
+def dm_entries(packed):
+    """A DM test's packed result as a dict. The debug bridge packs at most a limited number of
+    entries (testing_common.dm pack_value); a cut-off result must fail, never pass silently."""
+    assert packed["length"] == len(packed["entries"]), ("result cut off", packed["length"], len(packed["entries"]))
+    return {entry["entry"]: entry["value"] for entry in packed["entries"]}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dreamdaemon", required=True)
@@ -123,7 +130,7 @@ def main():
             assert not current(), "Stability child did not exit"
         def census(run):
             packed = call(run, "session", "test_companion_census")
-            return {entry["entry"]: entry["value"] for entry in packed["entries"]}
+            return dm_entries(packed)
         return restore_cycles(stable, start, stop_world, data, census=census)
 
     try:
@@ -138,77 +145,77 @@ def main():
         assert topic(run["port"], run["secret"], "status")["players"] == []
         assert topic(run["port"], run["secret"], "announce", {"message": "Smoke restart notice"}).get("ok"), "announce failed"
         afk = call(run, "session", "test_afk_policy")
-        afk = {entry["entry"]: entry["value"] for entry in afk["entries"]}
+        afk = dm_entries(afk)
         assert afk and all(afk.values()), afk
         showcase = call(run, "session", "test_showcase_visitor")
-        showcase = {entry["entry"]: entry["value"] for entry in showcase["entries"]}
+        showcase = dm_entries(showcase)
         assert showcase and all(showcase.values()), showcase
         experience = call(run, "session", "test_builder_experience")
-        experience = {entry["entry"]: entry["value"] for entry in experience["entries"]}
+        experience = dm_entries(experience)
         for key in ("replacement_items", "replacement_storage", "replacement_head", "station_confinement", "physical_cafe_turfs"):
             assert experience[key] == 0, experience
         for key in ("spawners_hidden", "minigames_hidden", "dnr_present", "reenter_present", "return_before_destruct"):
             assert experience[key], experience
         assert experience["lore_papers"] == expected_lore, experience
         sfw = call(run, "session", "test_sfw_content")
-        sfw = {entry["entry"]: entry["value"] for entry in sfw["entries"]}
+        sfw = dm_entries(sfw)
         assert sfw and all(sfw.values()), sfw
         moderation = call(run, "session", "test_moderation")
-        moderation = {entry["entry"]: entry["value"] for entry in moderation["entries"]}
+        moderation = dm_entries(moderation)
         assert moderation and all(moderation.values()), moderation
         research = call(run, "session", "test_research")
-        research = {entry["entry"]: entry["value"] for entry in research["entries"]}
+        research = dm_entries(research)
         assert research and all(research.values()), research
         closets = call(run, "session", "test_closet_contents")
-        closets = {entry["entry"]: entry["value"] for entry in closets["entries"]}
+        closets = dm_entries(closets)
         assert closets and all(closets.values()), closets
         controls = call(run, "session", "test_save_controls")
-        controls = {entry["entry"]: entry["value"] for entry in controls["entries"]}
+        controls = dm_entries(controls)
         assert controls and all(controls.values()), controls
         unsaved = call(run, "session", "test_non_persistent_never_saves")
-        unsaved = {entry["entry"]: entry["value"] for entry in unsaved["entries"]}
+        unsaved = dm_entries(unsaved)
         assert unsaved and all(unsaved.values()), unsaved
         frames = call(run, "session", "test_machine_frames")
-        frames = {entry["entry"]: entry["value"] for entry in frames["entries"]}
+        frames = dm_entries(frames)
         assert frames and all(frames.values()), frames
         reflectors = call(run, "session", "test_reflectors")
-        reflectors = {entry["entry"]: entry["value"] for entry in reflectors["entries"]}
+        reflectors = dm_entries(reflectors)
         assert reflectors and all(reflectors.values()), reflectors
         music = call(run, "session", "test_music_folders")
-        music = {entry["entry"]: entry["value"] for entry in music["entries"]}
+        music = dm_entries(music)
         assert music and all(music.values()), music
         loops = call(run, "session", "test_music_loops")
-        loops = {entry["entry"]: entry["value"] for entry in loops["entries"]}
+        loops = dm_entries(loops)
         assert loops and all(loops.values()), loops
         joining = call(run, "session", "test_join_loading")
-        joining = {entry["entry"]: entry["value"] for entry in joining["entries"]}
+        joining = dm_entries(joining)
         assert joining and all(joining.values()), joining
         silicons = call(run, "session", "test_no_unplayable_silicons")
-        silicons = {entry["entry"]: entry["value"] for entry in silicons["entries"]}
+        silicons = dm_entries(silicons)
         assert silicons and all(silicons.values()), silicons
         played = call(run, "session", "test_play_time")
-        played = {entry["entry"]: entry["value"] for entry in played["entries"]}
+        played = dm_entries(played)
         assert played and all(played.values()), played
         machines = call(run, "session", "test_creative_machines")
-        machines = {entry["entry"]: entry["value"] for entry in machines["entries"]}
+        machines = dm_entries(machines)
         assert machines and all(machines.values()), machines
         creative = call(run, "session", "test_creative_panel_actions")
-        creative = {entry["entry"]: entry["value"] for entry in creative["entries"]}
+        creative = dm_entries(creative)
         assert creative and all(creative.values()), creative
         atlas = call(run, "session", "test_atlas_frames")
-        atlas = {entry["entry"]: entry["value"] for entry in atlas["entries"]}
+        atlas = dm_entries(atlas)
         assert atlas and all(atlas.values()), atlas
         wrap = call(run, "session", "test_space_wrap")
-        wrap = {entry["entry"]: entry["value"] for entry in wrap["entries"]}
+        wrap = dm_entries(wrap)
         assert wrap and all(wrap.values()), wrap
         storyteller = call(run, "session", "test_no_storyteller")
-        storyteller = {entry["entry"]: entry["value"] for entry in storyteller["entries"]}
+        storyteller = dm_entries(storyteller)
         assert storyteller and all(storyteller.values()), storyteller
         for proc in ("test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review", "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates",
                      "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
                      "test_area_tools_copy_settings"):
             values = call(run, "session", proc)
-            values = {entry["entry"]: entry["value"] for entry in values["entries"]}
+            values = dm_entries(values)
             assert values and all(values.values()), (proc, values)
         player = call(run, "session", "ensure_player", ["smokefriend"])
         friend_ref = player["ref"]
@@ -232,7 +239,7 @@ def main():
         assert not any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), "Ticket replay accepted"
         # Lights, cameras and alarms whose state the restored map's Initialize would decide anew.
         saved_state = call(run, "session", "test_saved_state_setup")
-        saved_state = {entry["entry"]: entry["value"] for entry in saved_state["entries"]}
+        saved_state = dm_entries(saved_state)
         assert saved_state and all(saved_state.values()), saved_state
         stop(world)
         saved = data / "worlds" / world / "data/babylon/saves"
@@ -243,7 +250,7 @@ def main():
         assert before["players"]["smokefriend"]["respawn_pending"]
         run = wait_ready(world)
         restored_state = call(run, "session", "test_saved_state_restored", [saved_state["state"]])
-        restored_state = {entry["entry"]: entry["value"] for entry in restored_state["entries"]}
+        restored_state = dm_entries(restored_state)
         assert restored_state and all(restored_state.values()), restored_state
         roster = debug(run, "inspect", dict(target="session", vars=["player_sessions"]))["vars"]["player_sessions"]
         assert roster["length"] == 2, roster
@@ -282,7 +289,7 @@ def main():
             address = api("join", dict(world=showcase_world, mode="player"), actor=actor)["address"]
             query = dict(action="redeem", actor=actor, ticket=address.split("babylon_ticket=")[1], mode="player")
             exported = call(showcase_run, "session", "test_supervisor_export", [json.dumps(query)])
-            fields = {entry["entry"]: entry["value"] for entry in exported["entries"]}
+            fields = dm_entries(exported)
             assert fields.get("ok") and fields.get("mode") == mode, fields
         stop(showcase_world)
         # Checkpoints written by the build before the station rework (a9c41016abe) still load:
@@ -309,7 +316,7 @@ def main():
                 time.sleep(2)
             restored = call(legacy_run, "session", "test_legacy_babylon_restore",
                             [version, "gas_compression", state["research"]["target"]])
-            restored = {entry["entry"]: entry["value"] for entry in restored["entries"]}
+            restored = dm_entries(restored)
             assert restored and all(restored.values()), ("legacy v%d" % version, restored)
             legacy["v%d" % version] = restored
             api("stop", {"world": legacy_world}, actor="fixtureowner")

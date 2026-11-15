@@ -231,6 +231,7 @@ const gateInputs: Field = {
   default: [],
   help: 'Each time an input fires, its operation changes the number.',
   filter: ['trigger'],
+  input_modes: true,
   options: [
     { value: 'up', label: 'Count up (+1)' },
     { value: 'add', label: 'Add' },
@@ -254,7 +255,13 @@ const numberGate: Partial<ObjectData> = {
     },
   ],
   ids: [
-    { id: 'valve1', kind: 'button', kind_name: 'Button', category: 'trigger' },
+    {
+      id: 'valve1',
+      kind: 'button',
+      kind_name: 'Button',
+      category: 'trigger',
+      input_mode: 'latched',
+    },
     {
       id: 'bonus',
       kind: 'number_gate',
@@ -284,6 +291,46 @@ describe('gate editors', () => {
     expect(screen.getByText('Reset to the start value')).toBeDefined();
     expect(screen.getAllByPlaceholderText('gone (missing)').length).toBe(1);
     expect(screen.getByText('hello — Message')).toBeDefined();
+  });
+
+  it('marks each input live, latched or gate', () => {
+    show(numberGate);
+    expect(
+      screen.getAllByPlaceholderText(
+        'valve1 — Button [latched: true once it fired]',
+      ).length,
+    ).toBe(1);
+    cleanup();
+    show({
+      kind: 'logic_gate',
+      kind_name: 'Logic gate',
+      category: 'trigger',
+      schema: [
+        {
+          key: 'inputs',
+          label: 'Inputs',
+          type: 'idlist',
+          default: [],
+          help: null,
+          filter: ['trigger'],
+          input_modes: true,
+        },
+      ],
+      ids: [
+        {
+          id: 'lab',
+          kind: 'zone',
+          kind_name: 'Zone',
+          category: 'trigger',
+          input_mode: 'live',
+        },
+      ],
+      values: { inputs: ['lab'] },
+      gate: { running: false },
+    });
+    expect(
+      screen.getByText('lab — Zone [live: true while it holds]'),
+    ).toBeDefined();
   });
 
   it("shows the gate's state in the running test run", () => {

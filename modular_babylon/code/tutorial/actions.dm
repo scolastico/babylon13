@@ -330,7 +330,7 @@
 /obj/babylon_tutorial/action/toggle/own_schema()
 	return list(
 		babylon_tutorial_field("mode", "Do", "choice", "enable", null, options = babylon_tutorial_options(list("enable" = "Enable", "disable" = "Disable"))),
-		babylon_tutorial_field("triggers", "Triggers", "idlist", list(), null, filter = list("trigger"), required = TRUE),
+		babylon_tutorial_field("triggers", "Triggers", "idlist", list(), "A gate that is disabled turns false without running its own actions; gates it feeds see it become false. Enabled again, it is evaluated at the next check and runs its On true or On false once.", filter = list("trigger"), required = TRUE),
 	)
 
 /obj/babylon_tutorial/action/toggle/perform(datum/babylon_tutorial_run/run)

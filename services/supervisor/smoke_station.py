@@ -47,6 +47,13 @@ from smoke_stability import restore_cycles
 from supervisor import Driver, Supervisor, serve
 
 
+def dm_entries(packed):
+    """A DM test's packed result as a dict. The debug bridge packs at most a limited number of
+    entries (testing_common.dm pack_value); a cut-off result must fail, never pass silently."""
+    assert packed["length"] == len(packed["entries"]), ("result cut off", packed["length"], len(packed["entries"]))
+    return {entry["entry"]: entry["value"] for entry in packed["entries"]}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dreamdaemon", required=True)
@@ -161,7 +168,7 @@ def main():
     def values(run, proc, args=None):
         """A DM test's entries without asserting them (facts to compare across a restart)."""
         result = debug(run, "call", dict(target="session", proc=proc, args=args or []))["result"]
-        return {entry["entry"]: entry["value"] for entry in result["entries"]}
+        return dm_entries(result)
 
     def compare_links(before, after):
         """After a restart from a save: links are at least as complete as before it."""
@@ -172,7 +179,7 @@ def main():
 
     def checks(run, proc, values=None):
         result = debug(run, "call", dict(target="session", proc=proc, args=values or []))["result"]
-        values = {entry["entry"]: entry["value"] for entry in result["entries"]}
+        values = dm_entries(result)
         assert values and all(values.values()), (proc, values)
         return values
 
@@ -456,7 +463,7 @@ def main():
         deadline = time.time() + timeout
         while True:
             result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
-            values = {entry["entry"]: entry["value"] for entry in result["entries"]}
+            values = dm_entries(result)
             if values and all(values.values()):
                 return values
             if time.time() > deadline:
@@ -583,7 +590,7 @@ def main():
                     "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
                     "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
-                tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
+                tutorial[proc] = dm_entries(result)
             for proc, got in tutorial.items():
                 assert got and all(got.values()), (proc, got)
             stop(world)

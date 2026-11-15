@@ -738,6 +738,14 @@
 	babylon_tutorial_test_cleanup(made)
 	return result
 
+/// How often a step is in a run's history.
+/proc/babylon_tutorial_test_count(list/history, step)
+	var/count = 0
+	for(var/entry in history)
+		if(entry == step)
+			count++
+	return count
+
 /// A logic gate's test settings with the three test action lists.
 /proc/babylon_tutorial_test_gate_settings(list/settings)
 	var/list/merged = settings.Copy()
@@ -747,7 +755,9 @@
 	return merged
 
 /// Logic and number gates (spec 12 #10, #20): every logic mode, every number operation, chained
-/// gates, the loop guard naming the gate it stopped at, the depth limit and the reset by a new run.
+/// gates, live (zone) and latched (say) inputs, gates that start listening already true, the loop
+/// guard naming the gate it stopped at, the depth limit, the per-wave update budget, disabling a
+/// gate, ids in pasted copies and the reset by a new run.
 /datum/babylon_save/proc/test_tutorial_gates()
 	var/list/result = list()
 	var/list/made = list()
@@ -755,7 +765,7 @@
 	try
 		// Inputs: say triggers that wait for an Enable action, fired by hand.
 		var/list/inputs = list()
-		for(var/id in list("g_in_a", "g_in_b", "g_in_c", "g_in_up", "g_in_down", "g_in_set", "g_in_add", "g_in_sub", "g_in_mul", "g_in_reset", "g_in_by", "g_in_deep"))
+		for(var/id in list("g_in_a", "g_in_b", "g_in_c", "g_in_up", "g_in_down", "g_in_set", "g_in_add", "g_in_sub", "g_in_mul", "g_in_reset", "g_in_by", "g_in_deep", "g_in_m", "g_in_w"))
 			inputs[id] = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/say, base, id, list("phrase" = id, "starts" = "manual", "once" = 0), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/sound, base, "g_true", list("sound" = "ding"), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/sound, base, "g_false", list("sound" = "ding"), made)
@@ -816,21 +826,67 @@
 			babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_deep[number]", list("mode" = "or", "inputs" = list(previous)), made)
 			previous = "g_deep[number]"
 
+		// Budget: a ladder of XOR gates, two per layer, each fed by both gates of the layer before:
+		// every layer doubles the updates of one firing.
+		babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_w1a", list("mode" = "or", "inputs" = list("g_in_w")), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_w1b", list("mode" = "or", "inputs" = list("g_in_w")), made)
+		for(var/layer in 2 to 10)
+			for(var/side in list("a", "b"))
+				babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_w[layer][side]", list("mode" = "xor", "inputs" = list("g_w[layer - 1]a", "g_w[layer - 1]b")), made)
+
+		// Live inputs: two one-tile zones (once: they stop listening after their first firing).
+		var/turf/zone_a = locate(base.x + 2, base.y + 3, base.z)
+		var/turf/zone_b = locate(base.x + 4, base.y + 3, base.z)
+		var/obj/babylon_tutorial/trigger/zone/live_a = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/zone, zone_a, "g_zone_a", list(), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/zone, zone_b, "g_zone_b", list(), made)
+		var/obj/babylon_tutorial/trigger/gate/logic/live_and = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_l_and", babylon_tutorial_test_gate_settings(list("mode" = "and", "inputs" = list("g_zone_a", "g_zone_b"))), made)
+		var/obj/babylon_tutorial/trigger/gate/logic/live_not = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_l_not", babylon_tutorial_test_gate_settings(list("mode" = "not", "inputs" = list("g_zone_a"))), made)
+		var/obj/babylon_tutorial/trigger/gate/logic/live_xor = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_l_xor", babylon_tutorial_test_gate_settings(list("mode" = "xor", "inputs" = list("g_zone_a", "g_zone_b"))), made)
+		var/obj/babylon_tutorial/trigger/gate/number/entries = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/number, base, "g_l_entries", list("inputs" = list(list("id" = "g_zone_a", "op" = "up"))), made)
+		result["input_modes"] = babylon_tutorial_input_mode(live_a) == "live" && babylon_tutorial_input_mode(inputs["g_in_a"]) == "latched" && babylon_tutorial_input_mode(live_and) == "gate"
+
+		// Starting to listen: a number gate after its own input does not count that firing; an
+		// AND gate enabled when both inputs already fired becomes true and fires.
+		var/obj/babylon_tutorial/trigger/gate/number/after_own = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/number, base, "g_m1", list("starts" = "after", "after" = "g_in_m", "inputs" = list(list("id" = "g_in_m", "op" = "up"))), made)
+		var/obj/babylon_tutorial/trigger/gate/logic/late = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_late", list("mode" = "and", "starts" = "manual", "inputs" = list("g_in_a", "g_in_b")), made)
+		var/obj/babylon_tutorial/trigger/timer/after_late = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/timer, base, "g_after_late", list("seconds" = 600, "starts" = "after", "after" = "g_late"), made)
+		// Disabling: g_down = NOT g_or.
+		var/obj/babylon_tutorial/trigger/gate/logic/down = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_down", list("mode" = "not", "inputs" = list("g_or")), made)
+
 		var/mob/living/carbon/human/player = new(base)
 		made += player
-		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
-		result["baseline_states"] = !run.gate_states[gate_and] && !run.gate_states[gate_or] && !run.gate_states[gate_xor] && run.gate_states[gate_not]
-		result["baseline_runs_nothing"] = !length(run.history)
+		var/mob/living/carbon/human/second = new(base)
+		made += second
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player, second))
+		result["false_until_first_check"] = !run.gate_states[gate_not] && !length(run.history) && run.gate_pending[gate_not]
 		run.check_triggers()
-		result["gates_never_poll"] = !run.fired[gate_and] && !run.fired[gate_or] && !run.fired[gate_xor] && !run.fired[gate_not] && !length(run.history)
+		result["baseline_states"] = !run.gate_states[gate_and] && !run.gate_states[gate_or] && !run.gate_states[gate_xor] && run.gate_states[gate_not]
+		result["not_runs_on_true_first_check"] = babylon_tutorial_test_count(run.history, "g_not>g_true") == 1 && run.fired[gate_not] == 1
+		// The start is symmetric: a gate that does not hold runs On false once; On change does
+		// not run at the start; only gates that hold fire.
+		result["start_runs_on_false"] = babylon_tutorial_test_count(run.history, "g_and>g_false") == 1 && babylon_tutorial_test_count(run.history, "g_ops>g_false") == 1 && !run.fired[gate_and]
+		result["number_start_true_fires"] = run.gate_states[by_gate] && run.fired[by_gate] == 1
+		result["start_no_on_change"] = !babylon_tutorial_test_count(run.history, "g_not>g_change") && !babylon_tutorial_test_count(run.history, "g_and>g_change") && !babylon_tutorial_test_count(run.history, "g_ops>g_change")
+		var/history_size = length(run.history)
+		run.check_triggers()
+		result["gates_never_poll"] = !run.fired[gate_and] && !run.fired[gate_or] && !run.fired[gate_xor] && length(run.history) == history_size
 
 		// in_a fires: OR and XOR become true, NOT becomes false, AND stays false.
+		var/before_a = length(run.history)
 		run.fire(inputs["g_in_a"])
 		result["and_one_of_two_false"] = !run.gate_states[gate_and]
 		result["or_true"] = run.gate_states[gate_or] && ("g_or>g_true" in run.history) && ("g_or>g_change" in run.history)
 		result["xor_one_true"] = run.gate_states[gate_xor] && run.fired[gate_xor] == 1
-		result["not_false"] = !run.gate_states[gate_not] && ("g_not>g_false" in run.history) && ("g_not>g_change" in run.history) && !("g_not>g_true" in run.history)
-		result["and_untouched_runs_nothing"] = !("g_and>g_true" in run.history) && !("g_and>g_false" in run.history) && !("g_and>g_change" in run.history)
+		var/not_true = 0
+		for(var/step in run.history)
+			if(step == "g_not>g_true")
+				not_true++
+		result["not_false"] = !run.gate_states[gate_not] && ("g_not>g_false" in run.history) && ("g_not>g_change" in run.history) && not_true == 1
+		var/and_ran = FALSE
+		for(var/step in run.history.Copy(before_a + 1))
+			if(findtext(step, "g_and>") == 1)
+				and_ran = TRUE
+		result["and_untouched_runs_nothing"] = !and_ran
 		// in_b fires: AND true, XOR false again (both true), OR stays true without new actions.
 		var/or_actions = 0
 		for(var/step in run.history)
@@ -838,7 +894,7 @@
 				or_actions++
 		run.fire(inputs["g_in_b"])
 		result["and_true"] = run.gate_states[gate_and] && ("g_and>g_true" in run.history)
-		result["xor_two_false"] = !run.gate_states[gate_xor] && ("g_xor>g_false" in run.history)
+		result["xor_two_false"] = !run.gate_states[gate_xor] && babylon_tutorial_test_count(run.history, "g_xor>g_false") == 2
 		var/or_after = 0
 		for(var/step in run.history)
 			if(findtext(step, "g_or>") == 1)
@@ -852,7 +908,7 @@
 			result["op_[copytext(id, 6)]"] = abs(run.gate_number(ops) - expected[id]) < 0.001
 		// g_in_by also counted g_by up first (4 -> 5), so "add g_by" added 5.
 		result["by_gate_counted"] = run.gate_number(by_gate) == 5
-		result["number_condition_true_false"] = ("g_ops>g_true" in run.history) && ("g_ops>g_false" in run.history) && run.gate_states[ops]
+		result["number_condition_true_false"] = ("g_ops>g_true" in run.history) && babylon_tutorial_test_count(run.history, "g_ops>g_false") == 2 && run.gate_states[ops]
 		var/changes = 0
 		for(var/step in run.history)
 			if(step == "g_ops>g_change")
@@ -894,6 +950,79 @@
 		var/obj/babylon_tutorial/trigger/gate/deep17 = babylon_tutorial_find("g_deep17")
 		result["depth_17_stopped"] = !run.gate_states[deep17] && !!findtext(run.gate_stops[deep17], "chain stopped at g_deep17")
 
+		// Live inputs: zones follow the players both ways; a number gate counts each entry once.
+		player.forceMove(zone_a)
+		run.check_triggers()
+		result["live_not_false_on_entry"] = !run.gate_states[live_not] && babylon_tutorial_test_count(run.history, "g_l_not>g_false") == 1
+		result["live_xor_one"] = run.gate_states[live_xor] && !run.gate_states[live_and]
+		second.forceMove(zone_b)
+		run.check_triggers()
+		result["live_and_true"] = run.gate_states[live_and] && !run.gate_states[live_xor]
+		second.forceMove(base)
+		run.check_triggers()
+		result["live_and_false_on_leave"] = !run.gate_states[live_and] && babylon_tutorial_test_count(run.history, "g_l_and>g_false") == 2 && run.gate_states[live_xor]
+		player.forceMove(base)
+		run.check_triggers()
+		result["live_not_back_true"] = run.gate_states[live_not] && babylon_tutorial_test_count(run.history, "g_l_not>g_true") == 2 && !run.gate_states[live_xor]
+		result["once_zone_still_live"] = !run.is_enabled(live_a) && run.fired[live_a] == 1
+		player.forceMove(zone_a)
+		run.check_triggers()
+		result["entries_counted_once_each"] = run.gate_number(entries) == 2
+		player.forceMove(base)
+		run.check_triggers()
+		result["latched_event_stays_true"] = run.input_state(inputs["g_in_a"])
+
+		// Starting to listen.
+		run.fire(inputs["g_in_m"])
+		result["enabling_firing_not_counted"] = run.is_enabled(after_own) && run.gate_number(after_own) == 0
+		run.check_triggers()
+		run.fire(inputs["g_in_m"])
+		result["counts_after_listening"] = run.gate_number(after_own) == 1
+		run.set_enabled(late, TRUE)
+		result["late_waits_for_check"] = !run.gate_states[late]
+		run.check_triggers()
+		result["late_true_fires"] = run.gate_states[late] && run.fired[late] == 1 && run.is_enabled(after_late)
+
+		// Disabling a true gate: it turns false without its own actions, g_down sees it.
+		var/or_false_before = babylon_tutorial_test_count(run.history, "g_or>g_false")
+		result["down_false_while_or"] = !run.gate_states[down]
+		run.set_enabled(gate_or, FALSE)
+		result["disabled_gate_false"] = !run.gate_states[gate_or] && babylon_tutorial_test_count(run.history, "g_or>g_false") == or_false_before
+		result["downstream_sees_disable"] = run.gate_states[down]
+		// Enabled again while it holds (g_in_a fired, a latched input): it runs On true once at
+		// the next check, without On change.
+		var/or_change_before = babylon_tutorial_test_count(run.history, "g_or>g_change")
+		var/or_true_before = babylon_tutorial_test_count(run.history, "g_or>g_true")
+		run.set_enabled(gate_or, TRUE)
+		run.check_triggers()
+		result["reenabled_runs_on_true_once"] = run.gate_states[gate_or] && babylon_tutorial_test_count(run.history, "g_or>g_true") == or_true_before + 1 && babylon_tutorial_test_count(run.history, "g_or>g_change") == or_change_before
+
+		// Budget: the XOR ladder stops after the per-wave budget and names the gate.
+		var/log_before = length(run.gate_log)
+		run.fire(inputs["g_in_w"])
+		var/budget_text = length(run.gate_log) > log_before ? run.gate_log[length(run.gate_log)] : ""
+		result["budget_stops_wave"] = !!findtext(budget_text, "wave stopped at g_w") && !!findtext(budget_text, "256")
+		result["budget_bounded"] = run.gate_wave_updates <= 256
+		var/budget_named = FALSE
+		for(var/obj/babylon_tutorial/trigger/gate/stopped as anything in run.gate_stops)
+			if(findtext(stopped.tutorial_id, "g_w") == 1 && findtext(run.gate_stops[stopped], "wave stopped at [stopped.tutorial_id]"))
+				budget_named = TRUE
+		result["budget_names_gate"] = budget_named
+		run.fire(inputs["g_in_a"])
+		result["next_wave_has_budget"] = !run.gate_wave_stopped
+
+		// A pasted copy: ids and "by" sources inside the copy get the suffix, outside ones stay.
+		var/datum/babylon_area_clip/clip = new
+		clip.origin = list(base.x, base.y, base.z)
+		clip.width = 1
+		clip.height = 1
+		var/list/pasted = babylon_area_rewrite_settings(/obj/babylon_tutorial/trigger/gate/number, json_encode(list("inputs" = list(list("id" = "g_in_up", "op" = "add", "amount" = 1, "source" = "g_by"), list("id" = "g_outside", "op" = "add", "amount" = 1, "source" = "g_far")))), list("g_in_up" = "g_in_up_2", "g_by" = "g_by_2"), clip, base)
+		var/list/pasted_inputs = pasted["inputs"]
+		var/list/pasted_first = pasted_inputs[1]
+		var/list/pasted_second = pasted_inputs[2]
+		result["paste_rewrites_inputs"] = pasted_first["id"] == "g_in_up_2" && pasted_first["source"] == "g_by_2" && pasted_second["id"] == "g_outside" && pasted_second["source"] == "g_far"
+		qdel(clip)
+
 		// Renaming an input or a "by" gate rewrites the number gate's inputs.
 		var/obj/babylon_tutorial/trigger/up_input = inputs["g_in_up"]
 		up_input.set_tutorial_id("g_in_up2")
@@ -905,6 +1034,7 @@
 
 		// Restarting the test run resets every gate's state and number.
 		var/datum/babylon_tutorial_run/again = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
+		again.check_triggers()
 		result["reset_numbers"] = again.gate_number(ops) == 1 && again.gate_number(after_chain) == 0 && !length(again.gate_stops)
 		result["reset_states"] = !again.gate_states[gate_or] && again.gate_states[gate_not] && !again.gate_states[chain]
 		result["old_run_gone"] = QDELETED(run)

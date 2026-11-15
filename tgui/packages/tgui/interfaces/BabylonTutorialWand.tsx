@@ -49,6 +49,8 @@ export type TutorialObject = {
   refs: string[];
   issues: string[];
   actions?: string[] | null;
+  /** Whether it is a gate (three action lists). */
+  gate?: boolean;
   /** A gate's On false and On change lists. */
   actions_false?: string[] | null;
   actions_change?: string[] | null;
@@ -410,7 +412,7 @@ export const allActions = (trigger: TutorialObject) => [
 
 /** The labelled action lists of a trigger: one for a trigger, three for a gate. */
 export const actionLists = (trigger: TutorialObject) =>
-  trigger.kind.endsWith('_gate')
+  trigger.gate
     ? [
         { label: 'On true', ids: trigger.actions || [] },
         { label: 'On false', ids: trigger.actions_false || [] },

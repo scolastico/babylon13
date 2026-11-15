@@ -515,6 +515,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"refs" = refs,
 			"issues" = messages,
 			"actions" = object.tutorial_category == "trigger" ? object.setting("actions") : null,
+			"gate" = istype(object, /obj/babylon_tutorial/trigger/gate),
 			"actions_false" = istype(object, /obj/babylon_tutorial/trigger/gate) ? object.setting("actions_false") : null,
 			"actions_change" = istype(object, /obj/babylon_tutorial/trigger/gate) ? object.setting("actions_change") : null,
 			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
@@ -756,7 +757,10 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	var/list/ids = list()
 	for(var/obj/babylon_tutorial/other as anything in GLOB.babylon_tutorial_objects)
 		if(other != object)
-			ids += list(list("id" = other.tutorial_id, "kind" = other.tutorial_kind, "kind_name" = other.kind_name, "category" = other.tutorial_category, "summary" = other.summary()))
+			var/list/entry = list("id" = other.tutorial_id, "kind" = other.tutorial_kind, "kind_name" = other.kind_name, "category" = other.tutorial_category, "summary" = other.summary())
+			if(istype(other, /obj/babylon_tutorial/trigger))
+				entry["input_mode"] = babylon_tutorial_input_mode(other)
+			ids += list(entry)
 	var/turf/tile = get_turf(object)
 	var/obj/item/babylon_tutorial_wand/wand = wand_ref?.resolve()
 	var/list/data = list(

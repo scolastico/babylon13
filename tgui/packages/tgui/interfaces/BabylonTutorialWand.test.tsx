@@ -300,6 +300,7 @@ const gate: TutorialObject = {
   kind: 'logic_gate',
   kind_name: 'Logic gate',
   summary: 'AND from a, b',
+  gate: true,
   issues: [],
   actions: ['bell'],
   actions_false: [],

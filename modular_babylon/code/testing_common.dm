@@ -51,7 +51,9 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		var/list/values = value
 		var/list/entries = list()
 		if(depth < 2)
-			for(var/index in 1 to min(length(values), 50))
+			// A test's own result (depth 0) is sent whole; lists inside it are cut at 50 (the
+			// smoke scripts compare "length" with the entries, so a cut result fails).
+			for(var/index in 1 to min(length(values), depth ? 50 : 500))
 				var/key = values[index]
 				entries += list(list("entry" = pack_value(key, depth + 1), "value" = istext(key) ? pack_value(values[key], depth + 1) : null))
 		return list("length" = length(values), "entries" = entries)

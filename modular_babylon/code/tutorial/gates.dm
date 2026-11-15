@@ -4,23 +4,33 @@
 // fire), when it becomes false its "On false" actions run, and its "On change" actions run on
 // every change.
 //
-// - Logic gate: AND, OR, XOR (exactly one), NOT (one input). An input counts as true once it
-//   fired in this run; a gate input counts with its own current state.
+// - Logic gate: AND, OR, XOR (exactly one), NOT (one input). A level input (zone, holding,
+//   condition: is_level()) is LIVE: true while its condition holds, sampled every check whether or
+//   not that trigger listens itself. An event input (start, button, say, used on, timer) is
+//   LATCHED: true once it fired in this run. A gate input counts with its own current state.
 // - Number gate: a number per run, starting at its start value. Each input has an operation that
 //   runs every time that input fires (count up, set, add ... by a constant or by another number
-//   gate's number). The gate is true while its condition holds (equals, at least ...). Its On
+//   gate's number); a level input "fires" each time its condition becomes true. The gate is true while its condition holds (equals, at least ...). Its On
 //   change actions run whenever the number changes.
 //
 // Gates update at once, in one evaluation wave: a trigger fires, the gates it feeds update, the
 // gates THEY feed update, and so on. Every wave keeps the path of gates it is updating; a gate
-// that is already on the path (a loop: A -> B -> A) or a path longer than
-// BABYLON_TUTORIAL_GATE_DEPTH gates stops the wave there, and the run records which gate it was
-// (the wand's Test run log and that gate's issues show it). find_issues() also warns about loops
-// while building. A gate only updates while it listens ("Starts listening"); when it starts
-// listening it takes the state its inputs give it without running actions.
+// that is already on the path (a loop: A -> B -> A), a path longer than
+// BABYLON_TUTORIAL_GATE_DEPTH gates or more than BABYLON_TUTORIAL_GATE_WAVE_UPDATES gate updates
+// in one wave stops the wave there, and the run records which gate it was (the wand's Test run
+// log and that gate's issues show it). find_issues() also warns about loops while building.
+//
+// A gate only updates while it listens ("Starts listening"): firings before that, also the one
+// that makes it start listening, are not counted. A gate that starts listening is false until
+// the next check, which evaluates it once: if it holds, it becomes true, runs On true and fires
+// (like a zone that starts listening with a player already inside); if not, it runs On false.
+// On change does not run for this first evaluation. A gate switched off by a Disable action
+// turns false without running its own actions; the gates it feeds see it become false.
 
 /// Most gates one evaluation wave goes through in a row.
 #define BABYLON_TUTORIAL_GATE_DEPTH 16
+/// Most gate updates one evaluation wave makes in all (fan-out, not depth).
+#define BABYLON_TUTORIAL_GATE_WAVE_UPDATES 256
 /// A number gate's number stays within +- this.
 #define BABYLON_TUTORIAL_GATE_NUMBER_MAX 1000000
 
@@ -32,8 +42,8 @@
 
 /obj/babylon_tutorial/trigger/gate/settings_schema()
 	return own_schema() + list(
-		babylon_tutorial_field("actions", "On true", "idlist", list(), "Run, in this order, when the gate becomes true. That counts as the gate firing: triggers \"After\" it start listening and gates fed by it see it fire.", filter = list("action")),
-		babylon_tutorial_field("actions_false", "On false", "idlist", list(), "Run when the gate becomes false again.", filter = list("action")),
+		babylon_tutorial_field("actions", "On true", "idlist", list(), "Run, in this order, when the gate becomes true (also when it starts listening while true). That counts as the gate firing: triggers \"After\" it start listening and gates fed by it see it fire.", filter = list("action")),
+		babylon_tutorial_field("actions_false", "On false", "idlist", list(), "Run when the gate becomes false, and once when it starts listening while false.", filter = list("action")),
 		babylon_tutorial_field("actions_change", "On change", "idlist", list(), change_help(), filter = list("action")),
 		babylon_tutorial_field("once", "Fire only once", "bool", 0, "On: once the gate became true it stops listening (nothing about it changes any more)."),
 	) + babylon_tutorial_listen_fields() + list(
@@ -44,10 +54,13 @@
 	return list("actions", "actions_false", "actions_change")
 
 /obj/babylon_tutorial/trigger/gate/proc/change_help()
-	return "Run whenever the gate turns true or false."
+	return "Run whenever the gate turns true or false (not when it starts listening)."
 
 /// Never fires from the check loop: only its inputs update it (the run's notify_gates()).
 /obj/babylon_tutorial/trigger/gate/check(datum/babylon_tutorial_run/run)
+	return FALSE
+
+/obj/babylon_tutorial/trigger/gate/is_level()
 	return FALSE
 
 /// The ids of the triggers that feed this gate.
@@ -104,13 +117,36 @@
 		))
 	return gates
 
-/// The gates fed by a trigger (gates that list it as an input), in placing order.
-/proc/babylon_tutorial_gates_fed_by(obj/babylon_tutorial/trigger/trigger)
-	var/list/found = list()
+/// How a trigger counts as a gate input, for the configure window: "gate", "live" or "latched".
+/proc/babylon_tutorial_input_mode(obj/babylon_tutorial/trigger/trigger)
+	if(istype(trigger, /obj/babylon_tutorial/trigger/gate))
+		return "gate"
+	return trigger.is_level() ? "live" : "latched"
+
+/// Input id => the gates that list it as an input, in placing order. Built once per tutorial
+/// version. The lists are never changed after they are built: callers may iterate them while a
+/// wave changes the tutorial.
+/proc/babylon_tutorial_gate_index()
+	var/static/list/index
+	var/static/index_version = -1
+	if(index && index_version == GLOB.babylon_tutorial_version)
+		return index
+	index = list()
 	for(var/obj/babylon_tutorial/trigger/gate/gate in GLOB.babylon_tutorial_objects)
-		if(trigger.tutorial_id in gate.input_ids())
-			found += gate
-	return found
+		for(var/id in gate.input_ids())
+			var/list/gates = index[id]
+			if(!gates)
+				gates = list()
+				index[id] = gates
+			gates += gate
+	index_version = GLOB.babylon_tutorial_version
+	return index
+
+/// The gates fed by a trigger (gates that list it as an input), in placing order. Do not change
+/// the returned list.
+/proc/babylon_tutorial_gates_fed_by(obj/babylon_tutorial/trigger/trigger)
+	var/list/gates = babylon_tutorial_gate_index()[trigger.tutorial_id]
+	return gates || list()
 
 /// A loop of gates through this one, in the order signals flow (["a", "b", "a"]), else null.
 /proc/babylon_tutorial_gate_loop(obj/babylon_tutorial/trigger/gate/start)
@@ -137,11 +173,15 @@
 // ---------------------------------------------------------------------------------------------
 // The run's side: state per gate and the evaluation wave
 
-/// Whether a trigger counts as true for a logic gate: a gate by its state, any other trigger
-/// once it fired in this run.
+/// Whether a trigger counts as true for a logic gate: a gate by its state, a level trigger by its
+/// live condition, an event trigger once it fired in this run.
 /datum/babylon_tutorial_run/proc/input_state(obj/babylon_tutorial/trigger/input)
 	if(istype(input, /obj/babylon_tutorial/trigger/gate))
 		return !!gate_states[input]
+	if(input.is_level())
+		if(isnull(level_states[input]))
+			level_states[input] = !!input.check(src)
+		return level_states[input]
 	return fired[input] > 0
 
 /// A number gate's number in this run.
@@ -150,15 +190,90 @@
 		return 0
 	return isnull(gate_values[gate]) ? gate.setting("start") : gate_values[gate]
 
-/// A trigger fired (fired = TRUE) or a gate became false (fired = FALSE): every listening gate
-/// it feeds updates, as one step of the evaluation wave.
+/// Samples every level trigger that feeds a listening gate; a change is passed to its gates
+/// (becoming true counts as a firing for number gates). Level triggers no listening gate uses
+/// are forgotten, so they are measured afresh when one starts listening.
+/datum/babylon_tutorial_run/proc/sample_levels()
+	if(preview)
+		return
+	var/list/index = babylon_tutorial_gate_index()
+	for(var/id in index)
+		if(completed)
+			return
+		var/obj/babylon_tutorial/trigger/input = babylon_tutorial_find(id)
+		if(!istype(input) || !input.is_level())
+			continue
+		var/used = FALSE
+		for(var/obj/babylon_tutorial/trigger/gate/gate as anything in index[id])
+			if(is_enabled(gate))
+				used = TRUE
+				break
+		if(!used)
+			level_states -= input
+			continue
+		var/state = !!input.check(src)
+		var/was = level_states[input]
+		level_states[input] = state
+		if(!isnull(was) && was != state)
+			notify_gates(input, state)
+
+/// Gates that started listening since the last check are evaluated once, in placing order, each
+/// as its own wave: one that holds becomes true (On true, it fires, the gates it feeds see it),
+/// one that does not runs On false. On change does not run for this first evaluation.
+/datum/babylon_tutorial_run/proc/settle_pending_gates()
+	if(preview || !length(gate_pending))
+		return
+	var/list/pending = gate_pending
+	gate_pending = list()
+	for(var/obj/babylon_tutorial/trigger/gate/gate in GLOB.babylon_tutorial_objects)
+		if(completed)
+			return
+		if(!pending[gate] || !is_enabled(gate))
+			continue
+		start_gate_wave()
+		gate_wave += gate
+		gate_wave_updates++
+		var/state = !!gate.compute(src)
+		gate_states[gate] = state
+		if(state)
+			mark_fired(gate)
+			run_actions(gate, gate.setting("actions"))
+			notify_gates(gate, TRUE)
+		else
+			run_actions(gate, gate.setting("actions_false"))
+		gate_wave.Cut()
+
+/// A gate started listening: it is false until the next check evaluates it.
+/datum/babylon_tutorial_run/proc/gate_started(obj/babylon_tutorial/trigger/gate/gate)
+	gate_states -= gate
+	gate_pending[gate] = TRUE
+
+/// A gate was switched off: it turns false without its own actions; the gates it feeds see it.
+/datum/babylon_tutorial_run/proc/gate_stopped(obj/babylon_tutorial/trigger/gate/gate)
+	gate_pending -= gate
+	if(!gate_states[gate])
+		return
+	gate_states[gate] = FALSE
+	notify_gates(gate, FALSE)
+
+/// A new wave starts: its update budget is full again.
+/datum/babylon_tutorial_run/proc/start_gate_wave()
+	gate_wave_updates = 0
+	gate_wave_stopped = FALSE
+
+/// A trigger fired (fired = TRUE) or a gate or level input became false (fired = FALSE): every
+/// listening gate it feeds updates, as one step of the evaluation wave.
 /datum/babylon_tutorial_run/proc/notify_gates(obj/babylon_tutorial/trigger/source, fired)
 	if(preview)
 		return
+	if(!length(gate_wave))
+		start_gate_wave()
 	for(var/obj/babylon_tutorial/trigger/gate/gate as anything in babylon_tutorial_gates_fed_by(source))
-		if(completed)
+		if(completed || gate_wave_stopped)
 			return
-		if(!is_enabled(gate))
+		// Not listening, or just started (it is evaluated at the next check, so the firing that
+		// made it listen is not counted).
+		if(!is_enabled(gate) || gate_pending[gate])
 			continue
 		if(gate in gate_wave)
 			stop_gate_wave(gate, "loop stopped at [gate.tutorial_id]: [jointext(babylon_tutorial_ids_of(gate_wave), " -> ")] -> [gate.tutorial_id] (it was already updating in this wave).")
@@ -166,6 +281,11 @@
 		if(length(gate_wave) >= BABYLON_TUTORIAL_GATE_DEPTH)
 			stop_gate_wave(gate, "chain stopped at [gate.tutorial_id]: more than [BABYLON_TUTORIAL_GATE_DEPTH] gates in a row ([jointext(babylon_tutorial_ids_of(gate_wave), " -> ")] -> [gate.tutorial_id]).")
 			continue
+		if(gate_wave_updates >= BABYLON_TUTORIAL_GATE_WAVE_UPDATES)
+			stop_gate_wave(gate, "wave stopped at [gate.tutorial_id]: more than [BABYLON_TUTORIAL_GATE_WAVE_UPDATES] gate updates from one firing (gates fan out into each other too much; reached through [jointext(babylon_tutorial_ids_of(gate_wave), " -> ")] -> [gate.tutorial_id]).")
+			gate_wave_stopped = TRUE
+			return
+		gate_wave_updates++
 		gate_wave += gate
 		gate.input_changed(src, source, fired)
 		gate_wave.len--
@@ -199,28 +319,6 @@
 	if(became)
 		notify_gates(gate, state)
 
-/// Listening gates take the state their inputs (or number) give them, without running actions:
-/// every listening gate when the run starts (a few rounds, so gates fed by gates settle too), or
-/// only the gate that just started listening.
-/datum/babylon_tutorial_run/proc/settle_gates(obj/babylon_tutorial/trigger/gate/only)
-	if(preview)
-		return
-	if(only)
-		if(is_enabled(only))
-			gate_states[only] = !!only.compute(src)
-		return
-	for(var/round in 1 to BABYLON_TUTORIAL_GATE_DEPTH)
-		var/changed = FALSE
-		for(var/obj/babylon_tutorial/trigger/gate/gate in GLOB.babylon_tutorial_objects)
-			if(!is_enabled(gate))
-				continue
-			var/state = !!gate.compute(src)
-			if(isnull(gate_states[gate]) || gate_states[gate] != state)
-				gate_states[gate] = state
-				changed = TRUE
-		if(!changed)
-			return
-
 // ---------------------------------------------------------------------------------------------
 // Logic gate
 
@@ -232,8 +330,8 @@
 
 /obj/babylon_tutorial/trigger/gate/logic/own_schema()
 	return list(
-		babylon_tutorial_field("mode", "Logic", "choice", "and", "An input is true once it fired in this run; a gate input is true while that gate is. XOR: exactly one input is true. NOT: true while its one input is not.", options = babylon_tutorial_options(list("and" = "AND: all inputs", "or" = "OR: any input", "xor" = "XOR: exactly one input", "not" = "NOT: its input is not true"))),
-		babylon_tutorial_field("inputs", "Inputs", "idlist", list(), "The triggers and gates this gate listens to.", filter = list("trigger"), required = TRUE),
+		babylon_tutorial_field("mode", "Logic", "choice", "and", "Zone, holding and condition inputs are live: true while their condition holds. Button, say, used on, timer and start inputs are latched: true once they fired in this run. A gate input is true while that gate is. XOR: exactly one input is true. NOT: true while its one input is not.", options = babylon_tutorial_options(list("and" = "AND: all inputs", "or" = "OR: any input", "xor" = "XOR: exactly one input", "not" = "NOT: its input is not true"))),
+		babylon_tutorial_field("inputs", "Inputs", "idlist", list(), "The triggers and gates this gate listens to (each marked live or latched).", filter = list("trigger"), required = TRUE, input_modes = TRUE),
 	)
 
 /obj/babylon_tutorial/trigger/gate/logic/input_ids()
@@ -289,14 +387,14 @@
 /obj/babylon_tutorial/trigger/gate/number/own_schema()
 	return list(
 		babylon_tutorial_field("start", "Start value", "number", 0, "The number when the tutorial starts (and after a reset).", min = -100000, max = 100000),
-		babylon_tutorial_field("inputs", "Inputs", "gateinputs", list(), "Each time an input fires, its operation changes the number (a gate input fires when it becomes true). \"By\" another number gate uses that gate's number at that moment.", options = babylon_tutorial_options(babylon_tutorial_gate_operations()), filter = list("trigger"), required = TRUE),
+		babylon_tutorial_field("inputs", "Inputs", "gateinputs", list(), "Each time an input fires, its operation changes the number: a zone, holding or condition input each time its condition becomes true, a gate input when it becomes true. Firings before this gate starts listening (also the one that starts it) are not counted. \"By\" another number gate uses that gate's number at that moment.", options = babylon_tutorial_options(babylon_tutorial_gate_operations()), filter = list("trigger"), required = TRUE, input_modes = TRUE),
 		babylon_tutorial_field("condition", "True while", "choice", "at_least", null, options = babylon_tutorial_options(list("equals" = "The number equals", "at_least" = "The number is at least", "at_most" = "The number is at most", "between" = "The number is between"))),
 		babylon_tutorial_field("amount", "Value", "number", 1, "The number to compare with (between: the lowest).", min = -100000, max = 100000),
 		babylon_tutorial_field("amount_max", "And", "number", 10, "The highest number (between).", min = -100000, max = 100000, when = list("condition" = list("between"))),
 	)
 
 /obj/babylon_tutorial/trigger/gate/number/change_help()
-	return "Run whenever the number changes (also while the condition stays as it is)."
+	return "Run whenever the number changes (also while the condition stays as it is; not when the gate starts listening)."
 
 /// Operation key => label, for a number gate input.
 /proc/babylon_tutorial_gate_operations()
@@ -427,3 +525,4 @@
 	return "starts at [setting("start")], true at [test], " + ..()
 
 #undef BABYLON_TUTORIAL_GATE_NUMBER_MAX
+#undef BABYLON_TUTORIAL_GATE_WAVE_UPDATES
