@@ -265,11 +265,16 @@ saves lose their extra copies on their next start:
 - CentCom's objects;
 - round-start area spawns.
 
-`smoke_stability.py` restores a world three times. A Babylon world keeps 3351 records on
-every save. MetaStation's restored saves are identical, type by type (90972 records). Its
-first restore differs from the fresh save only by lavaland monsters that were still digging
-out, a sliding puzzle, and 6 sheets of reinforced glass. Before H1b, every MetaStation restart
-added about 30 objects and every IceBox restart about 260.
+`smoke_stability.py` restores a world three times; the full smoke run passed with it:
+- Babylon (test build, in smoke_native): 5826 records on every save, from the first one on.
+- MetaStation: its restored saves are identical, type by type (87601 records). Its first
+  restore differs from the fresh save only by 6 sheets of reinforced glass and one lavaland
+  sliding puzzle piece.
+- Before H1b, every MetaStation restart added about 30 objects and every IceBox restart about
+  260.
+
+The Babylon fixtures of the native smoke are old saves. Their first start removed the copies
+they held (5 CentCom floor lights, 8 gravity generator parts).
 
 The readiness fix was re-checked in the container: three Creative Plane S worlds and one
 MetaStation world, each stopped the moment the supervisor saw it running, all saved.
