@@ -867,7 +867,8 @@ class Launches(unittest.TestCase):
             self.s.db = real
         self.assertEqual(seen, [True])
         # N4-4: during the back-off a member's poll is told the reason and starts nothing.
-        with self.assertRaisesRegex(Denied, "Child startup failed.*Try again in 30 seconds"):
+        # The reason ends with a full stop before the back-off sentence.
+        with self.assertRaisesRegex(Denied, r"^Child startup failed; check the supervisor and daemon logs\. Try again in 30 seconds\.$"):
             self.s.dispatch("friend", "join", {"world": w})
         # The starter hears it once (their lobby stops polling then), then the back-off applies.
         with self.assertRaisesRegex(Denied, "^Child startup failed; check the supervisor and daemon logs$"):

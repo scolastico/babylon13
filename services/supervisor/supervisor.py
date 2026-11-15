@@ -1101,7 +1101,10 @@ class Supervisor:
             raise Denied(failure["message"])
         wait = failure["at"] + self.LAUNCH_BACKOFF_SECONDS - self.clock()
         if failure["backoff"] and wait > 0:
-            raise Denied("%s Try again in %d seconds." % (failure["message"], math.ceil(wait)))
+            # The reason is a refusal text, often without a full stop of its own.
+            reason = failure["message"].rstrip()
+            raise Denied("%s%s Try again in %d seconds." % (reason, "" if reason.endswith((".", "!", "?")) else ".",
+                                                           math.ceil(wait)))
 
     def dispatch_action(self, actor, action, data):
         if action == "summary":
