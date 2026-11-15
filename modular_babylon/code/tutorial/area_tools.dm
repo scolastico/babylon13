@@ -966,9 +966,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	// back (babylon_loading_saved_map(), persistence.dm).
 	var/was_loading = GLOB.babylon_save.loading_saved_map
 	GLOB.babylon_save.loading_saved_map = TRUE
+	var/init_depth = length(SSatoms.babylon_initializing)
 	try
 		loaded = template.load(origin)
 	catch(var/exception/failure)
+		babylon_init_depth_restore(init_depth)
 		log_world("BABYLON AREA: loading the copy failed: [failure] ([failure.file]:[failure.line])")
 	GLOB.babylon_save.loading_saved_map = was_loading
 	if(!loaded)

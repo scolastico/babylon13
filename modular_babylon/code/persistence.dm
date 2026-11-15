@@ -1375,13 +1375,19 @@
 		companion.babylon_companion_of = WEAKREF(babylon_initializing[depth])
 		companion.babylon_companion_turf = A.loc
 	babylon_initializing += A
-	// The stack must shrink back whatever happens, or every later atom would count as a companion.
-	try
-		. = ..()
-	catch(var/exception/error)
-		babylon_initializing.Cut(depth + 1)
-		throw error
+	// No try here: in DM a try anywhere up the stack makes a runtime deep inside an Initialize
+	// (a stack_trace) unwind everything up to it, where it would otherwise only end the proc that
+	// failed (a tram then no longer merged its modules). Without one, a runtime in A's Initialize
+	// returns here and the stack shrinks back. Code that loads atoms inside its own try restores
+	// the depth in its catch (babylon_init_depth_restore()).
+	. = ..()
 	babylon_initializing.Cut(depth + 1)
+
+/// For a catch around code that creates atoms: drops the initializing atoms a runtime left on the
+/// stack (depth: length(SSatoms.babylon_initializing) before the try).
+/proc/babylon_init_depth_restore(depth)
+	if(length(SSatoms.babylon_initializing) > depth)
+		SSatoms.babylon_initializing.Cut(depth + 1)
 
 /atom/movable
 	/// The atom whose Initialize made this one (a weakref), see Companions above.
@@ -1409,7 +1415,7 @@
 /// load is a copy an older save kept; the companion stays (its maker holds it). The same holds for
 /// CentCom, whose template loads again on every start (Babylon saves its tiles with the level).
 /datum/babylon_save/proc/remove_saved_companion_copies(list/records)
-	var/removed = 0
+	var/list/removed = list()
 	for(var/list/record as anything in records)
 		if(record["parent"])
 			continue
@@ -1421,12 +1427,15 @@
 			if(other == saved || other.type != saved.type || other.babylon_save_id)
 				continue
 			if(other.babylon_is_companion() || in_centcom)
+				removed["[saved.type]"] = (removed["[saved.type]"] || 0) + 1
 				qdel(saved)
-				removed++
 				break
 		CHECK_TICK
-	if(removed)
-		log_world("Babylon restore: removed [removed] saved cop[removed == 1 ? "y" : "ies"] of objects the world makes itself.")
+	if(length(removed))
+		var/list/parts = list()
+		for(var/kind in removed)
+			parts += "[kind] x[removed[kind]]"
+		log_world("Babylon restore: removed saved copies of objects the world makes itself: [parts.Join(", ")].")
 	return removed
 
 /// Once the world finished initializing after a restore (both builds' boot, before ready): what
@@ -1473,12 +1482,9 @@
 	if(babylon_loading_saved_map())
 		return
 	// Made once, on a fresh map, never again on a load: saved like anything else, not a companion.
+	// No try (see InitAtom above): a runtime inside ends only the failing proc and returns here.
 	SSatoms.babylon_fresh_map_only++
-	try
-		. = ..()
-	catch(var/exception/error)
-		SSatoms.babylon_fresh_map_only--
-		throw error
+	. = ..()
 	SSatoms.babylon_fresh_map_only--
 
 // Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and

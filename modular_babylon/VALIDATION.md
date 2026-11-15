@@ -259,12 +259,20 @@ Found and fixed (details in the commit messages):
   session's ready flag in both builds.
 - The back-off refusal read "...corrupt Try again in 30 seconds." (missing full stop).
 
-Not fixed (needs a design decision, see the H1 report): objects that another object makes
-in its `Initialize` (gravity generator parts, turret covers, airlock fillers, atmos shield
-effects, cult floor effects, some landmarks, fridge contents) are both restored from the
-save and made again, so each restart adds a copy (Babylon: 8 gravity generator parts and 5
-CentCom floor lights per restart; IceBox, measured before the decay fix: about 260
-records, among them 116 cult floor effects, 17 turret covers and 13 airlock fillers). Production (`:unstable`) does the same.
+Follow-up (H1b): objects a world makes again on every load are no longer saved, and older
+saves lose their extra copies on their next start:
+- objects another object makes in its Initialize (marked when they are made);
+- CentCom's objects;
+- round-start area spawns.
+
+`smoke_stability.py` restores a world three times. A Babylon world keeps 3351 records on
+every save. MetaStation's restored saves are identical, type by type (90972 records). Its
+first restore differs from the fresh save only by lavaland monsters that were still digging
+out, a sliding puzzle, and 6 sheets of reinforced glass. Before H1b, every MetaStation restart
+added about 30 objects and every IceBox restart about 260.
+
+The readiness fix was re-checked in the container: three Creative Plane S worlds and one
+MetaStation world, each stopped the moment the supervisor saw it running, all saved.
 
 Not exercised (needs a real client): joining a world, the lobby page itself, the Creative
 panel and tutorial wand UI, playing a tutorial to its end, rejoining a saved character,

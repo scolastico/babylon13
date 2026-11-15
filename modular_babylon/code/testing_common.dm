@@ -610,11 +610,16 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	return length(station_levels) ? station_levels[length(station_levels)] : station_z
 
 /// Counts of state that a restored map must not decide anew, on the saved levels.
+/// CentCom is not saved (its template loads on every start, persistence.dm): saved-state tests
+/// leave it out.
+/proc/babylon_test_in_centcom(atom/thing)
+	return istype(get_area(thing), /area/centcom)
+
 /datum/babylon_save/proc/saved_state_counts()
 	var/list/levels = persisted_levels()
 	var/list/counts = list("lights_not_ok" = 0, "cameras_off" = 0, "alarms_unbuilt" = 0, "lights_with_two_cells" = 0)
 	for(var/obj/machinery/light/light as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/light))
-		if(QDELETED(light) || !(light.z in levels))
+		if(QDELETED(light) || !(light.z in levels) || babylon_test_in_centcom(light))
 			continue
 		if(light.status != LIGHT_OK)
 			counts["lights_not_ok"]++
@@ -625,13 +630,13 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 		if(cells > 1)
 			counts["lights_with_two_cells"]++
 	for(var/obj/machinery/camera/camera as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/camera))
-		if(!QDELETED(camera) && (camera.z in levels) && !camera.camera_enabled)
+		if(!QDELETED(camera) && (camera.z in levels) && !babylon_test_in_centcom(camera) && !camera.camera_enabled)
 			counts["cameras_off"]++
 	for(var/obj/machinery/firealarm/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/firealarm))
-		if(!QDELETED(alarm) && (alarm.z in levels) && alarm.buildstage != FIRE_ALARM_BUILD_SECURED)
+		if(!QDELETED(alarm) && (alarm.z in levels) && !babylon_test_in_centcom(alarm) && alarm.buildstage != FIRE_ALARM_BUILD_SECURED)
 			counts["alarms_unbuilt"]++
 	for(var/obj/machinery/airalarm/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/airalarm))
-		if(!QDELETED(alarm) && (alarm.z in levels) && alarm.buildstage != AIR_ALARM_BUILD_COMPLETE)
+		if(!QDELETED(alarm) && (alarm.z in levels) && !babylon_test_in_centcom(alarm) && alarm.buildstage != AIR_ALARM_BUILD_COMPLETE)
 			counts["alarms_unbuilt"]++
 	return counts
 
@@ -645,7 +650,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	var/list/markers = list()
 	var/list/lights = list()
 	for(var/obj/machinery/light/light as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/light))
-		if(!QDELETED(light) && light.z == z && isturf(light.loc) && light.status == LIGHT_OK && light.type != /obj/machinery/light/empty)
+		if(!QDELETED(light) && light.z == z && !babylon_test_in_centcom(light) && isturf(light.loc) && light.status == LIGHT_OK && light.type != /obj/machinery/light/empty)
 			lights += light
 		if(length(lights) >= 2)
 			break
@@ -661,7 +666,7 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	// A fixture a player built against a wall, with a tube put in.
 	var/obj/machinery/light/fixture
 	for(var/turf/open/floor/tile in block(2, 2, z, world.maxx - 1, world.maxy - 1, z))
-		if(tile.is_blocked_turf(TRUE) || (locate(/obj/machinery/light) in tile) || babylon_area_locked(tile))
+		if(tile.is_blocked_turf(TRUE) || (locate(/obj/machinery/light) in tile) || babylon_area_locked(tile) || babylon_test_in_centcom(tile))
 			continue
 		for(var/direction in GLOB.cardinals)
 			if(isclosedturf(get_step(tile, direction)))
@@ -679,14 +684,14 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	for(var/obj/machinery/camera/camera as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/camera))
 		if(cameras >= 2)
 			break
-		if(QDELETED(camera) || !(camera.z in persisted_levels()) || !camera.camera_enabled || !isturf(camera.loc))
+		if(QDELETED(camera) || !(camera.z in persisted_levels()) || babylon_test_in_centcom(camera) || !camera.camera_enabled || !isturf(camera.loc))
 			continue
 		camera.toggle_cam(null, FALSE)
 		cameras++
 		markers += list(list("kind" = "camera", "x" = camera.x, "y" = camera.y, "z" = camera.z, "expect" = FALSE))
 	for(var/alarm_type in list(/obj/machinery/firealarm, /obj/machinery/airalarm))
 		for(var/obj/machinery/alarm as anything in SSmachines.get_machines_by_type_and_subtypes(alarm_type))
-			if(QDELETED(alarm) || !(alarm.z in persisted_levels()) || !isturf(alarm.loc))
+			if(QDELETED(alarm) || !(alarm.z in persisted_levels()) || babylon_test_in_centcom(alarm) || !isturf(alarm.loc))
 				continue
 			alarm.vars["buildstage"] = 1 // FIRE_ALARM_BUILD_NO_WIRES, AIR_ALARM_BUILD_NO_WIRES
 			alarm.set_panel_open(TRUE)

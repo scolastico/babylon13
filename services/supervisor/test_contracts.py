@@ -467,8 +467,9 @@ class Companions(unittest.TestCase):
         text = (DM / "persistence.dm").read_text(encoding="utf-8")
         hook = text.split("/datum/controller/subsystem/atoms/InitAtom(", 1)[1].split("\n/", 1)[0]
         self.assertIn("!from_template", hook)
-        self.assertIn("try", hook)
-        self.assertEqual(hook.count("babylon_initializing.Cut(depth + 1)"), 2)
+        # No try: it would make a runtime deep inside any Initialize unwind up to it.
+        self.assertNotIn("\ttry", hook)
+        self.assertEqual(hook.count("babylon_initializing.Cut(depth + 1)"), 1)
         self.assertIn("/atom/movable/babylon_skip_save()\n\treturn ..() || babylon_is_companion()", text)
         self.assertIn("remove_saved_companion_copies(records)", text)
         # The fallback for copies made outside an Initialize runs in both builds before ready.
@@ -480,6 +481,7 @@ class Companions(unittest.TestCase):
         for proc in ("/turf/open/floor/MakeDirty()",):
             body = text.split(proc, 1)[1].split("\n/", 1)[0]
             self.assertIn("SSatoms.babylon_fresh_map_only++", body)
+            self.assertNotIn("\ttry", body)
 
 
 if __name__ == "__main__":
