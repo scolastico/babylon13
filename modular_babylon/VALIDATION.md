@@ -176,3 +176,93 @@ map and checkpoint files remain ignored in the disposable checkout.
 - All 47 Python tests pass, including startup waiting, multi-world stop
   requests, save-failure retention, and timeout retention. No launcher can
   force-kill a child world. The cluster was left stopped after validation.
+
+## Worlds, creative and tutorials: container end-to-end run (H1, 2026-11-15)
+
+Run on the real runtime image (`docker build --target runtime`, tree of `feat/world-types`
+after the H1 fixes) with a prod-like environment: the production compose values
+(`MAX_RUNNING_WORLDS=6`, `MAX_WORLDS_PER_PLAYER=3`, `MAX_RUNNING_WORLDS_PER_PLAYER=1`,
+`MAX_PLAYERS_PER_WORLD=20`, `SHUTDOWN_TIMEOUT_SECONDS=180`), except
+`EMPTY_GRACE_SECONDS=3600` so that worlds nobody joins are not stopped by the empty-world
+timer during the checks. Data on a bind mount, the default container config
+(`container/default-config`). No BYOND client: the driver talked to the supervisor's
+`/api` with the lobby secret (as the lobby does), to its child HTTP actions as a world
+does (redeem), and to the worlds over their authenticated Topic control (`status`,
+`save`). For the tutorial flow the station build was replaced by
+`babylon-station-test.dmb` (bind-mounted over `babylon-station.dmb`) for its `call`,
+`spawn` and `find` helpers; everything else ran the production programs.
+
+Exercised, all passing unless noted:
+
+- **World types.** One world each of Babylon (drone), MetaStation, IceBox Station
+  (multi-level) and Creative Plane S with Creative, started in parallel by different
+  owners. Each: Join answered `pending` (background start), ready after 21 s, 84 s,
+  120-156 s and 30 s; a checkpoint through Topic `save` (2.6 s, 53 s, 70-75 s, 1 s);
+  Stop saved again; a second start resumed from that generation (status `last_save`), a
+  third save had `save_count + 1`, the same level count and `next_id` not lower.
+- **Restore fidelity (record counts by type between the stop's save and the save after the
+  restart).** Creative Plane S unchanged (166 records). See "Found" for the others.
+- **Tutorial flow** (Creative Plane S, Creative, not persistent): round started as the
+  owner; a `start` marker, a Message action, a Complete action, a Tutorial-starts trigger
+  and a Zone trigger placed through the test helpers; submitted through the DM path
+  (`test_tutorial_submit_live`: the panel's `submissions.begin/submit` and the real
+  supervisor): stored under `pending/`, meta title/author/map/source world correct,
+  `characters` and `players` empty, 5 tutorial records, the snapshot removed from the
+  world, `latest.json` untouched, cooldown started and a second submission refused. A
+  player did not see the pending tutorial; the admin's Accept moved it to `published/` and
+  the player saw it. **Play** made a private `tutorial` world (persistent 0), running after
+  30 s with its round started and the five objects at their places; Stop deleted its row
+  and directory. **Copy to my worlds** made the player a Creative, persistent world whose
+  first checkpoint is the tutorial (round started, 163 records); it started from that
+  seed with the objects in place, and its Stop saved a new generation.
+- **Stop during prepare**: Join then Stop at once (state `starting`, no pid): the launch was
+  cancelled before a process started, nothing saved; the starter's next Join was told
+  "The world's start was cancelled: it was stopped." once, and the Join after it started
+  the world normally (a cancel has no back-off).
+- **Failed start with back-off** (IceBox, its checkpoint's `state.json` hidden): the starter
+  heard "The saved state is missing or corrupt" once; the next Join of the starter and of
+  an admin answered "... Try again in 30 seconds." with no run; after the file came back
+  and 30 s passed, Join started it and it resumed from the same generation.
+- **Late login**: a redeem with `wait_seconds=0.001` was refused with `admission_timeout`
+  without spending the ticket; the same ticket then redeemed (`mode player`, role owner);
+  a replay was refused.
+- **Limits** (non-admin owner, defaults above): 3 persistent worlds, the 4th refused ("Your
+  world limit has been reached"); 17 non-persistent worlds up to the total of 20, the 21st
+  refused ("Your total world limit has been reached"); turning Persistent on for an
+  unsaved world refused by the saved-world limit; a second running world of the owner
+  refused ("This owner's running-world limit has been reached"). All 20 deleted again.
+- **Container shutdown** (`docker stop -t 600`, the production `stop_grace_period` of 10m)
+  with Babylon, Creative Plane S, MetaStation and IceBox running: 127 s in all, exit code
+  0: the 30 s countdown, then the four final saves in parallel (2 s, 1 s, 54 s, 81 s); the
+  last world exited 94 s after the countdown, inside the production
+  `BABYLON_SHUTDOWN_TIMEOUT_SECONDS=180`. Every world's `latest.json` named the new save.
+
+Found and fixed (details in the commit messages):
+
+- An IceBox checkpoint (a full capture after a restart) had a damaged `z4.dmm` ("Undefined
+  model key"). The next start ran without that level and its shutdown save wrote the loss
+  over the world (366 objects fewer). Level maps were one huge string written unchecked,
+  the class `state.json` was fixed for earlier. They are now written in checked 1 MB
+  pieces, with a size check. A restore whose saved map did not load fails the start, so
+  nothing gets saved over it. The damaged file itself was deleted with the run data before
+  this was noticed, so the root cause is not confirmed; it did not recur in the later runs.
+- Every Babylon restart gave each restored light a second backup cell (63 per restart):
+  the restored cell is now adopted. Every restart also added about 400 dirt decals, and
+  station restarts added cobwebs and rat or spider nests: upstream's mapload dirt and
+  Skyrat's round-start decay ran again over the saved level. Decay is skipped for a world
+  that resumes a save, and dirt, disposal-bin animals and the MULEbot swap stand back for a
+  saved map, like lights and cameras. A contract test lists every random mapload default
+  in upstream code. Re-checked: a Babylon restart now changes only the companion objects
+  below (3342 -> 3355 records, before: about +480).
+- The back-off refusal read "...corrupt Try again in 30 seconds." (missing full stop).
+
+Not fixed (needs a design decision, see the H1 report): objects that another object makes
+in its `Initialize` (gravity generator parts, turret covers, airlock fillers, atmos shield
+effects, cult floor effects, some landmarks, fridge contents) are both restored from the
+save and made again, so each restart adds a copy (Babylon: 8 gravity generator parts and 5
+CentCom floor lights per restart; IceBox, measured before the decay fix: about 260
+records, among them 116 cult floor effects, 17 turret covers and 13 airlock fillers). Production (`:unstable`) does the same.
+
+Not exercised (needs a real client): joining a world, the lobby page itself, the Creative
+panel and tutorial wand UI, playing a tutorial to its end, rejoining a saved character,
+AFK return, the restart screen hand-off with players connected, Discord.
