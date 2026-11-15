@@ -14,6 +14,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 	/// Noclip (creative) is on; the body's incorporeal_move from before it is kept here.
 	var/babylon_creative_noclip = FALSE
 	var/babylon_creative_prior_incorporeal = FALSE
+	/// Fullbright (creative) is on: this body sees every tile lit, whatever the lighting.
+	var/babylon_creative_fullbright = FALSE
 
 /proc/babylon_creative_godmode(mob/living/user)
 	return HAS_TRAIT_FROM(user, TRAIT_GODMODE, BABYLON_CREATIVE_TRAIT)
@@ -25,6 +27,44 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 	else
 		REMOVE_TRAIT(user, TRAIT_GODMODE, BABYLON_CREATIVE_TRAIT)
 	return babylon_creative_godmode(user)
+
+/proc/babylon_creative_xray(mob/living/user)
+	return HAS_TRAIT_FROM(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
+
+/// X-ray: see turfs, objects and mobs through walls (tg's TRAIT_XRAY_VISION, our own trait source).
+/proc/babylon_creative_set_xray(mob/living/user, enabled)
+	if(enabled)
+		ADD_TRAIT(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
+		GLOB.babylon_creative_powered |= WEAKREF(user)
+	else
+		REMOVE_TRAIT(user, TRAIT_XRAY_VISION, BABYLON_CREATIVE_TRAIT)
+	return babylon_creative_xray(user)
+
+/// Fullbright: the lighting plane's cutoff is raised to fully bright. Carbon bodies get it from
+/// their sight update (every update recomputes the cutoff, so a signal hook keeps it); any other
+/// living body has its cutoff set directly.
+/proc/babylon_creative_set_fullbright(mob/living/user, enabled)
+	if(enabled == user.babylon_creative_fullbright)
+		return enabled
+	user.babylon_creative_fullbright = enabled
+	if(enabled)
+		GLOB.babylon_creative_powered |= WEAKREF(user)
+		if(iscarbon(user))
+			user.RegisterSignal(user, COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS, TYPE_PROC_REF(/mob/living, babylon_creative_fullbright_cutoff))
+		else
+			user.lighting_cutoff = LIGHTING_CUTOFF_FULLBRIGHT
+	else
+		if(iscarbon(user))
+			user.UnregisterSignal(user, COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS)
+		else
+			user.lighting_cutoff = initial(user.lighting_cutoff)
+	user.update_sight()
+	return enabled
+
+/// Runs inside the carbon sight update, before the cutoff is applied to the screen.
+/mob/living/proc/babylon_creative_fullbright_cutoff(datum/source, list/return_list)
+	SIGNAL_HANDLER
+	lighting_cutoff = LIGHTING_CUTOFF_FULLBRIGHT
 
 /proc/babylon_creative_set_noclip(mob/living/user, enabled)
 	if(enabled == user.babylon_creative_noclip)
@@ -87,6 +127,8 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 			continue
 		babylon_creative_set_godmode(body, FALSE)
 		babylon_creative_set_noclip(body, FALSE)
+		babylon_creative_set_xray(body, FALSE)
+		babylon_creative_set_fullbright(body, FALSE)
 	GLOB.babylon_creative_powered.Cut()
 
 /// The tools the kit's toolbelt holds.

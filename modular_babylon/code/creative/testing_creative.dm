@@ -21,18 +21,42 @@
 	result["disabled_no_panel"] = !babylon_creative_open(body)
 	result["disabled_no_button"] = !babylon_creative_test_button(body)
 	result["disabled_actions_refused"] = !panel.handle_action(body, "godmode") && !HAS_TRAIT(body, TRAIT_GODMODE) \
+		&& !panel.handle_action(body, "xray") && !HAS_TRAIT(body, TRAIT_XRAY_VISION) \
+		&& !panel.handle_action(body, "fullbright") && !body.babylon_creative_fullbright \
 		&& !panel.handle_action(body, "spawn", list("path" = "/obj/item/wrench"))
 
 	flags.creative = TRUE
 	babylon_creative_sync(body)
 	result["enabled_button"] = !!babylon_creative_test_button(body)
-	result["stranger_refused"] = !panel.handle_action(stranger, "godmode") && !HAS_TRAIT(stranger, TRAIT_GODMODE)
+	result["stranger_refused"] = !panel.handle_action(stranger, "godmode") && !HAS_TRAIT(stranger, TRAIT_GODMODE) \
+		&& !panel.handle_action(stranger, "xray") && !HAS_TRAIT(stranger, TRAIT_XRAY_VISION) \
+		&& !panel.handle_action(stranger, "fullbright") && !stranger.babylon_creative_fullbright
 
 	// Self: godmode toggles TRAIT_GODMODE from the creative source only.
 	panel.handle_action(body, "godmode")
 	var/godmode_on = HAS_TRAIT_FROM(body, TRAIT_GODMODE, BABYLON_CREATIVE_TRAIT)
 	panel.handle_action(body, "godmode")
 	result["godmode_toggles"] = godmode_on && !HAS_TRAIT(body, TRAIT_GODMODE)
+	// X-ray toggles TRAIT_XRAY_VISION from the creative source only (another source stays when off).
+	ADD_TRAIT(body, TRAIT_XRAY_VISION, "babylon_test_other")
+	panel.handle_action(body, "xray")
+	var/xray_on = babylon_creative_xray(body) && panel.ui_data(body)["xray"]
+	panel.handle_action(body, "xray")
+	result["xray_toggles"] = xray_on && !babylon_creative_xray(body) && HAS_TRAIT(body, TRAIT_XRAY_VISION) && !panel.ui_data(body)["xray"]
+	REMOVE_TRAIT(body, TRAIT_XRAY_VISION, "babylon_test_other")
+	// Fullbright raises the body's lighting cutoff (carbon: through the sight update's hook), off restores it.
+	var/prior_cutoff = body.lighting_cutoff
+	panel.handle_action(body, "fullbright")
+	var/fullbright_on = body.babylon_creative_fullbright && panel.ui_data(body)["fullbright"]
+	if(iscarbon(body))
+		body.babylon_creative_fullbright_cutoff(null, list())
+		fullbright_on = fullbright_on && (COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS in body._listen_lookup)
+	fullbright_on = fullbright_on && body.lighting_cutoff == LIGHTING_CUTOFF_FULLBRIGHT
+	panel.handle_action(body, "fullbright")
+	body.update_sight()
+	result["fullbright_toggles"] = fullbright_on && !body.babylon_creative_fullbright && !panel.ui_data(body)["fullbright"] \
+		&& !(COMSIG_CARBON_UPDATE_SIGHT_CUTOFFS in body._listen_lookup)
+	body.lighting_cutoff = prior_cutoff
 	body.adjust_brute_loss(20)
 	var/hurt = body.health < body.maxHealth
 	panel.handle_action(body, "heal")
@@ -268,6 +292,9 @@
 	// Creative switched off at runtime: the world tick takes everything back.
 	panel.handle_action(body, "godmode")
 	panel.handle_action(body, "noclip")
+	panel.handle_action(body, "xray")
+	panel.handle_action(body, "fullbright")
+	var/powers_were_on = babylon_creative_xray(body) && body.babylon_creative_fullbright
 	panel.event_times.Cut()
 	panel.handle_action(body, "run_event", list("path" = "/datum/round_event_control/wormholes"))
 	var/datum/round_event/wormholes/lingering = length(SSevents.running) ? SSevents.running[length(SSevents.running)] : null
@@ -280,6 +307,7 @@
 	creative_was_on = TRUE
 	tick_creative()
 	result["runtime_off_revokes"] = !HAS_TRAIT(body, TRAIT_GODMODE) && !body.babylon_creative_noclip && !body.incorporeal_move \
+		&& powers_were_on && !HAS_TRAIT(body, TRAIT_XRAY_VISION) && !body.babylon_creative_fullbright \
 		&& !babylon_creative_test_button(body)
 	var/holes_closed = length(holes) > 0
 	for(var/obj/effect/portal/wormhole/hole as anything in holes)

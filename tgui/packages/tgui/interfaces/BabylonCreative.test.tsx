@@ -84,6 +84,8 @@ const data: CreativeData = {
   godmode: true,
   godmode_elsewhere: false,
   noclip: false,
+  xray: false,
+  fullbright: true,
   dead: false,
   health: 85,
   body: 'Maintenance drone',
@@ -115,8 +117,21 @@ describe('BabylonCreative', () => {
     act(() => render(<BabylonCreative />));
     expect(screen.getByText('Godmode')).toBeDefined();
     expect(screen.getByText('Noclip')).toBeDefined();
+    expect(screen.getByText('X-ray')).toBeDefined();
+    expect(screen.getByText('Fullbright')).toBeDefined();
     expect(screen.getByText('Heal fully')).toBeDefined();
     expect(screen.getByText('Godmode on: nothing can hurt you.')).toBeDefined();
+  });
+
+  it('shows X-ray and Fullbright as toggles with their own state', () => {
+    act(() => render(<BabylonCreative />));
+    // Godmode, noclip, X-ray and fullbright each get a toggle on the Self tab; only
+    // fullbright is on in this data (xray off, noclip off, godmode on).
+    expect(screen.getAllByText('On').length).toBe(2);
+    expect(screen.getAllByText('Off').length).toBe(2);
+    // ... and a quick toggle in the header, reachable from every tab.
+    expect(document.querySelectorAll('.fa-eye').length).toBeGreaterThan(1);
+    expect(document.querySelectorAll('.fa-lightbulb').length).toBeGreaterThan(1);
   });
 
   it('shows the curated spawn categories', () => {
