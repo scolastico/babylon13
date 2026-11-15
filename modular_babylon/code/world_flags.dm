@@ -181,17 +181,21 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /proc/babylon_world_saves_characters(for_tutorial = FALSE)
 	return !for_tutorial && !!GLOB.babylon_world?.saves_characters()
 
-/// The world can admit players and answer the supervisor's status as ready. Babylon: the
-/// builder session has restored the world and booted. Station: the master controller has
-/// initialized everything, the visitor/spectator spawn point is set and the ticker reached the
-/// pre-round lobby (or a later state); worlds whose round starts at once (tutorials, resumed
-/// rounds: station_round.dm) are ready once it runs, so nobody arrives during its setup.
+/// The world can admit players and answer the supervisor's status as ready: the session's own
+/// ready flag, which also lets it save. Reporting ready before that flag was set (up to a second
+/// later on station worlds) made a stop right after the start skip its save as "not finished
+/// starting", and the smoke's ready check fail now and then.
 /proc/babylon_world_ready()
-	var/datum/babylon_save/session = GLOB.babylon_save
+	return !!GLOB.babylon_save?.ready
+
 #ifdef BABYLON_STATION
+/// Station: when station_boot() sets ready. The master controller has initialized everything,
+/// the visitor/spectator spawn point is set and the ticker reached the pre-round lobby (or a
+/// later state); worlds whose round starts at once (tutorials, resumed rounds: station_round.dm)
+/// once it runs, so nobody arrives during its setup.
+/proc/babylon_station_boot_complete()
+	var/datum/babylon_save/session = GLOB.babylon_save
 	return session && !session.boot_error && session.prepared && session.respawn_turf && Master.init_stage_completed >= INITSTAGE_MAX && SSticker.current_state >= (session.round_mode == "hold" ? GAME_STATE_PREGAME : GAME_STATE_PLAYING)
-#elif defined(BABYLON_DRONE)
-	return !!session?.ready
 #endif
 
 // ---------------------------------------------------------------------------------------------

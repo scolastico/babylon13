@@ -429,5 +429,15 @@ class MaploadDefaults(unittest.TestCase):
         self.assertIn("allow_break_on_init = FALSE", persistence)
 
 
+class Readiness(unittest.TestCase):
+    def test_a_world_reports_ready_only_once_it_can_save(self):
+        # The status the supervisor trusts and the flag save_world() checks must be the same:
+        # a stop right after the start skipped its save when they differed.
+        flags = (DM / "world_flags.dm").read_text(encoding="utf-8")
+        body = flags.split("/proc/babylon_world_ready()", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(body.strip(), "return !!GLOB.babylon_save?.ready")
+        self.assertIn("while(!babylon_station_boot_complete())", (DM / "station_session.dm").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

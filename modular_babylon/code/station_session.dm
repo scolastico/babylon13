@@ -42,7 +42,7 @@ SUBSYSTEM_DEF(babylon_station)
 	return SS_INIT_SUCCESS
 
 /datum/babylon_save/proc/station_boot()
-	while(!babylon_world_ready())
+	while(!babylon_station_boot_complete())
 		if(boot_error)
 			return
 		sleep(1 SECONDS)
