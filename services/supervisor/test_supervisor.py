@@ -16,6 +16,12 @@ class FakeDriver:
         self.saves = True
 
     def start(self, world, run):
+        return self.spawn(world, run, self.prepare(world, run))
+
+    def prepare(self, world, run):
+        return None
+
+    def spawn(self, world, run, root):
         self.starts += 1
         self.runs[run["id"]] = dict(run, players=[], ready=True)
         return 123
@@ -67,6 +73,8 @@ class Policies(unittest.TestCase):
                            ticket_lifetime_seconds=60, empty_grace_seconds=120,
                            startup_timeout_seconds=300, public_host="localhost", admins=["admin"])
         self.s = Supervisor(self.config, self.driver, lambda: self.now)
+        # A start finishes inside dispatch() here; Launches tests the background launch.
+        self.s.background_launches = False
 
     def tearDown(self):
         for _ in range(100):
@@ -484,15 +492,12 @@ class Policies(unittest.TestCase):
         run = self.start(running, "one")
         token = self.ticket(running, "one")
         copying, release = threading.Event(), threading.Event()
-        real_start = self.driver.start
-
-        def slow_start(world, new_run):
+        def slow_prepare(world, new_run):
             copying.set()
             release.wait(10)
-            return real_start(world, new_run)
 
         other = self.create("two")
-        self.driver.start = slow_start
+        self.driver.prepare = slow_prepare
         worker = threading.Thread(target=lambda: self.s.dispatch("two", "join", {"world": other}))
         worker.start()
         self.assertTrue(copying.wait(10))
@@ -504,7 +509,7 @@ class Policies(unittest.TestCase):
 
     def test_a_failed_launch_removes_its_run(self):
         w = self.create()
-        self.driver.start = lambda world, run: (_ for _ in ()).throw(OSError("disk full"))
+        self.driver.prepare = lambda world, run: (_ for _ in ()).throw(OSError("disk full"))
         with self.assertRaisesRegex(Denied, "Child startup failed"):
             self.s.dispatch("owner", "join", {"world": w})
         self.assertFalse(self.s.row("SELECT * FROM runs WHERE world=?", (w,)))
@@ -718,6 +723,208 @@ class WorldTypes(unittest.TestCase):
             Supervisor(dict(self.config, data_directory=self.temp.name + "/other", map_catalog=str(bad)),
                        self.driver, lambda: self.now)
 
+
+class Launches(unittest.TestCase):
+    """A world start commits its run under the lock and prepares its files without it (launch()):
+    a Stop or a shutdown meanwhile cancels it, and the lobby's Join is answered at once."""
+    setUp, create, start = Policies.setUp, Policies.create, Policies.start
+
+    def tearDown(self):
+        # A background launch must be done before the database closes.
+        self.assertTrue(self.wait_until(lambda: not self.s.launching))
+        time.sleep(.05)
+        Policies.tearDown(self)
+
+    def run_of(self, world):
+        with self.s.lock:
+            return self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+
+    def wait_until(self, condition):
+        for _ in range(500):
+            if condition():
+                return True
+            time.sleep(.01)
+        return False
+
+    def slow_prepare(self):
+        preparing, release = threading.Event(), threading.Event()
+
+        def prepare(world, run):
+            preparing.set()
+            release.wait(10)
+        self.driver.prepare = prepare
+        return preparing, release
+
+    def join_in_thread(self, world, actor="owner"):
+        outcome = {}
+
+        def join():
+            try:
+                outcome["result"] = self.s.dispatch(actor, "join", {"world": world})
+            except Denied as error:
+                outcome["error"] = str(error)
+        worker = threading.Thread(target=join)
+        worker.start()
+        return worker, outcome
+
+    def test_stop_while_preparing_cancels_the_launch(self):
+        w = self.create()
+        preparing, release = self.slow_prepare()
+        self.driver.stop = lambda run: self.fail("a world without a process gets no managed_stop")
+        worker, outcome = self.join_in_thread(w)
+        self.assertTrue(preparing.wait(10))
+        self.assertEqual(self.s.dispatch("owner", "stop", {"world": w}), {"ok": True})
+        run = self.run_of(w)
+        self.assertEqual((run["state"], run["pid"], run["error"]), ("stopping", None, None))
+        self.assertFalse(self.s.stop_workers)
+        # A tick meanwhile leaves it to the launch (no error, no removal under its feet).
+        self.s.tick()
+        self.assertEqual(self.run_of(w)["state"], "stopping")
+        release.set()
+        worker.join(10)
+        self.assertIn("cancelled: it was stopped", outcome["error"])
+        self.assertIsNone(self.run_of(w))
+        self.assertEqual(self.driver.starts, 0, "no process was started")
+        self.assertFalse(self.s.launching)
+        # The world starts normally again afterwards.
+        self.driver.prepare = lambda world, run: None
+        self.assertEqual(self.start(w)["pid"], 123)
+
+    def test_shutdown_while_preparing_cancels_the_launch(self):
+        w = self.create()
+        preparing, release = self.slow_prepare()
+        worker, outcome = self.join_in_thread(w)
+        self.assertTrue(preparing.wait(10))
+        self.s.shutting_down = True
+        release.set()
+        worker.join(10)
+        self.assertIn("server is restarting", outcome["error"])
+        self.assertIsNone(self.run_of(w))
+        self.assertEqual(self.driver.starts, 0)
+
+    def test_a_start_that_times_out_while_preparing_is_cancelled(self):
+        w = self.create()
+        preparing, release = self.slow_prepare()
+        worker, outcome = self.join_in_thread(w)
+        self.assertTrue(preparing.wait(10))
+        self.now += 301
+        self.s.tick()
+        run = self.run_of(w)
+        self.assertEqual((run["state"], run["error"]), ("error", "Startup timed out while its files were being prepared"))
+        release.set()
+        worker.join(10)
+        self.assertIn("did not start in time", outcome["error"])
+        self.assertIsNone(self.run_of(w))
+        self.assertEqual(self.driver.starts, 0)
+
+    def test_join_is_answered_before_the_files_are_ready(self):
+        # m-e: the lobby's Join returns once the run is committed and polls Join meanwhile.
+        self.s.background_launches = True
+        w = self.create()
+        preparing, release = self.slow_prepare()
+        self.assertEqual(self.s.dispatch("owner", "join", {"world": w}), {"ok": True, "pending": True})
+        self.assertTrue(preparing.wait(10))
+        self.assertEqual(self.s.dispatch("owner", "join", {"world": w}), {"ok": True, "pending": True})
+        release.set()
+        self.assertTrue(self.wait_until(lambda: self.run_of(w)["pid"] == 123))
+        self.s.tick()
+        self.assertIn("address", self.s.dispatch("owner", "join", {"world": w}))
+
+    def test_a_failed_background_launch_is_told_on_the_next_join(self):
+        self.s.background_launches = True
+        w = self.create()
+        self.s.dispatch("owner", "member", {"world": w, "member": "friend"})
+        self.driver.prepare = lambda world, run: (_ for _ in ()).throw(OSError("disk full"))
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+        self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and w in self.s.launch_failures))
+        # Only the player who started it hears it, once; their lobby stops polling then.
+        with self.assertRaisesRegex(Denied, "Child startup failed"):
+            self.s.dispatch("owner", "join", {"world": w})
+        self.driver.prepare = lambda world, run: None
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+        self.assertTrue(self.wait_until(lambda: self.run_of(w)["pid"] == 123))
+
+    def test_a_cancelled_background_launch_is_told_on_the_next_join(self):
+        self.s.background_launches = True
+        w = self.create()
+        self.s.dispatch("owner", "member", {"world": w, "member": "friend"})
+        preparing, release = self.slow_prepare()
+        self.assertTrue(self.s.dispatch("friend", "join", {"world": w})["pending"])
+        self.assertTrue(preparing.wait(10))
+        self.s.dispatch("owner", "stop", {"world": w})
+        release.set()
+        self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and w in self.s.launch_failures))
+        # Someone else's Join is not refused; the starter's poll is, so it does not start it again.
+        with self.assertRaisesRegex(Denied, "it was stopped"):
+            self.s.dispatch("friend", "join", {"world": w})
+        self.assertEqual(self.driver.starts, 0)
+        # An old failure is forgotten.
+        self.s.launch_failures[w] = ("friend", "old", self.now - Supervisor.LAUNCH_FAILURE_SECONDS - 1)
+        self.driver.prepare = lambda world, run: None
+        self.assertTrue(self.s.dispatch("friend", "join", {"world": w})["pending"])
+        self.assertTrue(self.wait_until(lambda: (self.run_of(w) or {}).get("pid") == 123))
+
+    def test_startup_drops_runs_that_never_started_a_process(self):
+        # m-a: a supervisor that stopped while it prepared a world leaves a pid-less run behind.
+        crashed, running = self.create(), self.create("two")
+        self.start(running, "two")
+        self.s.db.execute("INSERT INTO runs(id,world,port,secret,state,started) VALUES('lost',?,1402,'s','starting',?)",
+                          (crashed, self.now))
+        self.s.db.execute("INSERT INTO tickets(hash,ckey,world,run,expires) VALUES('h','owner',?,'lost',?)", (crashed, self.now + 60))
+        self.s.db.commit()
+        restarted = Supervisor(self.config, self.driver, lambda: self.now)
+        self.addCleanup(restarted.db.close)
+        self.assertIsNone(restarted.row("SELECT * FROM runs WHERE world=?", (crashed,)))
+        self.assertIsNone(restarted.row("SELECT * FROM tickets WHERE run='lost'"))
+        self.assertEqual(restarted.row("SELECT pid FROM runs WHERE world=?", (running,))["pid"], 123)
+
+    def test_tick_drops_a_pid_less_run_no_launch_owns(self):
+        w = self.create()
+        self.s.db.execute("INSERT INTO runs(id,world,port,secret,state,started) VALUES('lost',?,1402,'s','stopping',?)",
+                          (w, self.now))
+        self.s.db.commit()
+        self.s.tick()
+        self.assertIsNone(self.run_of(w))
+
+    def test_reset_waits_for_checkpoint_maintenance(self):
+        # m-d: retain() and a reset never work on the same saves at once.
+        w = self.create()
+        saves = Path(self.temp.name) / "worlds" / w / "data/babylon/saves"
+        saves.mkdir(parents=True)
+        done = threading.Event()
+        with self.s.checkpoint_lock:
+            worker = threading.Thread(target=lambda: (self.s.dispatch("owner", "reset", {"world": w, "confirm": True}),
+                                                      done.set()))
+            worker.start()
+            self.assertFalse(done.wait(.2))
+            self.assertTrue(saves.exists())
+        worker.join(10)
+        self.assertTrue(done.is_set())
+        self.assertFalse(saves.exists())
+
+    def test_a_failed_stop_commit_leaves_no_stop_worker(self):
+        w = self.create()
+        run = self.start(w)
+        real = self.s.db
+
+        class FailingCommit:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def commit(self):
+                raise RuntimeError("disk full")
+        self.s.db = FailingCommit()
+        try:
+            with self.s.lock, self.assertRaises(RuntimeError):
+                self.s.begin_stop(run)
+        finally:
+            real.rollback()
+            self.s.db = real
+        self.assertFalse(self.s.stop_workers)
+        self.s.dispatch("owner", "stop", {"world": w})
+        self.assertTrue(self.wait_until(lambda: not self.s.stop_workers))
+        self.s.tick()
+        self.assertIsNone(self.run_of(w))
 
 if __name__ == "__main__":
     unittest.main()

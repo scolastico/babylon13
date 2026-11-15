@@ -180,6 +180,10 @@ class Submit(TutorialFixture):
             self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")
         with self.assertRaisesRegex(Denied, "being started or copied"):
             self.s.dispatch("admin", "tutorial_reject", {"tutorial": tid, "confirm": 1})
+        # m-b: accepting would rename the pending directory away while a start copies it.
+        with self.assertRaisesRegex(Denied, "being started or copied"):
+            self.s.dispatch("admin", "tutorial_accept", {"tutorial": tid})
+        self.assertEqual(self.tutorial(tid)["status"], "pending")
         self.s.tutorial_readers.clear()
         self.assertEqual(self.child("tutorial_save_back", edit_run, actor="admin", generation="save-20261114-150000-7")["ok"], True)
 
@@ -630,6 +634,88 @@ class Instances(TutorialFixture):
         pending = self.submit(run, actor="author3")
         with self.assertRaisesRegex(Denied, "Only published"):
             self.s.dispatch("admin", "tutorial_copy", {"tutorial": pending})
+
+    def test_copy_checks_the_world_limit_again_after_copying(self):
+        # m-c: a world created while the copy ran must not let the owner exceed the limit.
+        tid = self.published()
+        self.s.config["max_worlds_per_player"] = 1
+        import tutorials
+        real = tutorials.seed_first_save
+
+        def seed_and_create(snapshot, saves):
+            result = real(snapshot, saves)
+            self.s.dispatch("player", "create", dict(name="Meanwhile", visibility="private"))
+            return result
+        with unittest.mock.patch("supervisor.seed_first_save", seed_and_create):
+            with self.assertRaisesRegex(Denied, "world limit"):
+                self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        rows = self.s.db.execute("SELECT name FROM worlds WHERE owner='player'").fetchall()
+        self.assertEqual([r[0] for r in rows], ["Meanwhile"])
+        self.assertEqual(sorted(p.name for p in (self.data / "worlds").iterdir()
+                                if (p / "data/babylon/saves/latest.json").exists()), [])
+        self.assertFalse(self.s.copying)
+        self.assertFalse(self.s.tutorial_readers)
+
+    def test_copy_reservations_survive_no_failed_commit(self):
+        # m-c: the reservations are taken outside the transaction block; a failing commit there
+        # leaves none behind.
+        tid = self.published()
+        real = self.s.db
+
+        class FailingCommit:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def __enter__(self):
+                return real.__enter__()
+
+            def __exit__(self, kind, *rest):
+                if kind is None:
+                    real.rollback()
+                    raise RuntimeError("disk full")
+                return real.__exit__(kind, *rest)
+        self.s.db = FailingCommit()
+        try:
+            with self.assertRaises(RuntimeError):
+                self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})
+        finally:
+            self.s.db = real
+        self.assertFalse(self.s.copying)
+        self.assertFalse(self.s.tutorial_readers)
+        self.assertTrue(self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})["ok"])
+
+    def test_stop_while_an_instance_prepares_deletes_it(self):
+        # S-A for tutorial instances: Stop under My worlds while Play prepares cancels the start;
+        # the instance (row and files) goes like any ended instance.
+        tid = self.published()
+        preparing, release = threading.Event(), threading.Event()
+
+        def prepare(world, run):
+            (self.data / "worlds" / world["id"]).mkdir(parents=True, exist_ok=True)
+            preparing.set()
+            release.wait(10)
+        self.driver.prepare = prepare
+        outcome = {}
+
+        def play():
+            try:
+                self.s.dispatch("player", "tutorial_play", {"tutorial": tid})
+            except Denied as error:
+                outcome["error"] = str(error)
+        worker = threading.Thread(target=play)
+        worker.start()
+        self.assertTrue(preparing.wait(10))
+        with self.s.lock:
+            instance = self.s.row("SELECT id FROM worlds WHERE kind='tutorial' AND owner='player'")["id"]
+        self.s.dispatch("player", "stop", {"world": instance})
+        release.set()
+        worker.join(10)
+        self.assertFalse(self.s.row("SELECT * FROM worlds WHERE id=?", (instance,)))
+        self.assertFalse(self.s.row("SELECT * FROM runs WHERE world=?", (instance,)))
+        self.assertFalse((self.data / "worlds" / instance).exists())
+        self.assertFalse(self.s.tutorial_readers)
+        self.assertIn("cancelled: it was stopped", outcome["error"])
+        self.assertEqual(self.driver.starts, 1)  # the author's world; no process for the instance
 
     def test_no_new_instances_while_shutting_down(self):
         tid = self.published()

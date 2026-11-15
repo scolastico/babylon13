@@ -137,6 +137,9 @@ def main():
                 return run
             if run and run["state"] == "error":
                 raise RuntimeError(run["error"])
+            if world in service.launch_failures:
+                # The start failed in the background (the join answered "pending" at once).
+                raise RuntimeError(service.launch_failures[world][1])
             time.sleep(5)
         raise TimeoutError("Child did not become ready")
 

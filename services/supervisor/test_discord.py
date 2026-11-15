@@ -23,6 +23,7 @@ class DiscordLinks(unittest.TestCase):
                            discord=dict(link=True, require_create=False, require_join=False,
                                         invite="https://discord.gg/example"))
         self.s = Supervisor(self.config, FakeDriver(), lambda: self.now)
+        self.s.background_launches = False
         self.changes = []
         self.s.discord_link_changed = lambda *change: self.changes.append(change)
 

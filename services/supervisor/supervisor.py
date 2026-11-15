@@ -43,6 +43,11 @@ class Denied(ValueError):
         self.code = code
 
 
+class LaunchCancelled(Denied):
+    """A world start that was stopped (or the server began shutting down) while its files were
+    prepared: its process is never started."""
+
+
 # Link codes avoid look-alike characters (0/O, 1/I) because players type them.
 LINK_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 LINK_CODE_SECONDS = 600
@@ -369,7 +374,12 @@ class Driver:
         return root
 
     def start(self, world, run):
-        root = self.prepare(world, run)
+        """Prepares the world's files and starts its process (tools and tests; the supervisor
+        calls prepare() and spawn() itself, to check between them that the start is still wanted)."""
+        return self.spawn(world, run, self.prepare(world, run))
+
+    def spawn(self, world, run, root):
+        """Starts the process of a world whose files prepare() made ready in ``root``; returns its pid."""
         from urllib.parse import urlencode
         build = self.build_of(world)
         params = urlencode({"config-directory": str(root / "babylon-config"),
@@ -569,6 +579,15 @@ class Supervisor:
         self.pending_maintenance = {}
         # Per request thread: world starts to launch once the request released self.lock.
         self.local = threading.local()
+        # Runs whose launch() has not finished yet (committed by start(), no process recorded yet).
+        # A pid-less run outside this set has nothing that could still start it.
+        self.launching = set()
+        # Launches run in a background thread, so a Join is answered once its run is committed (the
+        # lobby polls Join until the world runs). Off in tests that want a start to finish in dispatch().
+        self.background_launches = True
+        # world id -> (actor, message, when): a background launch that failed or was cancelled, told
+        # to the player who started it on their next Join poll (their run is gone by then).
+        self.launch_failures = {}
         # The driver refuses to stage a snapshot that is being saved back (Driver.restore_source).
         self.driver.busy_tutorials = self.saving_back
         # Set by the Discord bot: called with a submitted tutorial (a dict) to tell the reviewers.
@@ -577,6 +596,15 @@ class Supervisor:
             known = {row[0] for row in self.db.execute("SELECT id FROM tutorials")}
         for action, path in reconcile_store(self.tutorials, known):
             log("Tutorial store at startup: %s (%s)" % (action, path))
+        # A run without a pid was committed by start() but its process never started (the previous
+        # supervisor stopped while it prepared the files, or while a cancel was pending): nothing can
+        # be running for it, so drop it at once (frees its port and slot).
+        with self.db:
+            for row in self.db.execute("SELECT * FROM runs WHERE pid IS NULL").fetchall():
+                log("%s never started its process (supervisor restarted while preparing it); start dropped"
+                    % self.describe(row["world"]))
+                for table, column in (("runs", "id"), ("tickets", "run"), ("sessions", "run")):
+                    self.db.execute(f"DELETE FROM {table} WHERE {column}=?", (row["id"],))
         # Tutorial instances end with their run. One without a run is left from a supervisor that
         # stopped while it ran; tick's cleanup deletes it.
         with self.db:
@@ -655,11 +683,21 @@ class Supervisor:
                 raise Denied("Confirm that all saves of this world will be permanently deleted")
             if world["id"] in self.world_busy:
                 raise Denied("This world's saves are being changed right now; try again in a moment")
+        # Reserved outside the transaction block, so a failing commit can't leak the reservation;
+        # checked again, since the lock was free for a moment.
+        with self.lock:
+            if world["id"] in self.world_busy:
+                raise Denied("This world's saves are being changed right now; try again in a moment")
+            if self.row("SELECT 1 FROM runs WHERE world=?", (world["id"],)):
+                raise Denied("Stop the world before browsing or restoring checkpoints" if action != "reset"
+                             else "Stop the world before resetting it")
             self.world_busy.add(world["id"])
         try:
             if action == "reset":
                 try:
-                    reset_world_data(Path(self.config["data_directory"]) / "worlds" / world["id"])
+                    # Checkpoint maintenance (retain) must not prune the saves this deletes.
+                    with self.checkpoint_lock:
+                        reset_world_data(Path(self.config["data_directory"]) / "worlds" / world["id"])
                 except (OSError, ValueError) as error:
                     log("Resetting %s failed: %s" % (self.describe(world["id"]), error))
                     raise Denied("The world's data could not be reset") from None
@@ -988,9 +1026,14 @@ class Supervisor:
                 "admin_worlds": sum(run["owner"] in self.admins for run in active),
                 "players": sum(len(json.loads(run["players"] or "[]")) for run in active)}
 
+    # Seconds a failed background launch is kept for its player's next Join poll.
+    LAUNCH_FAILURE_SECONDS = 300
+
     def dispatch(self, actor, action, data):
         """A lobby action. World starts it decided on are launched after it released self.lock
-        (launch()): copying a world's files must not hold up other worlds' logins."""
+        (launch()): copying a world's files must not hold up other worlds' logins. With
+        background_launches (the default) the request is answered meanwhile ("pending"); the lobby
+        polls Join, which reports a failed launch (launch_failure())."""
         if getattr(self.local, "launches", None) is not None:
             return self.dispatch_action(actor, action, data)
         self.local.launches = []
@@ -999,7 +1042,11 @@ class Supervisor:
             result = self.dispatch_action(actor, action, data)
         finally:
             launches, self.local.launches = self.local.launches, None
-            for world, run in launches:
+            for world, run, starter in launches:
+                if self.background_launches:
+                    threading.Thread(target=self.launch_in_background, args=(world, run, starter),
+                                     daemon=True).start()
+                    continue
                 try:
                     self.launch(world, run)
                 except Denied as error:
@@ -1008,6 +1055,31 @@ class Supervisor:
         if failure:
             raise failure
         return result
+
+    def launch_in_background(self, world, run, actor):
+        """launch() in its own thread; a failure is kept for the starter's next Join poll."""
+        try:
+            self.launch(world, run)
+        except Denied as error:
+            with self.lock:
+                self.forget_old_launch_failures()
+                self.launch_failures[world["id"]] = (actor, str(error), self.clock())
+        except Exception:
+            import traceback
+            log(traceback.format_exc())
+
+    def forget_old_launch_failures(self):
+        for world, (_, _, at) in list(self.launch_failures.items()):
+            if self.clock() - at > self.LAUNCH_FAILURE_SECONDS:
+                self.launch_failures.pop(world, None)
+
+    def launch_failure(self, actor, world_id):
+        """Raises the failed or cancelled background launch of world_id that ``actor`` started, once."""
+        self.forget_old_launch_failures()
+        failure = self.launch_failures.get(world_id) if isinstance(world_id, str) else None
+        if failure and failure[0] == actor:
+            del self.launch_failures[world_id]
+            raise Denied(failure[1])
 
     def dispatch_action(self, actor, action, data):
         if action == "summary":
@@ -1081,6 +1153,10 @@ class Supervisor:
                                 (world_id, actor, *fields, self.clock(), self.clock(), map_id, creative, persistent))
                 self.audit(actor, action, world_id)
                 return {"ok": True, "id": world_id}
+            if action == "join":
+                # The player's last start of this world failed in the background (their lobby polls
+                # Join while it starts): tell them, instead of starting it again.
+                self.launch_failure(actor, data.get("world"))
             world = self.world(data.get("world"))
             role = self.role(actor, world)
             if action in ("edit", "stop", "member", "checkpoints", "rollback", "reset"):
@@ -1111,6 +1187,7 @@ class Supervisor:
                     self.db.execute("DELETE FROM tickets WHERE world=? AND ckey=?", (world["id"], who))
                 else:
                     if run:
+                        # A run still preparing its files (no pid) is cancelled (begin_stop).
                         self.begin_stop(run)
                 self.audit(actor, action, world["id"])
                 self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
@@ -1419,8 +1496,10 @@ class Supervisor:
                 if action in ("tutorial_accept", "tutorial_reject", "tutorial_delete") and tutorial["id"] in self.saving_back:
                     # Its files are being replaced outside the lock (tutorial_save_back).
                     raise Denied("An admin is saving this tutorial back right now. Try again in a moment.")
-                if action in ("tutorial_reject", "tutorial_delete") and self.tutorial_readers.get(tutorial["id"]):
-                    # A world start or a copy is reading its snapshot outside the lock.
+                if (action in ("tutorial_accept", "tutorial_reject", "tutorial_delete")
+                        and self.tutorial_readers.get(tutorial["id"])):
+                    # A world start or a copy is reading its snapshot outside the lock (accepting
+                    # would move the pending directory away mid-copy).
                     raise Denied("This tutorial is being started or copied right now. Try again in a moment.")
                 if action in ("tutorial_reject", "tutorial_delete") and data.get("confirm") not in (True, 1, "1"):
                     raise Denied("Confirm that the tutorial will be permanently deleted")
@@ -1550,6 +1629,14 @@ class Supervisor:
                     raise TutorialError("The tutorial's snapshot is missing")
             except TutorialError as error:
                 raise Denied(str(error)) from None
+        # Reserved outside the transaction block, so a failing commit can't leak the reservations;
+        # checked again, since the lock was free for a moment.
+        with self.lock:
+            if actor in self.copying:
+                raise Denied("A copy of yours is being made right now; wait for it to finish")
+            current = self.row("SELECT status FROM tutorials WHERE id=?", (tutorial["id"],))
+            if not current or current["status"] != "published":
+                raise Denied("This tutorial does not exist or is no longer available")
             self.copying.add(actor)
             self.tutorial_readers[tutorial["id"]] = self.tutorial_readers.get(tutorial["id"], 0) + 1
         world_id = secrets.token_hex(16)
@@ -1569,6 +1656,9 @@ class Supervisor:
             copied_from = json.dumps({k: tutorial[k] for k in ("id", "title", "author")})
             try:
                 with self.lock, self.db:
+                    # The owner may have created a world while this one was copied.
+                    if actor not in self.admins:
+                        self.check_world_limits(actor, 1)
                     self.db.execute("INSERT INTO worlds(id,owner,name,description,visibility,password,max_players,created,last_used,map,"
                                     "creative,persistent,copied_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                     (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
@@ -1603,6 +1693,8 @@ class Supervisor:
         """Decides on a world start under self.lock: the limits, a port and the committed launch
         intent (a "starting" run). The files are prepared and the process started by launch(),
         after the request released the lock (dispatch()), or at once when no request is around."""
+        if self.shutting_down:
+            raise Denied("The server is restarting. Try again in a minute.")
         if world["map"] not in self.catalog:
             raise Denied("This world's map is no longer available")
         if world["id"] in self.world_busy:
@@ -1629,14 +1721,15 @@ class Supervisor:
         self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), world["id"]))
         # Commit the launch intent before starting a child so supervisor restarts can reconcile it.
         self.db.commit()
+        self.launching.add(run["id"])
         if tutorial:
-            # Save back, reject and delete wait until its snapshot was staged.
+            # Save back, accept, reject and delete wait until its snapshot was staged.
             self.tutorial_readers[tutorial] = self.tutorial_readers.get(tutorial, 0) + 1
         launches = getattr(self.local, "launches", None)
         if launches is None:
             self.launch(dict(world), run)
         else:
-            launches.append((dict(world), run))
+            launches.append((dict(world), run, actor))
 
     def release_reader(self, tutorial):
         with self.lock:
@@ -1648,32 +1741,57 @@ class Supervisor:
 
     def launch(self, world, run):
         """Prepares a world's files and starts its process for a run start() committed, without
-        self.lock (the copies take a while). On failure the run is removed again, and a tutorial
-        instance deleted (its row and files)."""
+        self.lock (the copies take a while). The process is only started if the run is still
+        wanted: a Stop meanwhile (begin_stop() marks it stopping), a container shutdown or a
+        startup timeout cancel it instead. On failure or cancel the run is removed again, and a
+        tutorial instance deleted (its row and files)."""
         tutorial = world.get("tutorial") if world.get("kind") in TUTORIAL_KINDS else None
         started = time.monotonic()
         try:
             try:
-                # Finish any interrupted rollback before a child can read its startup files.
-                with self.checkpoint_lock:
-                    self.checkpoints.retain(world["id"])
-                pid = self.driver.start(world, run)
-            finally:
-                if tutorial:
-                    self.release_reader(tutorial)
-        except Exception as error:
-            reason = str(error) if isinstance(error, (CheckpointError, Denied)) else "Child startup failed; check the supervisor and daemon logs"
-            log("Starting %s failed: %s" % (self.describe(world["id"]), error))
-            instance = world.get("kind") in TUTORIAL_KINDS
-            with self.lock, self.db:
-                self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
-                if instance and self.row("SELECT 1 FROM worlds WHERE id=?", (world["id"],)):
-                    self.queue_world_deletion(world["id"], "supervisor", "tutorial_instance_failed")
-            if instance:
-                self.finish_world_deletion(world["id"])
-            raise Denied(reason) from None
-        with self.lock, self.db:
-            self.db.execute("UPDATE runs SET pid=? WHERE id=?", (pid, run["id"]))
+                try:
+                    # Finish any interrupted rollback before a child can read its startup files.
+                    with self.checkpoint_lock:
+                        self.checkpoints.retain(world["id"])
+                    root = self.driver.prepare(world, run)
+                finally:
+                    if tutorial:
+                        self.release_reader(tutorial)
+                # Checked and started under the lock: a Stop either sees the pid or cancels here.
+                with self.lock, self.db:
+                    current = self.row("SELECT state FROM runs WHERE id=?", (run["id"],))
+                    if not current or current["state"] != "starting" or self.shutting_down:
+                        cancelled = ("the server is restarting" if self.shutting_down
+                                     else "it was stopped" if current and current["state"] == "stopping"
+                                     else "it did not start in time" if current else "its run ended")
+                        raise LaunchCancelled("The world's start was cancelled: %s." % cancelled)
+                    pid = self.driver.spawn(world, run, root)
+                    self.db.execute("UPDATE runs SET pid=? WHERE id=?", (pid, run["id"]))
+                    self.launching.discard(run["id"])
+            except LaunchCancelled as cancel:
+                log("Starting %s cancelled before its process started (%s)" % (self.describe(world["id"]), cancel))
+                with self.lock:
+                    current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
+                    self.launching.discard(run["id"])
+                if current:
+                    # Removes the run (and a tutorial instance) like any other ended run.
+                    self.on_run_exited(current)
+                raise
+            except Exception as error:
+                reason = str(error) if isinstance(error, (CheckpointError, Denied)) else "Child startup failed; check the supervisor and daemon logs"
+                log("Starting %s failed: %s" % (self.describe(world["id"]), error))
+                instance = world.get("kind") in TUTORIAL_KINDS
+                with self.lock, self.db:
+                    self.launching.discard(run["id"])
+                    self.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+                    if instance and self.row("SELECT 1 FROM worlds WHERE id=?", (world["id"],)):
+                        self.queue_world_deletion(world["id"], "supervisor", "tutorial_instance_failed")
+                if instance:
+                    self.finish_world_deletion(world["id"])
+                raise Denied(reason) from None
+        finally:
+            with self.lock:
+                self.launching.discard(run["id"])
         log("Starting %s on port %s (pid %s; prepared in %.1f s)" % (self.describe(world["id"]), run["port"], pid,
                                                                      time.monotonic() - started))
 
@@ -1741,15 +1859,30 @@ class Supervisor:
             return {"ok": True}
 
     def begin_stop(self, run):
+        """Stops a run: its world saves (if it does) and exits. Call under self.lock.
+
+        A run without a pid has no process yet: its files are still being prepared (launch()),
+        or nothing will ever start it. It is only marked stopping; launch() then cancels the start,
+        and tick() removes a pid-less run that no launch owns. No topic is sent: nobody listens."""
         if run["id"] in self.stop_workers:
             return
-        self.stop_workers.add(run["id"])
+        if not run["pid"]:
+            if run["state"] != "stopping":
+                log("Cancelling the start of %s (port %s): its files are still being prepared"
+                    % (self.describe(run["world"]), run["port"]))
+                self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
+                self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
+                self.db.commit()
+            return
         world = self.row("SELECT * FROM worlds WHERE id=?", (run["world"],))
         saved = bool(world) and self.world_policy(world)["stop_saves"]
         log("Stopping %s (port %s): %s" % (self.describe(run["world"]), run["port"], "saving" if saved else "not saved"))
         self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
         self.db.execute("DELETE FROM tickets WHERE run=?", (run["id"],))
         self.db.commit()
+        # Reserved only once committed: a failing commit must not leave a worker that never runs
+        # (every later Stop would return early).
+        self.stop_workers.add(run["id"])
 
         def stop():
             try:
@@ -1815,6 +1948,17 @@ class Supervisor:
         with self.lock:
             runs = [dict(r) for r in self.db.execute("SELECT * FROM runs")]
         for run in runs:
+            if not run["pid"]:
+                # A run without a process that no launch() owns any more can never start (m-a):
+                # drop it. Read under the lock, where launch() records the pid.
+                with self.lock:
+                    current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
+                    orphan = bool(current) and not current["pid"] and run["id"] not in self.launching
+                if not current:
+                    continue
+                if orphan:
+                    self.on_run_exited(current)
+                    continue
             # Read before the status call: a stop that finishes during the call removes its worker,
             # and the status may predate managed_stop's draining flag.
             with self.lock:
@@ -1827,9 +1971,18 @@ class Supervisor:
                 if self.driver.alive(run) or not run["pid"]:
                     timeout = self.startup_timeout(run)
                     if self.clock() - run["started"] > timeout and run["state"] == "starting":
-                        with self.lock, self.db:
-                            self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
-                        log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
+                        if run["pid"]:
+                            with self.lock, self.db:
+                                self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
+                            log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
+                        else:
+                            # Still preparing its files: there is no process. launch() sees the
+                            # error and cancels the start once the copy returns.
+                            with self.lock, self.db:
+                                self.db.execute("UPDATE runs SET state='error',error=? WHERE id=? AND pid IS NULL AND state='starting'",
+                                                ("Startup timed out while its files were being prepared", run["id"]))
+                            log("%s was still preparing its files after %ss; its start is cancelled"
+                                % (self.describe(run["world"]), timeout))
                     elif run["state"] == "error":
                         # It does not answer: whoever is still connected to it cannot play, so the
                         # grace period runs from the first silent tick even if the last answered
@@ -1904,6 +2057,10 @@ class Supervisor:
             world = self.row("SELECT kind FROM worlds WHERE id=?", (run["world"],))
             current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
         if not world or world["kind"] not in TUTORIAL_KINDS or not current or current["state"] != "error":
+            return
+        if not current["pid"]:
+            # No process yet: launch() still prepares it and removes the run itself (or tick
+            # drops it once no launch owns it). Deleting the instance now would race the copy.
             return
         log("%s stayed in error with nobody playing in it; ending the tutorial instance" % self.describe(run["world"]))
         if json.loads(current["players"] or "[]"):

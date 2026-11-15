@@ -198,6 +198,7 @@ class CheckpointPolicies(unittest.TestCase):
                            ticket_lifetime_seconds=60, empty_grace_seconds=120,
                            startup_timeout_seconds=300, public_host="localhost", admins=["admin"])
         self.s = Supervisor(self.config, self.driver)
+        self.s.background_launches = False
         self.world = self.s.dispatch("owner", "create", {"name": "History"})["id"]
         self.points = [seed(self.s.checkpoints, self.world, n) for n in range(1, 7)]
 
