@@ -1,7 +1,7 @@
-// Tutorial triggers (spec 7.2): each checks one condition for one run (one player) and, when it
+// Tutorial triggers (spec 7.2, 12 #21): each checks one condition for the world's run and, when it
 // becomes true, the run fires the trigger's actions (runtime.dm). Zone, holding and condition
-// triggers fire when their condition becomes true; used on, button and say triggers fire on the
-// player's event; a timer fires a set time after it was enabled.
+// triggers fire when their condition becomes true for ANY player; used on, button and say
+// triggers fire on any player's event; a timer fires a set time after it was enabled.
 
 /// Checks the trigger for a run. TRUE: the condition holds (or the event happened) now.
 /obj/babylon_tutorial/trigger/proc/check(datum/babylon_tutorial_run/run)
@@ -13,7 +13,7 @@
 /obj/babylon_tutorial/trigger/start
 	tutorial_kind = "start"
 	kind_name = "Tutorial starts"
-	kind_desc = "Fires once, right when the tutorial starts for the player."
+	kind_desc = "Fires once, right when the tutorial starts."
 	kind_example = "e.g. a welcome message and a point at the guide."
 	ui_icon = "flag"
 	view_icon = 'icons/effects/landmarks_static.dmi'
@@ -29,8 +29,8 @@
 /obj/babylon_tutorial/trigger/zone
 	tutorial_kind = "zone"
 	kind_name = "Zone"
-	kind_desc = "Fires when the player walks into a rectangle of tiles."
-	kind_example = "e.g. the player enters medbay."
+	kind_desc = "Fires when a player walks into a rectangle of tiles."
+	kind_example = "e.g. a player enters medbay."
 	ui_icon = "vector-square"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "navigate"
@@ -49,7 +49,11 @@
 	return tile ? list(tile.x, tile.y, tile.x, tile.y, tile.z) : null
 
 /obj/babylon_tutorial/trigger/zone/check(datum/babylon_tutorial_run/run)
-	return babylon_tutorial_in_zone(get_turf(run.player), zone())
+	var/list/zone = zone()
+	for(var/mob/living/player as anything in run.players())
+		if(babylon_tutorial_in_zone(get_turf(player), zone))
+			return TRUE
+	return FALSE
 
 /obj/babylon_tutorial/trigger/zone/summary()
 	var/list/zone = zone()
@@ -74,15 +78,15 @@
 /obj/babylon_tutorial/trigger/holding
 	tutorial_kind = "holding"
 	kind_name = "Holding"
-	kind_desc = "Fires when the player holds an item of a type in a hand."
-	kind_example = "e.g. the player picks up the health analyzer."
+	kind_desc = "Fires when a player holds an item of a type in a hand."
+	kind_example = "e.g. a player picks up the health analyzer."
 	ui_icon = "hand-holding"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "grab"
 
 /obj/babylon_tutorial/trigger/holding/own_schema()
 	return list(
-		babylon_tutorial_field("item_type", "Item", "typepath", "", "The item the player must hold, e.g. a health analyzer.", base = /obj/item, required = TRUE, placeholder = "Search items, e.g. analyzer"),
+		babylon_tutorial_field("item_type", "Item", "typepath", "", "The item a player must hold, e.g. a health analyzer.", base = /obj/item, required = TRUE, placeholder = "Search items, e.g. analyzer"),
 		babylon_tutorial_field("exact", "Exactly this type", "bool", 0, "Off: variants of the item count too (an advanced health analyzer is a health analyzer)."),
 	)
 
@@ -90,9 +94,10 @@
 	var/path = text2path(setting("item_type"))
 	if(!path)
 		return FALSE
-	for(var/obj/item/held in run.player.held_items)
-		if(babylon_tutorial_type_matches(held, path, setting("exact")))
-			return TRUE
+	for(var/mob/living/player as anything in run.players())
+		for(var/obj/item/held in player.held_items)
+			if(babylon_tutorial_type_matches(held, path, setting("exact")))
+				return TRUE
 	return FALSE
 
 /obj/babylon_tutorial/trigger/holding/summary()
@@ -111,7 +116,7 @@
 /obj/babylon_tutorial/trigger/used_on
 	tutorial_kind = "used_on"
 	kind_name = "Used on"
-	kind_desc = "Fires when the player uses an item of a type on a target."
+	kind_desc = "Fires when a player uses an item of a type on a target."
 	kind_example = "e.g. a health analyzer used on the patient NPC."
 	ui_icon = "hand-pointer"
 	view_icon = 'icons/hud/screen_gen.dmi'
@@ -122,7 +127,7 @@
 
 /obj/babylon_tutorial/trigger/used_on/own_schema()
 	return list(
-		babylon_tutorial_field("item_type", "Item", "typepath", "", "The item the player must use.", base = /obj/item, required = TRUE, placeholder = "Search items, e.g. analyzer"),
+		babylon_tutorial_field("item_type", "Item", "typepath", "", "The item a player must use.", base = /obj/item, required = TRUE, placeholder = "Search items, e.g. analyzer"),
 		babylon_tutorial_field("exact", "Exactly this type", "bool", 0, "Off: variants of the item count too."),
 		babylon_tutorial_field("target", "Target", "id", "", "A marker (its object) or an NPC spawner (its NPC) the item must be used on.", filter = list("marker", "npc"), required = TRUE),
 	)
@@ -155,8 +160,9 @@
 	var/path = text2path(setting("item_type"))
 	if(!path || !tool || !babylon_tutorial_type_matches(tool, path, setting("exact")))
 		return NONE
-	var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(user)
-	run?.hit(src)
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+	if(run?.is_player(user))
+		run.hit(src)
 	// Never handles the interaction: the item still does what it does (the analyzer scans).
 	return NONE
 
@@ -178,7 +184,7 @@
 /obj/babylon_tutorial/trigger/condition
 	tutorial_kind = "condition"
 	kind_name = "Condition"
-	kind_desc = "Fires when something in the world becomes true: gas, power, a fluid, a structure or an NPC's state."
+	kind_desc = "Fires when something in the world becomes true: gas, power, a fluid, a structure, an NPC's or a player's state."
 	kind_example = "e.g. the patient's brute damage is healed to 10 or less."
 	ui_icon = "list-check"
 	view_icon = 'icons/effects/mapping_helpers.dmi'
@@ -193,6 +199,7 @@
 			"fluid" = "Fluid in a container",
 			"structure" = "Structure at a marker",
 			"npc" = "NPC state",
+			"player" = "Player state",
 		))),
 		// Gas
 		babylon_tutorial_field("zone", "Zone", "zone", null, "The tiles whose air is measured (at most 1000). Without a zone it is this trigger's tile.", when = list("condition" = list("gas")), max_tiles = 1000),
@@ -205,8 +212,8 @@
 		// Structure
 		babylon_tutorial_field("structure_type", "Structure", "typepath", "", "The object that must be on the marker's tile.", base = /obj, when = list("condition" = list("structure")), placeholder = "Search, e.g. table"),
 		babylon_tutorial_field("anchored", "Must be anchored", "bool", 1, "Only counts when it is wrenched/bolted down.", when = list("condition" = list("structure"))),
-		// NPC
-		babylon_tutorial_field("npc_check", "NPC check", "choice", "health_above", "Health: 100 is unhurt, 0 is in crit.", options = babylon_tutorial_options(list(
+		// NPC / player (the key keeps its old name: saved tutorials use it)
+		babylon_tutorial_field("npc_check", "State check", "choice", "health_above", "Health: 100 is unhurt, 0 is in crit. Player state is true when ANY player in the world matches; a player who died or became a ghost still counts (their body is checked; one that is gone counts as dead).", options = babylon_tutorial_options(list(
 			"health_above" = "Health at least",
 			"health_below" = "Health at most",
 			"healed" = "Damage type healed to at most",
@@ -214,27 +221,16 @@
 			"dead" = "Dead",
 			"cured" = "Has no disease",
 			"conscious" = "Awake",
-		)), when = list("condition" = list("npc"))),
-		babylon_tutorial_field("damage_type", "Damage type", "choice", "brute", null, options = babylon_tutorial_damage_options(), when = list("condition" = list("npc"), "npc_check" = list("healed"))),
+		)), when = list("condition" = list("npc", "player"))),
+		babylon_tutorial_field("damage_type", "Damage type", "choice", "brute", null, options = babylon_tutorial_damage_options(), when = list("condition" = list("npc", "player"), "npc_check" = list("healed"))),
 		// Shared
 		babylon_tutorial_field("target", "Marker / NPC", "id", "", "The marker (power, fluid, structure) or NPC spawner (NPC state) to watch.", filter = list("marker", "npc"), when = list("condition" = list("power", "fluid", "structure", "npc")), required = TRUE),
 		babylon_tutorial_field("compare", "Compare", "choice", "above", null, options = compare, when = list("condition" = list("gas", "fluid", "power"))),
-		babylon_tutorial_field("amount", "Amount", "number", 0, "Pressure in kPa, moles, units of fluid, charge in % or health.", min = -200, max = 100000, when = list("condition" = list("gas", "fluid", "power", "npc"))),
+		babylon_tutorial_field("amount", "Amount", "number", 0, "Pressure in kPa, moles, units of fluid, charge in % or health.", min = -200, max = 100000, when = list("condition" = list("gas", "fluid", "power", "npc", "player"))),
 	)
 
-/obj/babylon_tutorial/trigger/condition
-	/// The last evaluation, shared by every run during one subsystem fire.
-	var/cached_result
-	var/cached_fire = -1
-
 /obj/babylon_tutorial/trigger/condition/check(datum/babylon_tutorial_run/run)
-	// The world is the same for every run: evaluate once per fire (tests call evaluate directly).
-	if(SSbabylon_tutorial.firing_now)
-		if(cached_fire != SSbabylon_tutorial.fire_count)
-			cached_fire = SSbabylon_tutorial.fire_count
-			cached_result = evaluate()
-		return cached_result
-	return evaluate()
+	return evaluate(run)
 
 /obj/babylon_tutorial/trigger/condition/find_issues()
 	. = ..()
@@ -244,8 +240,8 @@
 		if(target && isturf(target.target_atom()))
 			.["target"] = condition == "npc" ? "[target.tutorial_id] has no NPC right now." : "There is nothing on [target.tutorial_id]'s tile to measure."
 
-/// Whether the condition holds in the world right now.
-/obj/babylon_tutorial/trigger/condition/proc/evaluate()
+/// Whether the condition holds in the world right now (player state: for the run's players).
+/obj/babylon_tutorial/trigger/condition/proc/evaluate(datum/babylon_tutorial_run/run)
 	var/amount = setting("amount")
 	switch(setting("condition"))
 		if("gas")
@@ -290,21 +286,34 @@
 			var/mob/living/carbon/human/npc = babylon_tutorial_resolve(setting("target"))
 			if(!istype(npc))
 				return FALSE
-			switch(setting("npc_check"))
-				if("health_above")
-					return npc.stat != DEAD && npc.health >= amount
-				if("health_below")
-					return npc.health <= amount
-				if("healed")
-					return npc.stat != DEAD && babylon_tutorial_damage_of(npc, setting("damage_type")) <= amount
-				if("alive")
-					return npc.stat != DEAD
-				if("dead")
-					return npc.stat == DEAD
-				if("cured")
-					return npc.stat != DEAD && !length(npc.diseases)
-				if("conscious")
-					return babylon_tutorial_awake(npc)
+			return babylon_tutorial_state_matches(npc, setting("npc_check"), amount, setting("damage_type"))
+		if("player")
+			// Any player, by key: a dead player's body still counts, a destroyed one counts as dead.
+			for(var/key in run?.bodies)
+				if(babylon_tutorial_state_matches(run.body_of(key), setting("npc_check"), amount, setting("damage_type")))
+					return TRUE
+			return FALSE
+	return FALSE
+
+/// One NPC / player state check on a body. A body that is gone (gibbed, deleted) is dead.
+/proc/babylon_tutorial_state_matches(mob/living/body, check, amount, damage_type)
+	if(!body)
+		return check in list("dead", "health_below")
+	switch(check)
+		if("health_above")
+			return body.stat != DEAD && body.health >= amount
+		if("health_below")
+			return body.health <= amount
+		if("healed")
+			return body.stat != DEAD && babylon_tutorial_damage_of(body, damage_type) <= amount
+		if("alive")
+			return body.stat != DEAD
+		if("dead")
+			return body.stat == DEAD
+		if("cured")
+			return body.stat != DEAD && !length(body.diseases)
+		if("conscious")
+			return babylon_tutorial_awake(body)
 	return FALSE
 
 /obj/babylon_tutorial/trigger/condition/summary()
@@ -376,7 +385,7 @@
 /obj/babylon_tutorial/trigger/button
 	tutorial_kind = "button"
 	kind_name = "Button"
-	kind_desc = "A real button everyone can see; fires when the player presses it."
+	kind_desc = "A real button everyone can see; fires when a player presses it."
 	kind_example = "e.g. \"Press when you are ready\"."
 	ui_icon = "circle-dot"
 	name = "button"
@@ -415,8 +424,9 @@
 /obj/babylon_tutorial/trigger/button/proc/press(mob/living/user)
 	playsound(src, 'sound/machines/click.ogg', 40, TRUE)
 	flick("button-overlay-success", src)
-	var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(user)
-	run?.hit(src)
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+	if(run?.is_player(user))
+		run.hit(src)
 
 /obj/babylon_tutorial/trigger/button/check(datum/babylon_tutorial_run/run)
 	return run.take_hit(src)
@@ -427,8 +437,8 @@
 /obj/babylon_tutorial/trigger/say
 	tutorial_kind = "say"
 	kind_name = "Say"
-	kind_desc = "Fires when the player says a phrase (any part of what they say, upper/lower case ignored)."
-	kind_example = "e.g. the player says \"ready\"."
+	kind_desc = "Fires when a player says a phrase (any part of what they say, upper/lower case ignored)."
+	kind_example = "e.g. a player says \"ready\"."
 	ui_icon = "comment"
 	view_icon = 'icons/hud/screen_gen.dmi'
 	view_state = "talk_hello"
@@ -436,7 +446,7 @@
 
 /obj/babylon_tutorial/trigger/say/own_schema()
 	return list(
-		babylon_tutorial_field("phrase", "Phrase", "text", "", "What the player must say, e.g. \"ready\".", required = TRUE),
+		babylon_tutorial_field("phrase", "Phrase", "text", "", "What a player must say, e.g. \"ready\".", required = TRUE),
 	)
 
 /obj/babylon_tutorial/trigger/say/check(datum/babylon_tutorial_run/run)
@@ -458,7 +468,7 @@
 	tutorial_kind = "timer"
 	kind_name = "Timer"
 	kind_desc = "Fires a number of seconds after it started listening."
-	kind_example = "e.g. a hint 30 seconds after a step began, if the player is stuck."
+	kind_example = "e.g. a hint 30 seconds after a step began, if the players are stuck."
 	ui_icon = "stopwatch"
 	view_icon = 'icons/effects/landmarks_static.dmi'
 	view_state = "generic_event"

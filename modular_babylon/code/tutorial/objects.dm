@@ -692,7 +692,7 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	return own_schema() + list(
 		babylon_tutorial_field("actions", "Actions", "idlist", list(), "The actions to run, in this order, when the trigger fires.", filter = list("action")),
 		babylon_tutorial_field("once", "Fire only once", "bool", 1, "Off: the trigger can fire again (every time its condition becomes true)."),
-		babylon_tutorial_field("starts", "Starts listening", "choice", "start", "When this trigger begins to watch for the player. \"After a trigger fired\" chains steps: one step's trigger starts listening once the step before it fired.", options = babylon_tutorial_options(list("start" = "At the beginning", "after" = "After a trigger fired", "manual" = "When an Enable action switches it on"))),
+		babylon_tutorial_field("starts", "Starts listening", "choice", "start", "When this trigger begins to watch for the players. \"After a trigger fired\" chains steps: one step's trigger starts listening once the step before it fired.", options = babylon_tutorial_options(list("start" = "At the beginning", "after" = "After a trigger fired", "manual" = "When an Enable action switches it on"))),
 		babylon_tutorial_field("after", "After", "id", "", "The trigger whose firing makes this one start listening.", filter = list("trigger"), when = list("starts" = list("after")), required = TRUE),
 		babylon_tutorial_field("cooldown", "Cooldown (seconds)", "number", 0, "Shortest time between two firings.", min = 0, max = 600),
 		babylon_tutorial_field("delay", "Delay (seconds)", "number", 0, "Wait this long after firing before the first action runs.", min = 0, max = 600),

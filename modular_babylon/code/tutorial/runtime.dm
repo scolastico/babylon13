@@ -1,14 +1,20 @@
-// Tutorial runtime (spec 7.2): one /datum/babylon_tutorial_run per participating player, stepped
-// once a second by SSbabylon_tutorial. A run starts automatically when a player spawns in a
-// tutorial world (station_round.dm) and from the wand's Test run in creative worlds.
+// Tutorial runtime (spec 7.2, 12 #21): ONE /datum/babylon_tutorial_run per world, stepped once a
+// second by SSbabylon_tutorial. The tutorial is running or not. In a tutorial world the run starts
+// when the first player spawns (station_round.dm); in a creative world the wand's Test run starts,
+// restarts and stops it for the whole world.
 //
-// Everything a run tracks (listening triggers, what fired, pending button presses, the player's
-// private images, objective and speech) is per run, so two builders test-running at once never
-// fire each other's steps. Stopping a run resets its state only; the world (spawned NPCs, given
-// items) stays.
+// Everything a run tracks (listening triggers, what fired, pending button presses, images,
+// objective, speech) is global: every player in the world sees the same arrows and objective,
+// including players who join mid-run. Triggers that react to a player fire when ANY player
+// satisfies them; actions that target "the player" hit EVERY living player (players.dm keeps who
+// the players are, by ckey, also while they are dead or a ghost). Stopping a run resets its state
+// only; the world (spawned NPCs, given items) stays.
+//
+// A preview run (the configure window's Preview button) is a throwaway run of one action for the
+// builder only: its only player is that builder and no trigger listens.
 
-/// Every run that exists, registered or not (preview runs): deleted tutorial objects are purged
-/// from all of them.
+/// Every run that exists, the world's run and previews: deleted tutorial objects are purged from
+/// all of them.
 GLOBAL_LIST_EMPTY(babylon_tutorial_runs)
 
 SUBSYSTEM_DEF(babylon_tutorial)
@@ -16,79 +22,73 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	wait = 1 SECONDS
 	runlevels = RUNLEVEL_LOBBY | RUNLEVELS_DEFAULT
 	ss_flags = SS_NO_INIT | SS_KEEP_TIMING
-	/// player mob => /datum/babylon_tutorial_run
-	var/list/runs = list()
+	/// The world's tutorial run, while the tutorial is running.
+	var/datum/babylon_tutorial_run/run
 	/// Spawners already handled after the world came up (spawn_at_start NPCs appear once).
 	var/started_spawners = FALSE
-	/// Runs still to step in this fire (the fire resumes after MC_TICK_CHECK).
-	var/list/currentrun = list()
-	/// Counts fires: world-state conditions are evaluated once per fire for every run.
-	var/fire_count = 0
-	/// TRUE while fire() steps the runs.
-	var/firing_now = FALSE
 
 /datum/controller/subsystem/babylon_tutorial/fire(resumed)
-	if(!resumed)
-		fire_count++
-		if(!started_spawners && babylon_world_ready())
-			started_spawners = TRUE
-			babylon_tutorial_spawn_start_npcs()
-		refresh_hooks()
-		for(var/obj/item/babylon_tutorial_wand/wand as anything in GLOB.babylon_tutorial_wands)
-			try
-				wand.sync_view()
-			catch(var/exception/error)
-				babylon_loop_failed("tutorial wand view", error)
-		currentrun = runs.Copy()
-	firing_now = TRUE
-	while(length(currentrun))
-		var/mob/player = currentrun[length(currentrun)]
-		var/datum/babylon_tutorial_run/run = currentrun[player]
-		currentrun.len--
-		if(!QDELETED(run))
-			try
-				run.check_triggers()
-			catch(var/exception/error)
-				babylon_loop_failed("tutorial run of [player]", error)
-		if(MC_TICK_CHECK)
-			firing_now = FALSE
-			return
-	firing_now = FALSE
+	if(!started_spawners && babylon_world_ready())
+		started_spawners = TRUE
+		babylon_tutorial_spawn_start_npcs()
+	refresh_hooks()
+	for(var/obj/item/babylon_tutorial_wand/wand as anything in GLOB.babylon_tutorial_wands)
+		try
+			wand.sync_view()
+		catch(var/exception/error)
+			babylon_loop_failed("tutorial wand view", error)
+	// No try here: a deep stack_trace (an outfit, a revive) would unwind the whole step. A runtime
+	// ends only the proc it happens in; the next fire steps the run again.
+	if(run && !QDELETED(run))
+		run.check_triggers()
 
 /// Hooks every used-on trigger to its current target (an NPC can be respawned).
 /datum/controller/subsystem/babylon_tutorial/proc/refresh_hooks()
 	for(var/obj/babylon_tutorial/trigger/used_on/trigger in GLOB.babylon_tutorial_objects)
 		trigger.refresh_hook()
 
-/// The tutorial run a mob takes part in, if any.
-/proc/babylon_tutorial_run_of(mob/player)
+/// The world's tutorial run, if the tutorial is running.
+/proc/babylon_tutorial_current_run()
 	RETURN_TYPE(/datum/babylon_tutorial_run)
-	return player ? SSbabylon_tutorial.runs[player] : null
+	var/datum/babylon_tutorial_run/run = SSbabylon_tutorial.run
+	return QDELETED(run) ? null : run
 
-/// Starts (or restarts) a tutorial run for a player. from_start: move them to the "start" marker
-/// first. test_run: a builder's test (the completion screen offers no lobby button). reset_npcs:
-/// spawn-at-start NPCs are created again, fresh (a test restart).
-/proc/babylon_tutorial_begin(mob/living/player, from_start = FALSE, test_run = FALSE, reset_npcs = FALSE)
+/// Starts (or restarts) the world's tutorial run. from_start: every living player moves to the
+/// "start" marker first. test_run: a builder's test (the completion screen offers no lobby
+/// button). reset_npcs: spawn-at-start NPCs are created again, fresh (a test restart). players:
+/// mobs that take part from the first step even without a client (the spawning player, tests).
+/proc/babylon_tutorial_begin(from_start = FALSE, test_run = FALSE, reset_npcs = FALSE, list/players)
 	RETURN_TYPE(/datum/babylon_tutorial_run)
-	if(!istype(player) || QDELETED(player))
-		return null
-	babylon_tutorial_end(player)
+	babylon_tutorial_end()
+	babylon_tutorial_spawn_start_npcs(reset_npcs)
+	var/datum/babylon_tutorial_run/run = new(test_run)
+	run.reset_npcs = reset_npcs
+	for(var/mob/living/player in players)
+		run.add_player(player)
+	run.refresh_players()
 	if(from_start)
 		var/turf/start = babylon_tutorial_marker_turf("start")
 		if(start)
-			player.buckled?.unbuckle_mob(player, TRUE)
-			player.forceMove(start)
-	babylon_tutorial_spawn_start_npcs(reset_npcs)
-	var/datum/babylon_tutorial_run/run = new(player, test_run)
-	run.reset_npcs = reset_npcs
-	SSbabylon_tutorial.runs[player] = run
+			for(var/mob/living/player as anything in run.players())
+				player.buckled?.unbuckle_mob(player, TRUE)
+				player.forceMove(start)
+	SSbabylon_tutorial.run = run
 	SSbabylon_tutorial.refresh_hooks()
-	log_game("BABYLON TUTORIAL: [key_name(player)] started a tutorial run[test_run ? " (test)" : ""].")
+	log_game("BABYLON TUTORIAL: the tutorial run started[test_run ? " (test)" : ""] with [length(run.players())] player\s.")
 	return run
 
-/// Stops a player's run, if any.
-/proc/babylon_tutorial_end(mob/player)
-	var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(player)
+/// A player spawned in a tutorial world: the run starts with them, or they join the running one.
+/proc/babylon_tutorial_player_spawned(mob/living/player)
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+	if(run)
+		run.add_player(player)
+		return run
+	return babylon_tutorial_begin(players = list(player))
+
+/// Stops the world's run, if any.
+/proc/babylon_tutorial_end()
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+	SSbabylon_tutorial.run = null
 	if(run)
 		qdel(run)
 		return TRUE
@@ -115,7 +115,6 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	return found
 
 /datum/babylon_tutorial_run
-	var/mob/living/player
 	var/test_run = FALSE
 	/// trigger => world.time it started listening (only listening triggers are keys).
 	var/list/enabled = list()
@@ -125,11 +124,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/list/last_fired = list()
 	/// trigger => whether its condition held at the last check (edge-triggered kinds).
 	var/list/last_state = list()
-	/// trigger => TRUE: the player's event (a press, a use, a phrase) waits for the next check.
+	/// trigger => TRUE: a player's event (a press, a use, a phrase) waits for the next check.
 	var/list/hits = list()
 	/// "trigger>action" for every action performed, in order (tests and the log).
 	var/list/history = list()
-	/// Private images shown to the player: image => list(until, anchor weakref, clear_on triggers).
+	/// Images every player sees: image => list(until, anchor weakref, clear_on triggers).
 	var/list/images = list()
 	/// Speakers pointing again and again: list(speaker weakref, target weakref, until, next, clear_on).
 	var/list/pointing = list()
@@ -139,25 +138,39 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/obj/babylon_tutorial/trigger/current_trigger
 	var/completed = FALSE
 	var/datum/babylon_tutorial_complete/complete_screen
-	/// The objective shown on the player's screen, if any.
+	/// The objective on every player's screen, if any ("[player]" is filled in per player).
 	var/objective
-	/// A throwaway run previewing one action: it never touches the player's objective alert.
+	var/objective_title = "Guide"
+	/// Weakrefs to the mobs the objective alert was put on (to take it off again).
+	var/list/objective_shown = list()
+	/// A throwaway run previewing one action for one builder: never touches the objective alert.
 	var/preview = FALSE
 	/// The run was started with "Reset NPCs" (Run again does the same).
 	var/reset_npcs = FALSE
+	/// Player key (ckey, or a ref for a mob without one) => weakref to their body: the living mob
+	/// they play, or the one they left when they died or ghosted (players.dm).
+	var/list/bodies = list()
+	/// Player key => what their body looked like and wore just before it died (players.dm).
+	var/list/snapshots = list()
+	/// The builder a preview runs for: the run's only player.
+	var/mob/living/preview_mob
 
-/datum/babylon_tutorial_run/New(mob/living/player, test_run)
-	src.player = player
+/datum/babylon_tutorial_run/New(test_run, mob/living/preview_for)
 	src.test_run = test_run
 	GLOB.babylon_tutorial_runs += src
-	RegisterSignal(player, COMSIG_QDELETING, PROC_REF(player_deleted))
-	RegisterSignal(player, COMSIG_MOB_SAY, PROC_REF(player_said))
+	if(preview_for)
+		preview = TRUE
+		preview_mob = preview_for
+		add_player(preview_for)
+		return
 	for(var/obj/babylon_tutorial/trigger/trigger as anything in babylon_tutorial_objects_of("trigger"))
 		if(trigger.listens_at_start())
 			enabled[trigger] = world.time
 
 /datum/babylon_tutorial_run/Destroy()
 	GLOB.babylon_tutorial_runs -= src
+	if(SSbabylon_tutorial.run == src)
+		SSbabylon_tutorial.run = null
 	for(var/timer in timers)
 		deltimer(timer)
 	timers.Cut()
@@ -170,14 +183,12 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	last_fired.Cut()
 	last_state.Cut()
 	hits.Cut()
-	if(player)
-		UnregisterSignal(player, list(COMSIG_QDELETING, COMSIG_MOB_SAY))
-		if(SSbabylon_tutorial.runs[player] == src)
-			SSbabylon_tutorial.runs -= player
+	bodies.Cut()
+	snapshots.Cut()
+	preview_mob = null
 	if(complete_screen)
 		SStgui.close_uis(complete_screen)
 		QDEL_NULL(complete_screen)
-	player = null
 	return ..()
 
 /// A tutorial object was deleted: drop every reference to it.
@@ -197,9 +208,18 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		var/list/clear_on = entry[5]
 		clear_on -= object
 
-/datum/babylon_tutorial_run/proc/player_deleted(datum/source)
+/// Something the run listens to is being deleted: a player's body (players.dm) or the anchor of
+/// an image. One handler for both, so neither replaces the other's registration.
+/datum/babylon_tutorial_run/proc/on_qdeleting(atom/source)
 	SIGNAL_HANDLER
-	qdel(src)
+	body_deleted(source)
+	for(var/image/picture as anything in images.Copy())
+		var/list/info = images[picture]
+		var/datum/weakref/anchor_ref = info["anchor"]
+		// A weakref no longer resolves while its atom is being deleted.
+		if(anchor_ref && (anchor_ref.resolve() == source || !anchor_ref.resolve()))
+			remove_image(picture)
+	UnregisterSignal(source, COMSIG_QDELETING)
 
 /datum/babylon_tutorial_run/proc/player_said(datum/source, list/speech_args)
 	SIGNAL_HANDLER
@@ -222,13 +242,13 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		return
 	if(enable)
 		enabled[trigger] = world.time
-		// Its condition counts from now: a zone the player already stands in fires.
+		// Its condition counts from now: a zone a player already stands in fires.
 		last_state -= trigger
 	else
 		enabled -= trigger
 	hits -= trigger
 
-/// The player's event for a listening trigger (a press, a use, a phrase).
+/// A player's event for a listening trigger (a press, a use, a phrase).
 /datum/babylon_tutorial_run/proc/hit(obj/babylon_tutorial/trigger/trigger)
 	if(is_enabled(trigger) && !completed)
 		hits[trigger] = TRUE
@@ -241,12 +261,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 
 /// One check of every listening trigger.
 /datum/babylon_tutorial_run/proc/check_triggers()
-	if(QDELETED(player))
-		qdel(src)
-		return
+	refresh_players()
 	expire_images()
 	continue_pointing()
 	prune_timers()
+	sync_objective()
 	if(completed)
 		return
 	for(var/obj/babylon_tutorial/trigger/trigger as anything in enabled.Copy())
@@ -295,19 +314,17 @@ SUBSYSTEM_DEF(babylon_tutorial)
 
 /datum/babylon_tutorial_run/proc/perform_later(datum/weakref/trigger_ref, datum/weakref/action_ref)
 	var/obj/babylon_tutorial/action/action = action_ref?.resolve()
-	if(action && !QDELETED(player))
+	if(action && !QDELETED(src))
 		perform(trigger_ref?.resolve(), action)
 
 /// Performs an action for this run. trigger: the trigger that fired it (null for a preview).
+/// No try: a deep stack_trace (an outfit, a revive) must end only the proc it happens in.
 /datum/babylon_tutorial_run/proc/perform(obj/babylon_tutorial/trigger/trigger, obj/babylon_tutorial/action/action)
 	if(completed)
 		return
 	history += "[trigger ? trigger.tutorial_id : "preview"]>[action.tutorial_id]"
 	current_trigger = trigger
-	try
-		action.perform(src)
-	catch(var/exception/error)
-		babylon_loop_failed("tutorial action [action.tutorial_id]", error)
+	action.perform(src)
 	current_trigger = null
 
 /datum/babylon_tutorial_run/proc/prune_timers()
@@ -326,39 +343,42 @@ SUBSYSTEM_DEF(babylon_tutorial)
 			return istype(chosen) ? list(chosen) : list()
 	return current_trigger ? babylon_tutorial_triggers_after(current_trigger) : list()
 
-/// Shows an image to the player only, for a while. anchor: the atom it is attached to; when that
-/// is deleted, the image goes. clear_on: triggers whose firing removes it early.
+/// The clients that see the run's images: every player's (also as a ghost).
+/datum/babylon_tutorial_run/proc/image_viewers()
+	var/list/found = list()
+	for(var/mob/viewer as anything in audience())
+		if(viewer.client)
+			found |= viewer.client
+	return found
+
+/// Shows an image to every player, for a while. anchor: the atom it is attached to; when that is
+/// deleted, the image goes. clear_on: triggers whose firing removes it early.
 /datum/babylon_tutorial_run/proc/show_image(image/picture, duration, atom/anchor, list/clear_on)
 	images[picture] = list("until" = world.time + duration, "anchor" = anchor ? WEAKREF(anchor) : null, "clear_on" = clear_on ? clear_on.Copy() : list())
-	// The player's own deletion ends the whole run (player_deleted): never replace that handler.
-	if(anchor && anchor != player)
-		RegisterSignal(anchor, COMSIG_QDELETING, PROC_REF(anchor_deleted), override = TRUE)
-	player.client?.images += picture
+	if(anchor)
+		RegisterSignal(anchor, COMSIG_QDELETING, PROC_REF(on_qdeleting), override = TRUE)
+	for(var/client/viewer as anything in image_viewers())
+		viewer.images += picture
 	timers += addtimer(CALLBACK(src, PROC_REF(expire_images)), duration + 1, TIMER_STOPPABLE)
-
-/datum/babylon_tutorial_run/proc/anchor_deleted(atom/source)
-	SIGNAL_HANDLER
-	for(var/image/picture as anything in images.Copy())
-		var/list/info = images[picture]
-		var/datum/weakref/anchor_ref = info["anchor"]
-		// A weakref no longer resolves while its atom is being deleted.
-		if(anchor_ref && (anchor_ref.resolve() == source || !anchor_ref.resolve()))
-			remove_image(picture)
-	UnregisterSignal(source, COMSIG_QDELETING)
 
 /datum/babylon_tutorial_run/proc/remove_image(image/picture)
 	images -= picture
-	player?.client?.images -= picture
+	// Every client: a player who left the run (or the world's players changed) loses it too.
+	for(var/client/viewer as anything in GLOB.clients)
+		viewer.images -= picture
 	picture.loc = null
 
+/// Expired images go; players who joined or reconnected since see the ones still running.
 /datum/babylon_tutorial_run/proc/expire_images()
+	var/list/clients = image_viewers()
 	for(var/image/picture as anything in images.Copy())
 		var/list/info = images[picture]
 		if(world.time >= info["until"])
 			remove_image(picture)
-		else if(player?.client && !(picture in player.client.images))
-			// The player reconnected: show what is still running again.
-			player.client.images += picture
+			continue
+		for(var/client/viewer as anything in clients)
+			if(!(picture in viewer.images))
+				viewer.images += picture
 
 /datum/babylon_tutorial_run/proc/clear_images()
 	for(var/image/picture as anything in images.Copy())
@@ -393,21 +413,32 @@ SUBSYSTEM_DEF(babylon_tutorial)
 			entry[4] = world.time + 4 SECONDS
 			babylon_tutorial_point(src, speaker, target)
 
-/// Shows (or with null removes) the objective that stays on the player's screen.
+/// Shows (or with null removes) the objective that stays on every player's screen.
 /datum/babylon_tutorial_run/proc/set_objective(text, title = "Guide")
-	objective = text
-	if(!player)
-		return
 	if(preview)
-		// The on-screen objective belongs to the player's real run (if any): only tell.
+		// The on-screen objective belongs to the world's run (if any): only tell.
 		if(length(text))
-			to_chat(player, span_notice("<b>Objective (preview):</b> [html_encode(text)]"))
+			for(var/mob/viewer as anything in audience())
+				to_chat(viewer, span_notice("<b>Objective (preview):</b> [html_encode(babylon_tutorial_fill_text(text, viewer))]"))
 		return
-	if(!length(text))
-		player.clear_alert("babylon_tutorial_objective", TRUE)
+	objective = length(text) ? text : null
+	objective_title = title || "Guide"
+	for(var/datum/weakref/shown_ref as anything in objective_shown)
+		var/mob/shown = shown_ref.resolve()
+		shown?.clear_alert("babylon_tutorial_objective", TRUE)
+	objective_shown.Cut()
+	sync_objective()
+
+/// Every living player wears the objective alert while there is one (players who joined later too).
+/datum/babylon_tutorial_run/proc/sync_objective()
+	if(preview || !objective)
 		return
-	var/atom/movable/screen/alert/babylon_tutorial_objective/alert = player.throw_alert("babylon_tutorial_objective", /atom/movable/screen/alert/babylon_tutorial_objective)
-	alert?.show(title, text)
+	for(var/mob/living/player as anything in players())
+		if(player.alerts["babylon_tutorial_objective"])
+			continue
+		var/atom/movable/screen/alert/babylon_tutorial_objective/alert = player.throw_alert("babylon_tutorial_objective", /atom/movable/screen/alert/babylon_tutorial_objective)
+		alert?.show(objective_title, babylon_tutorial_fill_text(objective, player))
+		objective_shown += WEAKREF(player)
 
 /// The objective alert: an icon with the objective written next to it.
 /atom/movable/screen/alert/babylon_tutorial_objective
@@ -425,7 +456,7 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	maptext_y = 2
 	maptext = "<span style='font-family: \"Grand9K Pixel\"; font-size: 6pt; text-align: right; color: #c8f7d8; -dm-text-outline: 1px black'>[html_encode(text)]</span>"
 
-/// The tutorial is done: the completion screen opens and no trigger fires any more.
+/// The tutorial is done: every player sees the completion screen and no trigger fires any more.
 /datum/babylon_tutorial_run/proc/complete(text)
 	if(completed)
 		return
@@ -433,8 +464,9 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	pointing.Cut()
 	clear_images()
 	set_objective(null)
-	log_game("BABYLON TUTORIAL: [key_name(player)] completed the tutorial[test_run ? " (test run)" : ""].")
-	player.playsound_local(get_turf(player), 'sound/misc/server-ready.ogg', 50, FALSE)
+	log_game("BABYLON TUTORIAL: the tutorial was completed[test_run ? " (test run)" : ""].")
 	complete_screen = new(src, text)
-	if(player.client)
-		complete_screen.ui_interact(player)
+	for(var/mob/viewer as anything in audience())
+		viewer.playsound_local(get_turf(viewer), 'sound/misc/server-ready.ogg', 50, FALSE)
+		if(viewer.client)
+			complete_screen.ui_interact(viewer)

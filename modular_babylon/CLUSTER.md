@@ -623,17 +623,20 @@ its problems and warns about a missing start marker, triggers that can never fir
 unused actions and a tutorial without a Complete action; **Go there** jumps to an
 object.
 
-**Triggers** wait for the player and then run their **actions** in order:
+A world runs **one tutorial run** for everyone in it: the tutorial is running or not.
+**Triggers** wait for the players and then run their **actions** in order. A trigger
+that waits for a player fires when *any* player does it, and actions for "the player"
+reach *every* player in the world:
 
 | Trigger | Fires when |
 | --- | --- |
-| Tutorial starts | the tutorial starts for the player (once) |
-| Zone | the player enters a rectangle (Pick corners, then click two tiles) |
-| Holding | the player holds an item of a type (optionally exactly that type) |
-| Used on | the player uses an item of a type on a marker's object or an NPC |
-| Condition | gas in a zone, power (area power, APC or SMES charge), fluid in a container, a structure at a marker, an NPC's health/damage/alive/dead/disease/awake state becomes true |
-| Button | the player presses it (a visible button) |
-| Say | the player says a phrase (any part, case ignored) |
+| Tutorial starts | the tutorial starts (once) |
+| Zone | a player enters a rectangle (Pick corners, then click two tiles) |
+| Holding | a player holds an item of a type (optionally exactly that type) |
+| Used on | a player uses an item of a type on a marker's object or an NPC |
+| Condition | gas in a zone, power (area power, APC or SMES charge), fluid in a container, a structure at a marker, an NPC's or any player's health/damage/alive/dead/disease/awake state becomes true (a dead or ghosted player still counts by their body; a destroyed body counts as dead) |
+| Button | a player presses it (a visible button) |
+| Say | a player says a phrase (any part, case ignored) |
 | Timer | some seconds after it was enabled |
 
 Every trigger has: **Actions** (ordered ids), **Fire only once**, **Starts listening**
@@ -645,22 +648,24 @@ tiles.
 
 | Action | Does |
 | --- | --- |
-| Message | a green "Guide" box in the player's chat, or a speaker (NPC or marked object) says it to the player (a Guide box with the speaker's name when the player is too far away or the speaker is out cold); `[player]` becomes the player's name; optional **objective** that stays on the player's screen until the next one |
-| Point | a bouncing arrow over the target for the player; optionally a speaker points at it again and again |
-| Highlight | outlines the target (only the player sees it) |
+| Message | a green "Guide" box in every player's chat, or a speaker (NPC or marked object) says it to the players (a Guide box with the speaker's name for a player too far away, or when the speaker is out cold); `[player]` becomes each player's own name; optional **objective** that stays on every player's screen until the next one |
+| Point | a bouncing arrow over the target for the players; optionally a speaker points at it again and again |
+| Highlight | outlines the target (only the tutorial's players see it) |
 | Make NPC vulnerable | an NPC that was unhurtable can be hurt from now on |
-| Teleport | moves the player to a marker |
+| Teleport | moves every living player to a marker |
 | Spawn NPC | (re)creates an NPC spawner's NPC |
-| Give item | puts an item in the player's hand |
+| Give item | puts an item in every living player's hand |
+| Damage / effect | on every living player or one NPC: brute, burn, toxin or suffocation damage, a bleeding cut, a wound, setting them on fire, a knockdown, blurred vision, blindness or a disease (never contagious); god mode and unhurtable NPCs are spared |
+| Heal / revive | on every player or one NPC: a full heal, healing one damage type by an amount, or reviving the dead: a dead player's body is revived and the player put back in; when the body was destroyed, a new one with the same looks and clothes appears where it was (or at the start marker) |
 | Enable/disable triggers | chains steps: only the next step's triggers listen |
-| Sound | plays one of a dozen sounds for the player |
-| Complete | the "Tutorial complete!" screen with **Back to lobby** |
+| Sound | plays one of a dozen sounds for the players |
+| Complete | the "Tutorial complete!" screen with **Back to lobby**, for every player |
 
 Point and Highlight last until the next step's trigger fires (or some seconds, or a
 chosen trigger). Each action can wait (**Delay**) after the ones before it. **Preview**
-in an action's settings runs it for you alone. Everything a tutorial shows or says goes
-to its player only, so several players in one world never see each other's steps; NPCs
-spawned by an action are shared by everyone in the world.
+in an action's settings runs it for you alone instead of every player. Everything the
+run shows (arrows, outlines, the objective) is shown to every player in the world,
+also to players who join while it runs.
 
 **NPC spawners** create a human standing still (no AI): name, outfit (common job
 outfits or a search; ids and gear are left out), species, facing, **Spawn at the
@@ -671,11 +676,13 @@ poisons and a few drugs), unconsciousness for some seconds, bleeding. Names allo
 letters, digits, spaces and simple punctuation. The spawner is saved, never its NPC; the
 NPC is created again when the world starts and for every run.
 
-**Test run** (wand window) plays your tutorial for you alone, from the start marker
-or where you stand, and shows which triggers listen now; other builders can test at
-the same time without crossing. **Reset NPCs** (on by default) creates the NPCs again
-when a test starts. Stop resets the run, not the world. In a tutorial play instance the run starts by itself
-when the player arrives at the start marker.
+**Test run** (wand window) starts the world's run for everyone in the world, from the
+start marker (everyone is moved there) or where everyone stands, and shows which
+triggers listen now and how many players take part. Anyone who may use the wand can
+start, restart or stop it; the other players are told. **Reset NPCs** (on by default)
+creates the NPCs again when a test starts. Stop resets the run, not the world. In a
+tutorial play instance the run starts by itself when the first player arrives at the
+start marker; players who arrive later join it.
 
 ## AFK return to the lobby
 

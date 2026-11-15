@@ -46,6 +46,7 @@
 #include "modular_babylon/code/tutorial/actions.dm"
 #include "modular_babylon/code/tutorial/npc.dm"
 #include "modular_babylon/code/tutorial/runtime.dm"
+#include "modular_babylon/code/tutorial/players.dm"
 #include "modular_babylon/code/tutorial/area_tools.dm"
 #include "modular_babylon/code/tutorial/wand.dm"
 #include "modular_babylon/code/tutorial/submit.dm"

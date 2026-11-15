@@ -25,7 +25,7 @@
 
 /// The trigger -> action chain the spec describes: entering a zone shows a message, holding a
 /// health analyzer points at the patient, using it on the patient completes the tutorial.
-/// Also: a second player's run is isolated from the first.
+/// Also: the world has one run, a second player joins it and any player can fire a step.
 /datum/babylon_save/proc/test_tutorial_flow()
 	var/list/result = list()
 	var/list/made = list()
@@ -44,8 +44,8 @@
 		var/mob/living/carbon/human/player = new(locate(base.x, base.y + 1, base.z))
 		made += player
 		player.real_name = "Tutorial Tester"
-		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, TRUE, TRUE)
-		result["run_started"] = run && babylon_tutorial_run_of(player) == run
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(TRUE, TRUE, FALSE, list(player))
+		result["run_started"] = run && babylon_tutorial_current_run() == run && (player in run.players())
 		result["moved_to_start"] = get_turf(player) == base
 		var/mob/living/carbon/human/npc = spawner.current_npc()
 		result["npc_spawned_at_start"] = istype(npc) && npc.real_name == "Patient"
@@ -64,31 +64,31 @@
 		player.put_in_hands(analyzer)
 		run.check_triggers()
 		result["holding_points"] = run.history ~= list("flow_enter>flow_hello", "flow_hold>flow_point")
-		result["point_arrow_private"] = length(run.images) == 1
+		result["point_arrow_shared"] = length(run.images) == 1
 
-		// A second player in the same world: their own run, nothing crosses over.
+		// A second player joins the world's run: the steps already done stay done for both.
 		var/mob/living/carbon/human/other = new(locate(base.x, base.y + 1, base.z))
 		made += other
-		var/datum/babylon_tutorial_run/other_run = babylon_tutorial_begin(other, FALSE, TRUE)
+		run.add_player(other)
 		other.forceMove(zone_tile)
-		other_run.check_triggers()
 		run.check_triggers()
-		result["second_run_isolated"] = other_run.history ~= list("flow_enter>flow_hello") && length(run.history) == 2
+		result["one_run_for_both"] = babylon_tutorial_current_run() == run && (other in run.players()) && length(run.history) == 2
 
-		player.forceMove(get_step(npc, WEST))
+		// The second player, not the first, scans the patient: any player fires a step.
+		var/obj/item/healthanalyzer/other_analyzer = new(get_turf(other))
+		made += other_analyzer
+		other.put_in_hands(other_analyzer)
+		other.forceMove(get_step(npc, WEST))
 		SSbabylon_tutorial.refresh_hooks()
-		analyzer.melee_attack_chain(player, npc)
-		result["used_on_hit_only_for_user"] = !other_run.hits[babylon_tutorial_find("flow_scan")]
+		other_analyzer.melee_attack_chain(other, npc)
 		run.check_triggers()
-		result["used_on_completes"] = run.completed && (run.history ~= list("flow_enter>flow_hello", "flow_hold>flow_point", "flow_scan>flow_done"))
+		result["used_on_by_any_player_completes"] = run.completed && (run.history ~= list("flow_enter>flow_hello", "flow_hold>flow_point", "flow_scan>flow_done"))
 		result["completion_screen"] = !!run.complete_screen && run.complete_screen.test_run
-		result["other_not_completed"] = !other_run.completed
 		run.check_triggers()
 		result["nothing_after_complete"] = length(run.history) == 3
 
-		babylon_tutorial_end(other)
-		result["end_stops_run"] = !babylon_tutorial_run_of(other) && QDELETED(other_run)
-		babylon_tutorial_end(player)
+		babylon_tutorial_end()
+		result["end_stops_run"] = !babylon_tutorial_current_run() && QDELETED(run)
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_tutorial_flow failed: [error] ([error.file]:[error.line])")
@@ -115,7 +115,7 @@
 		result["button_visible"] = button.invisibility == 0 && button.name == "big red button"
 		var/mob/living/carbon/human/player = new(base)
 		made += player
-		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, FALSE, TRUE)
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
 		result["disabled_at_start"] = !run.is_enabled(button)
 		button.attack_hand(player)
 		run.check_triggers()
@@ -146,7 +146,7 @@
 		made += table
 		run.check_triggers()
 		result["condition_fires_with_table"] = run.fired[condition] == 1
-		babylon_tutorial_end(player)
+		babylon_tutorial_end()
 		result["stop_cancels_delays"] = QDELETED(run) && !length(run.timers)
 	catch(var/exception/error)
 		result["no_error"] = FALSE
@@ -399,7 +399,7 @@
 		var/obj/babylon_tutorial/action/npc_vulnerable/vulnerable = babylon_tutorial_test_place(/obj/babylon_tutorial/action/npc_vulnerable, base, "rev_vulnerable", list("target" = "rev_npc"), made)
 		var/mob/living/carbon/human/player = new(locate(base.x, base.y + 1, base.z))
 		made += player
-		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, FALSE, TRUE)
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
 		run.perform(null, vulnerable)
 		result["npc_made_vulnerable"] = !HAS_TRAIT(npc, TRAIT_GODMODE)
 		var/obj/item/uniform = npc.w_uniform
@@ -424,8 +424,8 @@
 		result["rename_rewrites_links"] = isnull(hello.set_tutorial_id("rev_welcome")) && (start.setting("actions") ~= list("rev_welcome")) && (hello.last_rename_links ~= list("rev_start"))
 
 		// Steps: the start trigger fires once; the say trigger listens only after it.
-		babylon_tutorial_end(player)
-		run = babylon_tutorial_begin(player, FALSE, TRUE)
+		babylon_tutorial_end()
+		run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
 		result["chained_trigger_waits"] = run.is_enabled(start) && !run.is_enabled(say)
 		run.check_triggers()
 		run.check_triggers()
@@ -462,7 +462,7 @@
 		run.set_objective("<b>Scan</b> the patient", "Guide")
 		var/atom/movable/screen/alert/objective = player.alerts["babylon_tutorial_objective"]
 		result["objective_shown_encoded"] = objective && findtext(objective.maptext, "&lt;b&gt;") && !findtext(objective.maptext, "<b>")
-		babylon_tutorial_end(player)
+		babylon_tutorial_end()
 		result["objective_cleared"] = !player.alerts["babylon_tutorial_objective"]
 
 		// Preset ids name what they are.
@@ -483,8 +483,8 @@
 	return result
 
 /// Review round 2: loops and unreachable steps are named, a trigger can't wait for itself, a
-/// fired once-trigger is never revived, previews leave the run's objective alone and images on
-/// the player keep the run's own handler.
+/// fired once-trigger is never revived, previews leave the run's objective alone and an image on
+/// a player's body shares the run's deletion handler with the body tracking.
 /datum/babylon_save/proc/test_tutorial_chains()
 	var/list/result = list()
 	var/list/made = list()
@@ -510,7 +510,7 @@
 		// Entered through an Enable action, the loop runs each once-trigger once, then stops.
 		var/mob/living/carbon/human/player = new(base)
 		made += player
-		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(player, FALSE, TRUE)
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(player))
 		run.set_enabled(first, TRUE)
 		run.fire(first)
 		run.fire(second)
@@ -520,19 +520,166 @@
 		result["orphan_listens_after_loop_step"] = run.is_enabled(orphan)
 		// Previews show their objective in chat only; the real run's alert stays.
 		run.set_objective("Real goal", "Guide")
-		var/datum/babylon_tutorial_run/preview = new(player, TRUE)
-		preview.preview = TRUE
+		var/datum/babylon_tutorial_run/preview = new(TRUE, player)
 		preview.set_objective("Preview goal", "Guide")
 		qdel(preview)
 		var/atom/movable/screen/alert/babylon_tutorial_objective/alert = player.alerts["babylon_tutorial_objective"]
 		result["preview_leaves_objective"] = alert && findtext(alert.maptext, "Real goal") && run.objective == "Real goal"
-		// An image anchored to the player does not take over the run's deletion handler.
+		// An image anchored to the player's body: deleting the (living) body removes the image,
+		// keeps the world's run and forgets the player, who left.
 		var/image/mark = image('icons/hud/screen_gen.dmi', player, "arrow")
 		run.show_image(mark, 5 SECONDS, player)
+		var/key = babylon_tutorial_player_key(player)
 		qdel(player)
-		result["player_deletion_still_ends_run"] = QDELETED(run)
+		result["player_deletion_keeps_run"] = !QDELETED(run) && babylon_tutorial_current_run() == run && !length(run.images) && !(key in run.bodies) && !(key in run.snapshots)
+		babylon_tutorial_end()
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_tutorial_chains failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_test_cleanup(made)
+	return result
+
+/// One run per world (spec 12 #21), the player-state condition (#18), Damage / effect (#8) and
+/// Heal / revive (#19): two players share the run, one fires a step and both get its effect;
+/// dead and ghosted players still count; a revive brings back a body that survived and rebuilds
+/// one that was destroyed, and puts the player back in.
+/datum/babylon_save/proc/test_tutorial_players()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(84)
+	try
+		var/turf/zone_tile = locate(base.x + 3, base.y, base.z)
+		var/obj/babylon_tutorial/trigger/zone/zone = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/zone, zone_tile, "pl_enter", list("actions" = list("pl_give", "pl_goal")), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/action/give_item, base, "pl_give", list("item_type" = "[/obj/item/healthanalyzer]"), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/action/message, base, "pl_goal", list("text" = "Scan yourself.", "hint" = "Heal up, \[player]"), made)
+		var/obj/babylon_tutorial/trigger/condition/dead_check = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/condition, base, "pl_dead", list("condition" = "player", "npc_check" = "dead", "starts" = "manual"), made)
+		var/obj/babylon_tutorial/trigger/condition/healed_check = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/condition, base, "pl_healed", list("condition" = "player", "npc_check" = "healed", "damage_type" = "brute", "amount" = 5, "starts" = "manual"), made)
+		var/obj/babylon_tutorial/action/harm/hurt = babylon_tutorial_test_place(/obj/babylon_tutorial/action/harm, base, "pl_hurt", list("effect" = "brute", "amount" = 30), made)
+		var/obj/babylon_tutorial/action/heal/heal_brute = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "pl_heal", list("heal" = "type", "damage_type" = "brute", "amount" = 30), made)
+		var/obj/babylon_tutorial/action/heal/revive = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "pl_revive", list("heal" = "revive"), made)
+		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 5, base.y + 2, base.z), "pl_npc", list("npc_name" = "Dummy", "spawn_at_start" = 0), made)
+		var/mob/living/carbon/human/npc = spawner.spawn_npc()
+		made += npc
+		var/obj/babylon_tutorial/action/harm/burn_npc = babylon_tutorial_test_place(/obj/babylon_tutorial/action/harm, base, "pl_burn_npc", list("apply_to" = "npc", "target" = "pl_npc", "effect" = "burn", "amount" = 25), made)
+		var/obj/babylon_tutorial/action/heal/heal_npc = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "pl_heal_npc", list("apply_to" = "npc", "target" = "pl_npc", "heal" = "full"), made)
+		result["npc_target_validated"] = !burn_npc.issues()["target"] && !!hurt.set_setting("effect", "gib")
+
+		// Two players without clients, keyed like real ones (the run follows the key).
+		var/mob/living/carbon/human/first = new(locate(base.x, base.y + 1, base.z))
+		var/mob/living/carbon/human/second = new(locate(base.x + 1, base.y + 1, base.z))
+		made += first
+		made += second
+		first.real_name = "First Tester"
+		first.name = first.real_name
+		second.real_name = "Second Tester"
+		second.name = second.real_name
+		first.mind_initialize()
+		second.mind_initialize()
+		first.key = "babylontutorialtester1"
+		second.key = "babylontutorialtester2"
+		var/first_key = first.ckey
+		var/second_key = second.ckey
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(first, second))
+		result["both_players"] = (first in run.players()) && (second in run.players()) && run.body_of(first_key) == first
+
+		// #21: the first player walks in; both get the item and the objective.
+		first.forceMove(zone_tile)
+		run.check_triggers()
+		result["one_fires_for_all"] = run.fired[zone] == 1
+		var/obj/item/healthanalyzer/first_item = locate() in first.held_items
+		var/obj/item/healthanalyzer/second_item = locate() in second.held_items
+		made += first_item
+		made += second_item
+		result["both_given_item"] = !!first_item && !!second_item
+		var/atom/movable/screen/alert/first_alert = first.alerts["babylon_tutorial_objective"]
+		var/atom/movable/screen/alert/second_alert = second.alerts["babylon_tutorial_objective"]
+		result["both_see_objective"] = first_alert && second_alert && findtext(first_alert.maptext, "First Tester") && findtext(second_alert.maptext, "Second Tester")
+		second.forceMove(zone_tile)
+		run.check_triggers()
+		result["fired_step_shared"] = run.fired[zone] == 1
+
+		// #8 on every player and on an NPC.
+		run.perform(null, hurt)
+		result["damage_hits_every_player"] = first.get_brute_loss() >= 29 && second.get_brute_loss() >= 29
+		run.perform(null, burn_npc)
+		result["damage_hits_npc_only"] = npc.get_fire_loss() >= 24 && first.get_fire_loss() < 1 && second.get_fire_loss() < 1
+		var/mob/living/carbon/human/dummy = new(locate(base.x + 6, base.y, base.z))
+		made += dummy
+		babylon_tutorial_harm(dummy, list("effect" = "fire", "stacks" = 2))
+		result["effect_fire"] = !!dummy.has_status_effect(/datum/status_effect/fire_handler/fire_stacks)
+		dummy.extinguish_mob()
+		babylon_tutorial_harm(dummy, list("effect" = "knockdown", "seconds" = 3))
+		result["effect_knockdown"] = !!dummy.IsKnockdown()
+		babylon_tutorial_harm(dummy, list("effect" = "blur", "seconds" = 5))
+		result["effect_blur"] = !!dummy.has_status_effect(/datum/status_effect/eye_blur)
+		babylon_tutorial_harm(dummy, list("effect" = "blind", "seconds" = 5))
+		result["effect_blind"] = !!dummy.has_status_effect(/datum/status_effect/temporary_blindness)
+		babylon_tutorial_harm(dummy, list("effect" = "bleed", "zone" = BODY_ZONE_L_ARM))
+		result["effect_bleed"] = length(dummy.all_wounds) >= 1
+		babylon_tutorial_harm(dummy, list("effect" = "disease", "disease" = "[/datum/disease/cold]"))
+		var/datum/disease/illness = length(dummy.diseases) ? dummy.diseases[1] : null
+		result["effect_disease_not_contagious"] = illness?.spread_flags == DISEASE_SPREAD_NON_CONTAGIOUS
+		ADD_TRAIT(dummy, TRAIT_GODMODE, "babylon_test")
+		result["god_mode_spared"] = !babylon_tutorial_harm(dummy, list("effect" = "brute", "amount" = 50)) && dummy.get_brute_loss() < 1
+
+		// #18 healed check and #19 heal one type, on every player.
+		result["healed_false_when_hurt"] = !healed_check.evaluate(run)
+		run.perform(null, heal_brute)
+		result["heal_type_every_player"] = first.get_brute_loss() <= 1 && second.get_brute_loss() <= 1
+		result["healed_true_after_heal"] = !!healed_check.evaluate(run)
+		run.perform(null, heal_npc)
+		result["full_heal_npc"] = npc.get_fire_loss() < 1
+		// A preview runs for its builder only.
+		var/datum/babylon_tutorial_run/preview = new(TRUE, first)
+		preview.perform(null, hurt)
+		result["preview_hits_builder_only"] = first.get_brute_loss() >= 29 && second.get_brute_loss() < 1
+		qdel(preview)
+		first.fully_heal(HEAL_ALL)
+
+		// #18 a dead player counts, also as a ghost; #19 revive puts them back into that body.
+		result["dead_false_while_alive"] = !dead_check.evaluate(run)
+		first.death()
+		result["dead_player_counts"] = !!dead_check.evaluate(run)
+		var/mob/dead/observer/ghost = first.ghostize(TRUE)
+		made += ghost
+		result["ghosted_player_counts"] = !!dead_check.evaluate(run) && run.body_of(first_key) == first && ghost?.ckey == first_key
+		result["snapshot_at_death"] = islist(run.snapshots[first_key])
+		run.perform(null, revive)
+		result["revive_surviving_body"] = first.stat != DEAD && first.ckey == first_key && (QDELETED(ghost) || ghost.ckey != first_key)
+		result["dead_false_after_revive"] = !dead_check.evaluate(run)
+
+		// #19 a destroyed body: a new one with the same looks and clothes, where it died.
+		var/obj/item/clothing/under/rank/medical/doctor/scrubs = new(second)
+		second.equip_to_slot_or_del(scrubs, ITEM_SLOT_ICLOTHING)
+		result["test_body_dressed"] = second.w_uniform == scrubs
+		var/turf/death_tile = locate(base.x + 2, base.y + 3, base.z)
+		second.forceMove(death_tile)
+		second.death()
+		var/mob/dead/observer/second_ghost = second.ghostize(TRUE)
+		made += second_ghost
+		qdel(second)
+		result["destroyed_body_counts_dead"] = !!dead_check.evaluate(run) && !run.body_of(second_key)
+		var/list/second_shot = run.snapshots[second_key]
+		var/datum/outfit/second_outfit = second_shot?["outfit"]
+		result["snapshot_has_clothes"] = second_outfit?.uniform == /obj/item/clothing/under/rank/medical/doctor
+		run.perform(null, revive)
+		var/mob/living/carbon/human/rebuilt = run.body_of(second_key)
+		made += rebuilt
+		result["revive_rebuilds_body"] = istype(rebuilt) && rebuilt != second && rebuilt.stat != DEAD && get_turf(rebuilt) == death_tile
+		result["rebuilt_looks_the_same"] = rebuilt?.real_name == "Second Tester"
+		result["rebuilt_wears_the_same"] = istype(rebuilt?.w_uniform, /obj/item/clothing/under/rank/medical/doctor)
+		result["rebuilt_gets_player"] = rebuilt?.ckey == second_key && (QDELETED(second_ghost) || second_ghost.ckey != second_key)
+		result["nobody_dead_after_revive"] = !dead_check.evaluate(run)
+		result["revive_leaves_living_alone"] = isnull(run.revive_player(first_key))
+		babylon_tutorial_end()
+		result["end_clears_objective"] = !first.alerts["babylon_tutorial_objective"]
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_players failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_end()
+	// The test keys belong to no client: a keyed mob deleted without one is reported as a leak.
+	for(var/mob/keyed in made)
+		if(findtext(keyed.ckey, "babylontutorialtester") == 1)
+			keyed.key = null
 	babylon_tutorial_test_cleanup(made)
 	return result

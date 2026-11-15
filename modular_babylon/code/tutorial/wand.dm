@@ -473,7 +473,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 
 /obj/item/babylon_tutorial_wand/ui_static_data(mob/user)
 	var/list/groups = list(
-		list("id" = "trigger", "name" = "Triggers", "desc" = "Wait for something the player does, then run actions."),
+		list("id" = "trigger", "name" = "Triggers", "desc" = "Wait for something a player does, then run actions."),
 		list("id" = "action", "name" = "Actions", "desc" = "What happens when a trigger fires."),
 		list("id" = "marker", "name" = "Markers", "desc" = "Name a spot or an object so others can refer to it."),
 	)
@@ -518,7 +518,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
 			"after" = object.tutorial_category == "trigger" && object.setting("starts") == "after" ? object.setting("after") : null,
 		))
-	var/datum/babylon_tutorial_run/run = babylon_tutorial_run_of(user)
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
 	var/list/zone_pick
 	if(picking)
 		var/obj/babylon_tutorial/object = picking_object()
@@ -532,7 +532,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		"warnings" = babylon_tutorial_overview_warnings(),
 		"picking" = zone_pick,
 		"has_start" = !!babylon_tutorial_marker_turf("start"),
-		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective) : list("running" = FALSE),
+		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "players" = length(run.players()), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective) : list("running" = FALSE),
 		"notice" = notice,
 		"area" = area_session(user).window_data(),
 	)
@@ -615,12 +615,21 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 				report(user, "There is no \"start\" marker yet: place a marker and give it the id start.", FALSE)
 				return TRUE
 			var/reset = !!params["reset_npcs"]
-			babylon_tutorial_begin(user, from_start, TRUE, reset)
-			report(user, "Test run started[from_start ? " at the start marker" : " where you stand"][reset ? ", NPCs reset" : ""]. Your triggers are live now.", TRUE)
+			var/restart = !!babylon_tutorial_current_run()
+			var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(from_start, TRUE, reset, list(user))
+			report(user, "Test run [restart ? "restarted" : "started"] for everyone in this world[from_start ? " at the start marker" : ""][reset ? ", NPCs reset" : ""]. The triggers are live now.", TRUE)
+			babylon_tutorial_tell_players(run, user, "[user.real_name] [restart ? "restarted" : "started"] a tutorial test run for everyone in this world.")
+			log_game("BABYLON TUTORIAL: [key_name(user)] [restart ? "restarted" : "started"] the test run.")
 			return TRUE
 		if("test_stop")
-			if(babylon_tutorial_end(user))
-				report(user, "Test run stopped. The world stays as it is.", TRUE)
+			var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+			var/list/audience = run?.audience()
+			if(babylon_tutorial_end())
+				report(user, "Test run stopped for everyone. The world stays as it is.", TRUE)
+				for(var/mob/player as anything in audience)
+					if(player != user)
+						to_chat(player, span_notice("[user.real_name] stopped the tutorial test run."))
+				log_game("BABYLON TUTORIAL: [key_name(user)] stopped the test run.")
 			return TRUE
 	return FALSE
 
@@ -870,10 +879,9 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		if("preview")
 			if(istype(object, /obj/babylon_tutorial/action))
 				var/obj/babylon_tutorial/action/previewed = object
-				// Always a throwaway run: it never touches a test run, and no triggers listen.
-				var/datum/babylon_tutorial_run/run = new(user, TRUE)
-				run.preview = TRUE
-				run.enabled.Cut()
+				// Always a throwaway run for this builder only: it never touches the world's run,
+				// and no triggers listen.
+				var/datum/babylon_tutorial_run/run = new(TRUE, user)
 				run.perform(null, previewed)
 				QDEL_IN(run, 60 SECONDS)
 				set_notice("Previewed for you only.", TRUE)
@@ -924,3 +932,9 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		cache.Cut(1, 2)
 	cache[key] = results
 	return results
+
+/// Tells every player of the run but the builder what happened to the run.
+/proc/babylon_tutorial_tell_players(datum/babylon_tutorial_run/run, mob/builder, text)
+	for(var/mob/player as anything in run?.audience())
+		if(player != builder)
+			to_chat(player, span_notice(html_encode(text)))

@@ -194,7 +194,7 @@ export const BabylonTutorialObject = () => {
               <Stack.Item>
                 <Button
                   icon="eye"
-                  tooltip="Run this action for yourself now (nobody else sees it)."
+                  tooltip="Run this action now for you only, instead of for every player (an NPC it changes changes for everyone)."
                   onClick={() => act('preview')}
                 >
                   Preview

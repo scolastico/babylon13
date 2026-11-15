@@ -26,7 +26,7 @@ const data: WandData = {
     {
       id: 'trigger',
       name: 'Triggers',
-      desc: 'Wait for something the player does, then run actions.',
+      desc: 'Wait for something a player does, then run actions.',
       entries: [
         {
           kind: 'zone',
@@ -168,6 +168,7 @@ describe('BabylonTutorialWand', () => {
         running: true,
         completed: false,
         fired: 2,
+        players: 2,
         listening: ['enter_lab'],
         steps: ['enter_lab>hello'],
         objective: 'Scan the patient',
@@ -175,6 +176,11 @@ describe('BabylonTutorialWand', () => {
     });
     openTab('Test run');
     expect(screen.getByText('Stop test run')).toBeDefined();
+    expect(
+      screen.getByText(
+        'Test run active for 2 player(s): 2 action(s) run so far.',
+      ),
+    ).toBeDefined();
     expect(screen.getByText('Scan the patient')).toBeDefined();
     expect(
       screen.getAllByText('enter_lab', { exact: false }).length,

@@ -71,6 +71,7 @@ export type WandData = {
     running: boolean;
     completed?: boolean;
     fired?: number;
+    players?: number;
     listening?: string[];
     steps?: string[];
     objective?: string | null;
@@ -614,12 +615,14 @@ const TestTab = () => {
   const start = (from: string) =>
     act('test_start', { from, reset_npcs: resetNpcs });
   return (
-    <Section title="Test your tutorial">
+    <Section title="Test the tutorial">
       <Box color="label" mb={1}>
-        A test run plays the tutorial for you only: your triggers start
-        listening and their actions run, just as for a player. Other builders
-        can test at the same time without getting in your way. Stopping resets
-        the run, not the world (spawned NPCs and given items stay).
+        A test run plays the tutorial for everyone in this world, just as in a
+        published tutorial: its triggers start listening, a trigger fires when
+        any player does what it waits for, and actions for the player reach
+        every player. Starting from the start marker moves everyone there.
+        Stopping or restarting resets the run for everyone, not the world
+        (spawned NPCs and given items stay).
       </Box>
       <Button.Checkbox
         checked={resetNpcs}
@@ -633,8 +636,8 @@ const TestTab = () => {
           <NoticeBox success mt={1}>
             <Icon name="circle-play" mr={1} />
             {test.completed
-              ? 'Test run complete: you reached a Complete action.'
-              : `Test run active: ${test.fired} action(s) run so far.`}
+              ? 'Test run complete: a Complete action ran.'
+              : `Test run active for ${test.players ?? 0} player(s): ${test.fired} action(s) run so far.`}
           </NoticeBox>
           {!test.completed && (
             <Box mb={1}>

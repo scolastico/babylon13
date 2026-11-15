@@ -580,7 +580,7 @@ def main():
             # Every test reports before any failure is raised, so one run shows all problems.
             for proc in args.only_tutorial_tests or (
                     "test_tutorial_submit_refusals", "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review",
-                    "test_tutorial_chains", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
+                    "test_tutorial_chains", "test_tutorial_players", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
                     "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
                 tutorial[proc] = {entry["entry"]: entry["value"] for entry in result["entries"]}
