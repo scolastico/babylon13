@@ -396,5 +396,38 @@ class SaveFiles(unittest.TestCase):
         self.assertIn("babylon_failed_maps |= failed", text)
 
 
+class MaploadDefaults(unittest.TestCase):
+    # Upstream files that decide something at random only on mapload, and the hook in
+    # persistence.dm that makes it stand back for a saved map (babylon_loading_saved_map()).
+    HOOKS = {
+        "code/game/turfs/open/floor.dm": "/turf/open/floor/MakeDirty()",
+        "code/modules/recycling/disposal/bin.dm": "/obj/machinery/disposal/bin/spawn_contained_animal()",
+        "code/modules/mob/living/basic/bots/mulebot/mulebot.dm": "/mob/living/basic/bot/mulebot/Initialize(mapload)",
+        "code/game/machinery/camera/camera.dm": "/obj/machinery/camera/Initialize(mapload)",
+    }
+    # Random mapload choices a restore overwrites anyway.
+    HARMLESS = {
+        "code/modules/reagents/reagent_dispenser.dm",  # water cooler punch: the saved reagents replace it
+    }
+
+    def test_every_random_mapload_default_stands_back_for_a_saved_map(self):
+        # Such code runs again on every restart of a saved world and piled up dirt, hidden
+        # animals and the like. A new upstream case fails here until it gets a hook.
+        persistence = (DM / "persistence.dm").read_text(encoding="utf-8")
+        pattern = re.compile(r"(?<![!\w])mapload\s*&&.*prob\(|prob\(.*&&\s*mapload\b")
+        found = set()
+        for folder in ("code", "modular_skyrat", "modular_zubbers", "modular_zzplurt"):
+            for path in (REPO / folder).rglob("*.dm"):
+                if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
+                    found.add(path.relative_to(REPO).as_posix())
+        self.assertEqual(found - self.HARMLESS - set(self.HOOKS), set())
+        for hook in self.HOOKS.values():
+            self.assertIn(hook, persistence)
+        # Round-start decay (modular_skyrat decaySS.dm) is the same kind of decision, per world.
+        self.assertIn("/datum/controller/subsystem/decay/Initialize()", persistence)
+        # Lights decide their breakage through allow_break_on_init.
+        self.assertIn("allow_break_on_init = FALSE", persistence)
+
+
 if __name__ == "__main__":
     unittest.main()

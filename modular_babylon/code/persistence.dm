@@ -1336,6 +1336,34 @@
 /atom/proc/babylon_after_restore(list/fields)
 	return
 
+// Dirt: upstream dirties a third of all mapped floors (more in ruins); a saved level already has
+// its dirt as saved objects, and each restart added a new layer (about 400 decals on Babylon).
+/turf/open/floor/MakeDirty()
+	if(babylon_loading_saved_map())
+		return
+	return ..()
+
+// Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and
+// rat or spider nests into maintenance. A saved world keeps its own decay; decaying it again on
+// every restart piled up dirt, webs and nests.
+/datum/controller/subsystem/decay/Initialize()
+	if(fexists("data/babylon/resume-state.json"))
+		log_world("SSDecay skipped: this world resumes a save.")
+		return SS_INIT_NO_NEED
+	return ..()
+
+// Disposal bins: upstream hides an animal in some mapped bins; a saved bin keeps what it held.
+/obj/machinery/disposal/bin/spawn_contained_animal()
+	if(babylon_loading_saved_map())
+		return
+	return ..()
+
+// MULEbots: upstream swaps 0.7% of mapped MULEbots for a paranormal one; a saved bot stays itself.
+/mob/living/basic/bot/mulebot/Initialize(mapload)
+	if(mapload && babylon_loading_saved_map())
+		replacement_chance = 0
+	return ..()
+
 // Lights: upstream breaks 2% of tubes and 5% of bulbs of every mapped light; a saved light keeps
 // its saved status (working, empty, broken, burned out) instead.
 /obj/machinery/light/Initialize(mapload)
@@ -1344,13 +1372,13 @@
 	return ..()
 
 /obj/machinery/light/babylon_after_restore(list/fields)
-	// Its backup cell came back as a saved child in its contents, but the light still holds the
-	// mock flag, so update() (get_cell()) would make a second cell on every restart.
+	// Its backup cell came back as a saved child (and its saved cell reference), but the light
+	// still holds the mock flag of a fresh light, so update() (get_cell()) would replace it with a
+	// second cell on every restart.
 	if(!cell)
-		var/obj/item/stock_parts/power_store/restored_cell = locate() in contents
-		if(restored_cell)
-			cell = restored_cell
-			has_mock_cell = FALSE
+		cell = locate(/obj/item/stock_parts/power_store) in contents
+	if(cell)
+		has_mock_cell = FALSE
 	update(trigger = FALSE)
 
 // Cameras: upstream switches 3% of mapped station cameras off; a saved camera keeps its saved
