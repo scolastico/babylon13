@@ -1,248 +1,103 @@
-# Experimental lobby and supervisor
+# Babylon13 cluster: lobby, supervisor and worlds
 
-This implementation is for local development. It is not a production release.
-The private Babylon prototype is separate and is not migrated or restarted.
+Babylon13 runs many small game worlds behind one lobby. Players pick or create a world in
+the lobby; the supervisor starts it as its own DreamDaemon process, admits the player with
+a one-time ticket, saves the world while it runs and stops it again when it is empty. This
+document describes what players, owners and administrators can do, how worlds are saved,
+and how to run the cluster. The private Babylon prototype is separate and is not migrated
+or restarted. [VALIDATION.md](VALIDATION.md) records what was tested and how;
+[UPSTREAM_HOOKS.md](UPSTREAM_HOOKS.md) lists the upstream files Babylon changes.
 
 ## Components
 
-- `babylon-lobby.dme` compiles a standalone, one-tile BYOND menu. It includes no
-  SS13 code, maps, subsystems, TGUI build or native libraries. Its browser lists
-  active, owned, shared and discoverable worlds, with creation and owner controls.
-- `services/supervisor/supervisor.py` runs on Python 3.11+ using its standard
-  library and SQLite. It owns world metadata, roles, quotas, port assignment,
-  child processes and admission. Its HTTP API binds only to loopback.
-- `babylon.dme` runs one Babylon station per process. Native Topic control and
-  a small early client-admission hook connect it to the supervisor.
+- **Lobby** (`babylon-lobby.dme`): a standalone, one-tile BYOND menu. It includes no SS13
+  code, maps, subsystems, TGUI build or native libraries. Its browser page lists active,
+  owned, shared and discoverable worlds and the tutorials, with creation and owner
+  controls ([The lobby](#the-lobby)).
+- **Supervisor** (`services/supervisor/supervisor.py`): Python 3.11+, standard library and
+  SQLite (the optional Discord bot needs discord.py). It owns world metadata, roles,
+  limits, ports, child processes, admission tickets, checkpoints and the tutorial store.
+  Its HTTP API binds only to loopback.
+- **Babylon build** (`babylon.dme`): one Babylon world per process, on the derelict
+  Babylon station, with drones as players.
+- **Station build** (`babylon-station.dme`): one world per process on a tg station map or a
+  Creative Plane, running normal tg rounds.
+- **Test builds** (`babylon-test.dme`, `babylon-station-test.dme`): the two game builds
+  with authenticated test hooks, for the smoke tests only. Never host them.
 
-## Docker on Linux (amd64)
+Each world talks to the supervisor through native Topic control (status, save, stop) and
+a small early client-admission hook, and through a few authenticated HTTP requests of its
+own (ticket redemption, adminhelp relays, world management, round end, tutorial
+submissions).
 
-The root Dockerfile builds the pinned BYOND version, native rust-g/dreamluau
-libraries, TGUI, behavior trees, and both production programs. The final image
-runs as UID 10001 and keeps the supervisor API inside the container. The lobby
-and child DreamDaemon ports are the only published endpoints.
+## World types
 
-Copy `.env.example` to `.env`, set `BABYLON_PUBLIC_HOST` to the hostname/IP
-players can reach, and set `BABYLON_ADMINS` to a comma-separated list of BYOND
-accounts. These grant lobby administration and full game-admin rights in every
-world they join (granted on admission, for that world's run).
+A world is defined by its **map**, two switches (**Persistent** and **Creative**) and its
+**kind**. The map and the kind are fixed when the world is created. The switches are
+chosen in the New world wizard and can be changed in the world's settings while it is
+stopped.
 
-```sh
-# Local checkout: automatically includes compose.override.yml, builds :local.
-docker compose up -d --build
-docker compose logs -f
-docker compose down
+Maps (`_maps/babylon/catalog.json`), grouped as in the wizard:
 
-# Published image: explicitly omit the automatic local override.
-BABYLON_IMAGE_TAG=unstable docker compose -f compose.yml up -d
-# After a release exists, use latest or a literal release tag such as 1.0.0.
-BABYLON_IMAGE_TAG=1.0.0 docker compose -f compose.yml up -d
-```
+| Group | Maps | Build | Players are |
+| --- | --- | --- | --- |
+| Babylon | Babylon | `babylon.dme` | drones ([Babylon worlds](#babylon-worlds-persistence-and-size)) |
+| Stations | BoxStation, MetaStation, DeltaStation, KiloStation, PubbyStation; multi-level: IceBox Station, Tramstation, North Star | `babylon-station.dme` | their preferences characters, in a normal tg round ([Rounds in station worlds](#rounds-in-station-worlds)) |
+| Creative Plane | S (50x50), M (100x100), L (200x200) | `babylon-station.dme` | their preferences characters, on an empty floor ([Creative Plane](#creative-plane)) |
 
-Compose 2.24.4+ is required. `compose.override.yml` uses
-`image: !override ghcr.io/scolastico/babylon13:local` and `pull_policy: build`;
-it cannot select a downloaded game image even if `BABYLON_IMAGE_TAG` is set.
-Base images and pinned build dependencies are still downloaded when building.
-CI selects the independent kernel.org Ubuntu mirror with the Docker build
-argument `UBUNTU_MIRROR` to avoid the current Canonical DNS outage. A normal
-local build keeps Ubuntu's default mirrors; all mirrors use Ubuntu's signed
-repository metadata and the image's existing Ubuntu archive keys.
+Switches:
 
-The named `babylon-data` volume holds the database, worlds, logs and every
-checkpoint. Keep it when replacing images; `down -v` deletes this volume.
-The container locks its data volume so two instances cannot manage it at once.
-For a bind mount, make the directory writable by UID 10001. Existing private
-PoC saves are not automatically imported.
+- **Persistent** (default on): the world is saved (autosave, the owner's Save verbs, and a
+  final save when it stops) and every start resumes from its latest checkpoint. Off: the
+  world is never saved, and every start begins from the fresh map.
+- **Creative** (default off): every player in a body gets the Creative panel and the
+  tutorial wand ([Creative mode](#creative-mode)). Works on every map.
 
-Set `BABYLON_HUB_LISTED=true` to list the lobby on the BYOND hub (default:
-upstream's shared `Exadv1.spacestation13` entry; override with `BABYLON_HUB` and
-`BABYLON_HUB_PASSWORD`). Child worlds always start with DreamDaemon's
-`-invisible` flag, because they only admit lobby tickets. The hub's own player
-counter only sees lobby connections, so the lobby refreshes its hub status every
-30 seconds with the total across the lobby and all running worlds. The lobby
-never sleeps while empty, so the entry stays listed without players. It starts
-invisible and only becomes visible once the configured hub password is set: a
-world first announced with a wrong password is listed only while someone is
-connected.
+Kinds are set by the supervisor, never by a lobby request:
 
-The status line is the HTML template `BABYLON_HUB_STATUS`, so links and wording
-can be changed without a rebuild. Placeholders: `{name}` (`BABYLON_SERVER_NAME`),
-`{players}` (total), `{lobby_players}`, `{world_players}`, `{running_worlds}`,
-`{running_worlds_label}` (for example "2 running worlds"; both count admin worlds
-like any other), `{admin_worlds}` (how many of them are admin worlds),
-`{max_running_worlds}` and `{address}` (the lobby's byond:// address). The
-default is
-`<b>{name}</b> &#8212; persistent station building<br>Players: <b>{players}</b> ({world_players} in {running_worlds_label}, {lobby_players} in the lobby)`.
+- `world`: an ordinary world that a player created.
+- `tutorial`: a player's private run of a published tutorial (**Play**). Never saved;
+  deleted with its files when it stops.
+- `tutorial_edit`: an administrator's edit world of a pending tutorial (**Edit**).
+  Creative, never saved, deleted when it stops.
 
-Logs: `docker logs` is the single log of the cluster. Every line is prefixed
-with its source: `[supervisor]` (world starts, stops, saves, joins and every
-lobby action, plus errors), `[lobby]` (the lobby's DreamDaemon: connects,
-handoffs to worlds, failed actions) and `[world <name> <id>]` (each child
-world's DreamDaemon output, including its round `dd.log` with runtime errors).
-The per-world files under `/data/worlds/<id>/` stay as before.
+What follows from the type is one table, `/datum/babylon_world` in
+`modular_babylon/code/world_flags.dm`, mirrored by `world_policy()` in
+`services/supervisor/constants.py`. `test_contracts.py` checks that both give the same
+answers for every combination.
 
-### Discord
+| Rule | Applies to |
+| --- | --- |
+| Saved (autosave, save verbs, save on stop) | Persistent worlds of kind `world` |
+| Creative panel and tutorial wand | Creative worlds |
+| Creative machines work | Creative worlds, tutorial kinds, every Creative Plane map |
+| Supermatter delamination contained (no singularity, tesla or cascade) | the same as creative machines |
+| Inert storyteller (no random events or antagonists) | Babylon worlds, tutorial kinds, Creative Plane maps |
+| Round starts at once (no owner hold) | tutorial kinds, and resumed rounds |
+| Can submit a tutorial | Creative station-build worlds of kind `world` (Creative Plane or station) |
+| Can save a tutorial back | `tutorial_edit` |
+| Players' characters saved | every kind except the tutorial kinds |
 
-The supervisor also runs an optional Discord bot (discord.py, in the same
-process). It starts when `BABYLON_DISCORD_TOKEN` and `BABYLON_DISCORD_GUILD_ID`
-are set; `BABYLON_DISCORD_FEATURES` picks what it does:
+## Limits
 
-| Feature | What it does | Needs |
-| --- | --- | --- |
-| `link` | `/link`, `/unlink`; moderators get `/whois`. Links a Discord account to a BYOND account. | |
-| `roles` | Buttons with `custom_id` `babylon:role:<role id>` toggle a role from `BABYLON_DISCORD_SELF_ROLES`; `babylon:color:<role id>` picks one of `BABYLON_DISCORD_COLOR_ROLES` (exclusive), `babylon:color:none` removes it. | role IDs |
-| `voice` | Joining the voice lobby creates a room for the member, which is deleted when empty. | `_VOICE_LOBBY_CHANNEL` |
-| `logs` | Member, message, voice and moderation logs, each in its own channel (unset channels are skipped). | log channels |
-| `status` | A status message (players, running worlds; private worlds stay anonymous), updated every minute and marked offline on shutdown. | `_STATUS_CHANNEL` |
-| `gamelog` | Every `[supervisor]` log line, batched into a channel. | `_GAME_LOG_CHANNEL` |
-| `ahelp` | Every adminhelp from a world becomes a message with a thread in a staff channel: the player's messages and replies, and in-game admins' answers. Staff answer with the "Reply" button; the player gets it as an admin PM (shown as "Administrator" unless `SHOW_IRC_NAME` is set). "Close ticket" closes it in the world and archives the thread. The player is told "Created an adminhelp for you." and, if any member of `_AHELP_ROLES` (default: the staff roles) is online on Discord, how many; that count needs the bot's Presence Intent, without it the bot runs and the count is left out. | `_AHELP_CHANNEL`, `_STAFF_ROLES`, optional `_AHELP_ROLES` |
-| `tickets` | An "Open a ticket" button in a read-only channel opens a private channel for the member and `BABYLON_DISCORD_STAFF_ROLES`. Creator and staff can add people; closing it sends a `.txt` transcript to the creator by DM and to the ticket log. | `_TICKET_PANEL_CHANNEL`, `_TICKET_LOG_CHANNEL`, `_TICKET_CATEGORY`, `_STAFF_ROLES` |
+| Limit | Setting (Docker / supervisor JSON) | Compose default | What counts |
+| --- | --- | --- | --- |
+| Running worlds | `BABYLON_MAX_RUNNING_WORLDS` / `max_running_worlds` | 4 | every running world (tutorial runs included), except worlds owned by an admin |
+| Running worlds per owner | `BABYLON_MAX_RUNNING_WORLDS_PER_PLAYER` / `max_running_worlds_per_player` | 1 | the owner's running worlds, including their tutorial runs; a member who starts someone else's world uses that owner's quota |
+| Saved worlds per owner | `BABYLON_MAX_WORLDS_PER_PLAYER` / `max_worlds_per_player` | 3 | the owner's Persistent worlds: checked when creating one, when turning Persistent on, and by **Copy to my worlds** |
+| All worlds per owner | `BABYLON_MAX_TOTAL_WORLDS_PER_PLAYER` / `max_total_worlds_per_player` | 20 | all the owner's worlds of kind `world`, Persistent or not (tutorial runs and edit worlds do not count) |
+| Players per world | `BABYLON_MAX_PLAYERS_PER_WORLD` / `max_players_per_world` | 4 | the highest capacity an owner can set; pending tickets count |
+| Tutorial submissions | `BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS` / `tutorial_submit_cooldown_hours` | 6 | hours between two submissions of one player; `0` turns it off |
 
-`BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL` (no feature needed) is a staff channel
-that gets a "New tutorial submitted" message with the title, author, map and
-description of every submitted tutorial and a hint to review it in the lobby.
-Without it (or without the bot) a submission is only logged; it still waits in
-the lobby under **Pending tutorials**.
-
-`/status` is always available. In the developer portal, enable the
-**Server Members Intent** for `link`, `logs` and `ahelp`, and the **Message
-Content Intent** for `logs`; without them Discord refuses the connection and the
-bot stays off (the game keeps running). The **Presence Intent** is optional: with
-`ahelp`, the bot asks for it to count online admins and runs without the count
-when it is not enabled. The bot's role must be above every role it
-assigns. Voice rooms and open tickets are remembered in the data volume.
-
-Linking: **Link Discord** in the lobby shows a one-time code (valid 10
-minutes) to type as `/link code:ABCD-EFGH`. One Discord account links to one
-BYOND account. `BABYLON_REQUIRE_DISCORD_TO_CREATE` and
-`BABYLON_REQUIRE_DISCORD_TO_JOIN` (both off by default, independent) make a
-linked account a condition for creating, and for joining or starting worlds;
-lobby admins are exempt. While the bot's member cache is ready, a linked
-account must also still be on the Discord server. The lobby shows the link
-state and the requirements, with Link, Unlink and Discord invite buttons.
-
-`BABYLON_DISCORD_INVITE` also adds a **Discord** button to the in-game escape
-menu (Resources); `BABYLON_RULES_URL` sets its **Rules** button. Babylon hides
-upstream's /tg/station wiki, forum, rules and config links.
-
-All supported settings and defaults are listed in `.env.example`: lobby and
-world ports, internal API port, admin CSV, global/per-owner world limits,
-player limits, retained checkpoints, unused-world expiry, admission lifetime,
-empty grace and startup/shutdown timeouts. World port mappings must use the
-same host/container numbers because those ports are advertised to clients.
-Worlds on station maps (normal tg rounds, several z-levels) boot much longer than
-Babylon worlds (about 1.5 to 3 minutes measured); they use
-`BABYLON_STATION_STARTUP_TIMEOUT_SECONDS` (default 600) instead of
-`BABYLON_STARTUP_TIMEOUT_SECONDS` (default 300), whichever is larger.
-For an advanced custom SPLURT config, mount a directory read-only and set
-`BABYLON_CONFIG_DIRECTORY` to its container path; it must contain `config.txt`
-including `comms.txt`. The supervisor generates each child's control key.
-`BABYLON_DATA_DIRECTORY` defaults to `/data` and should remain on a volume.
-
-SIGTERM closes the lobby, saves/stops worlds, and waits for confirmed child
-exits for up to `BABYLON_SHUTDOWN_TIMEOUT_SECONDS` (default 600: a station
-world's final save takes about a minute). Docker's stop grace period must be at
-least the restart warning + that shutdown timeout + the lobby handoff, about
-12 minutes with the defaults: Compose grants `BABYLON_STOP_GRACE_PERIOD`
-(default 12m). Deployments that set `stop_grace_period` themselves must raise it
-accordingly. For plain Docker use `docker stop --time 720`; Docker's default short timeout can kill a
-world during its save. On save failure the process stays alive and retries;
-Docker can still force-kill it when its grace period expires.
-
-### Image publishing
-
-`.github/workflows/babylon-containers.yml` compiles production, test and
-ordinary upstream builds and runs Python/browser tests for PRs and pushes to
-`main`/`master`. Publication is restricted to the default branch (currently
-`master`) and published GitHub releases. PRs never log into GHCR.
-
-- A successful default-branch push replaces `:unstable`. A temporary
-  `:unstable-<commit>` marker permits cleanup even after a cancelled run; all
-  older marked unstable image versions are deleted after successful publishing.
-- Publishing release tag `1.0.0` attaches both `:1.0.0` and `:latest` to the
-  same image. If the released commit already has an `:unstable-<commit>` image
-  (normally: the release is the latest default-branch commit), the release waits
-  for that commit's push run, then only retags that image instead of compiling
-  and building again. Tag changes of all runs share one concurrency group.
-- After a successful release, the workflow can trigger a Komodo procedure (for
-  example a redeploy) through its GitLab-style webhook. Set the action secrets
-  `KOMODO_WEBHOOK_URL` (listener URL ending in `/<default branch>`) and
-  `KOMODO_WEBHOOK_SECRET`; without both the step is skipped. Set the action variable
-  `KOMODO_NOTIFY_UNSTABLE` to `true` to also trigger it after every published
-  unstable build of the default branch (for deployments tracking `:unstable`). Release tags are literal Docker tags; `v1.0.0` remains `:v1.0.0`.
-- The separate `Discord changelog` workflow posts to a Discord channel as embed
-  cards. Set the action secret `DISCORD_CHANGELOG_WEBHOOK` (the channel's webhook
-  URL) and the action variable `DISCORD_CHANGELOG`: `commit` posts every commit of
-  each push to the default branch (all of them when several are pushed at once,
-  continued on further cards when one is not enough), `release` posts each published
-  release's description. Unset, nothing is posted. The optional variable
-  `DISCORD_CHANGELOG_ROLE` (a role ID) is mentioned above each post.
-- Main/default-branch runs cancel older runs in their concurrency group. PRs
-  are grouped by ref; release runs use separate groups and are not cancelled.
-- Cleanup never deletes versions with `latest`, a release tag, or any other
-  non-unstable tag. Images use a single amd64 manifest without extra attestation
-  manifests, so obsolete unstable versions do not leave dangling child images.
-
-The workflow uses `GITHUB_TOKEN` with package-write permission and an OCI
-source label linking the package to this repository. For a pre-existing GHCR
-package, the repository must have package-admin access for cleanup. GHCR
-visibility is managed in the package's settings; a public repository does not
-automatically make a newly created package public. Private images need registry
-login. Existing documentation and map-viewer workflows are unchanged.
-
-Players authenticate with BYOND; ckeys are taken from server-side clients.
-The API trusts the lobby credential, not arbitrary HTTP callers claiming ckeys.
-Do not expose the supervisor API to the internet or publish configuration files.
-Public connections use the lobby port and the configured child port range.
-The example binds game ports to loopback too. To host for other machines, set
-`public_host` to the reachable hostname and `bind_address` to the desired
-interface (for example `0.0.0.0`), and update `lobby_address` accordingly.
-
-## Windows setup
-
-Build `babylon.dme -DCBT` with the pinned BYOND version, native dependencies and
-upstream TGUI assets as described in the repository build instructions. Compile
-`babylon-lobby.dme` too. Supply a clean, operator-controlled SPLURT configuration
-directory; inherited SQL, external integrations, hub settings, bans and admin
-configuration remain the operator's responsibility. Do not use a production
-server's live configuration or secrets for a test cluster.
-
-```powershell
-powershell -File tools/babylon/Initialize-Cluster.ps1 `
-  -DreamDaemon C:\BYOND\bin\dd.exe `
-  -ConfigDirectory C:\BabylonConfig `
-  -Admins YourByondAccount
-
-# Review babylon-supervisor-config.json, especially paths, host and quotas.
-powershell -File tools/babylon/Start-Cluster.ps1 -Python C:\Python\python.exe
-```
-
-Initialization generates a fresh shared lobby credential in two ignored JSON
-files. It refuses to overwrite them. Admin accounts come only from the supplied
-`-Admins` list; no account is automatically granted access.
-
-Once configured and compiled, double-click **Start Babylon Server.cmd** or
-**Stop Babylon Server.cmd** in the repository root. They find Python through
-`uv`, the Windows `py` launcher, or `python` on PATH. The PowerShell entry points
-also accept `-Python` for an explicit executable path.
-
-Start reports an already-running cluster instead of launching duplicates.
-Stop closes the lobby to prevent new starts, waits for any starting worlds to
-initialize, requests a final save/stop for every running world, and waits for
-confirmed exits before stopping the supervisor. A save failure or timeout
-leaves the supervisor and affected children running for recovery; it never
-force-kills a world. The scripts do not delete worlds or checkpoints.
-
-For manual operation, run Python with
-`services/supervisor/supervisor.py --config babylon-supervisor-config.json` and
-DreamDaemon with `babylon-lobby.dmb 1361 -trusted -close -params
-"lobby-config=babylon-lobby-config.json"` from the checkout root. On Linux,
-configure the native-library/executable paths and use these manual commands.
-
-The supervisor can restart while children remain alive. It stores run IDs,
-per-run control credentials and PIDs in SQLite and checks authenticated child
-identity before trusting status. Keep its data directory private. Lobby and
-supervisor process IDs/logs are under that directory. Stop worlds through the
-lobby before stopping the cluster processes. Do not kill a child to save it.
+Server administrators (`BABYLON_ADMINS`) are exempt from the per-owner limits: they create
+as many worlds as they like, run several at once, and may start another person's world even
+when its owner's running quota is used up (a player's world still counts towards the global
+limit). Worlds owned by an admin do not count towards the global running limit; they only
+need a free port, and the Discord status shows them separately, for example "2/4 (+1)"
+(the hub status counts them as running worlds).
+Admins bypass a world's player capacity. A refused action says which limit applies ("Your
+world limit has been reached", "Your total world limit has been reached", "This owner's
+running-world limit has been reached", "The server's running-world limit has been reached").
 
 ## Rules and controls
 
@@ -258,14 +113,7 @@ lobby before stopping the cluster processes. Do not kill a child to save it.
   and request an immediate save-and-stop. Admins can see/join/manage every
   world regardless of visibility/password, and are full game admins inside
   every world they join. Managers and delegated permissions are not yet added.
-- Limits configure total running worlds, players per world, worlds per owner,
-  and running worlds per owner. Worlds owned by an admin (`BABYLON_ADMINS`) do
-  not count towards the global running-world limit; they only need a free port
-  and are shown separately on the Discord status, e.g. "2/4 (+1)"; the hub lists them as running worlds. A member starting another person's
-  world uses that world's owner quota. Admins are not bound by the per-owner
-  limits: they create as many worlds as they like, run several at once, and
-  can start another person's world even when its owner's running quota is used
-  up (a player's world still counts towards the global limit). Admins bypass
+- Limits on worlds and players are described under [Limits](#limits). Admins bypass
   join capacity so they can investigate a full world.
 - Admins can also **Spectate** (or **Start and spectate**) a world from the
   lobby: they enter as an ordinary admin ghost, invisible to players, instead
@@ -308,7 +156,36 @@ lobby before stopping the cluster processes. Do not kill a child to save it.
   interrupted filesystem cleanup. Existing databases migrate activity from
   their creation time and recorded actions.
 
-## Persistence and size
+## The lobby
+
+Every lobby prompt is an in-page dialog (no BYOND system popups): the
+New world wizard (map cards grouped into Babylon, Creative Plane with an
+S/M/L size choice, and Stations, with a Multi-level badge for multi-z maps
+and a top-down preview rendered by `tools/babylon/render_map_previews.py`
+into `_maps/babylon/previews` (rerun it when a station map changes); then name, description, who can join, password, capacity and the Creative and
+Persistent switches, with the owner's saved/total world counters), world
+settings, members, saved checkpoints, the join password, Discord link/unlink
+and the stop/delete/reset/rollback confirmations. Delete and Reset need the
+world's name typed; confirmations never trigger on Enter. Esc or a click
+beside the dialog cancels (not while a request runs); errors appear inside the
+dialog, which stays open. Members lists the current members with a remove
+button and works while the world runs. A station world whose round ended shows
+"Round over" while it shuts down. Status polls never redraw an open dialog, so typing is kept.
+Joining and stopping show the loading panel; shutdown stays on it until the
+final save and process exit are confirmed, or an error or timeout is reported.
+Background status polls update the existing browser document only when its
+content changes; each tab keeps its scroll position. Late poll responses
+cannot overwrite an action's loading state.
+
+## Deleting worlds
+
+Owners and server admins can permanently delete a stopped world using
+**Delete world** on its lobby card. The confirmation covers every checkpoint.
+Running worlds must be saved/stopped first. Deletion revokes memberships,
+tickets and sessions, releases the owner's world quota, and removes that
+world's data directory. Filesystem failures retain a cleanup journal for retry.
+
+## Babylon worlds: persistence and size
 
 Every world gets its own UUID directory, config and control key. On startup,
 the driver stages the canonical wreck or its last committed checkpoint.
@@ -389,112 +266,6 @@ The supervisor selects the play mode when redeeming the single-use ticket;
 connection parameters cannot request builder access. Members added while
 visiting must reconnect through the lobby to enter as players. Visitors count
 toward the world capacity and online population and follow its AFK timeout.
-
-## Server music
-
-Worlds can play music that lives only on the server, never in this repository, so
-licensed tracks (for example from a music subscription) stay server specific. Put
-tracks into the `babylon-music` volume (mounted read only at `/music`; another path
-with `BABYLON_MUSIC_DIRECTORY`). The folder a track is in decides the mood it plays in.
-Players rebuild the station as they like (a reactor may stand in the old chapel), so the
-mood follows what is around the player, not the room's original name:
-
-```
-/music/vault/      inside the Continuity Vault, the watchdog server's room
-/music/space/      outside the hull
-/music/engine/     near a power generator, wherever it was built
-/music/derelict/   inside, where the air is too thin to breathe (below 50 kPa)
-/music/station/    inside, with air
-```
-
-The checks run in that order. Generators are supermatter crystals, tesla coils and
-grounding rods, portable generators (P.A.C.M.A.N. ...), thermoelectric generators, RTGs,
-turbines, RBMK reactors, stirling generators and wind turbines; solar panels and power
-storage do not count, nor generators packed in a crate. An empty `vault/` uses the other
-moods' rules; an empty `engine/` or `derelict/`
-falls back to the derelict or station music; an empty `space/` or `station/` is silent
-there. Other folders and files directly in `/music` are ignored (a world logs folders it
-does not know). Formats: `.ogg`, `.mp3` and `.wav`.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `BABYLON_MUSIC_ENGINE_RADIUS` | `10` | tiles around a generator that play `engine/` music (10 = a 21×21 square); `0` turns it off |
-| `BABYLON_MUSIC_DEBOUNCE_SECONDS` | `20` | how long a player stays in a new mood before its music takes over |
-
-Tracks play one after another in random order with a 30-second pause. A new mood's music
-takes over only after the player has stayed in it for the debounce time, so a short trip
-outside or past a generator keeps the current track; with nothing playing it starts at
-once. Players set the volume (or turn it off with 0) with **Server music volume**
-in the game preferences, or mute and unmute it with **Toggle Server Music** in the OOC
-tab. While a track plays, the status tab shows its file name (without the extension,
-underscores as spaces), so name files the way players should see them. Its **[?]**
-explains in chat that the server's tracks have their own licenses and that players who
-record or stream should mute them. Worlds scan the folder when they start, so new tracks reach a
-world on its next start. Without the folder nothing plays and nothing else changes.
-
-To fill the volume on the host, for example:
-
-```sh
-docker volume inspect <project>_babylon-music --format '{{ .Mountpoint }}'
-sudo mkdir -p <mountpoint>/space && sudo cp my-tracks/*.ogg <mountpoint>/space/
-```
-
-### Loop sets
-
-Music sold as loops or stems (separate drums, pad, lead, ... of the same piece) goes into a
-subfolder of a mood folder with an `index.json`, for example `/music/space/drifting/`.
-The game builds a track from it: a few loops play at once, each repeating, and every so
-often one joins, leaves or is swapped for another. A loop set takes its turn in the mood like
-one plain track; after it ends (and the 30-second pause) the mood picks again. Every audio
-file in the folder is a loop, except the intro and outro. All keys are optional; times are
-seconds, and a range is `{"min": a, "max": b}` or a single number:
-
-```json
-{
-  "title": "Drifting",
-  "weight": 2,
-  "layers": {"min": 2, "max": 4},
-  "duration": {"min": 180, "max": 420},
-  "change_every": {"min": 20, "max": 45},
-  "overlap": 4,
-  "sync": true,
-  "always": ["pad.ogg"],
-  "never_together": [["drums_a.ogg", "drums_b.ogg"], ["lead_1.ogg", "lead_2.ogg", "lead_3.ogg"]],
-  "loops": {"lead_1.ogg": {"volume": 70, "weight": 2}, "fx.ogg": {"weight": 0}},
-  "intro": "intro.ogg",
-  "outro": "outro.ogg"
-}
-```
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `title` | folder name | name in the status tab |
-| `weight` | `1` | chance against the mood's other entries (a plain track weighs 1); `0` never plays |
-| `layers` | `1` | loops playing at once (at most 6) |
-| `duration` | `180`-`300` | how long the set plays before the mood picks again |
-| `change_every` | `30`-`60` | time between changes: with more layers wanted one joins, with fewer one leaves, otherwise one is swapped |
-| `overlap` | `4` | seconds a joining loop fades in while a leaving one fades out (also the fade at the end); `0` cuts |
-| `sync` | `true` | a loop joining later starts where it would be had it played from the start, so loops of the same tempo stay on the beat; `false` starts it from its beginning |
-| `always` | none | loops that play the whole time (they count toward `layers`) |
-| `never_together` | none | groups of loops of which at most one plays at a time |
-| `loops` | none | per loop: `volume` 0-100 (default 100) and `weight`, its chance to be picked (default 1; `0` plays it only through `always`) |
-| `intro`, `outro` | none | played once before the loops start, and while they fade out at the end |
-
-Mistakes (unknown files, bad numbers) are logged when a world starts; a set whose
-`index.json` is not valid JSON, or that has no loops, is skipped. For `sync`, cut loops to
-whole bars of the same tempo, ideally the same length or multiples of it.
-
-## Restarts
-
-When the container stops (a deploy or `docker stop`), new worlds and joins are refused and
-every world counts down in chat (`BABYLON_RESTART_WARNING_SECONDS`, default 30, at the
-start and at 10 and 5 seconds); the lobby shows the same notice. Then each world saves and
-sends its players to the lobby. The lobby stays up until each of them has received its
-restart screen (at most 60 seconds, for players whose BYOND is slow to connect or who
-closed it), plus 3 seconds to show it. Only then does the lobby stop, so players are
-connected to the lobby address and its Reconnect button brings them back once the server is
-up again. The whole shutdown has to fit Docker's
-`stop_grace_period`.
 
 ## Rounds in station worlds
 
@@ -917,6 +688,395 @@ lobby disconnect them instead). Once everyone has left, the normal
 empty-world grace period triggers saving and shutdown. Lobby menu connections
 are not subject to this world timeout.
 
+## Server music
+
+Worlds can play music that lives only on the server, never in this repository, so
+licensed tracks (for example from a music subscription) stay server specific. Put
+tracks into the `babylon-music` volume (mounted read only at `/music`; another path
+with `BABYLON_MUSIC_DIRECTORY`). The folder a track is in decides the mood it plays in.
+Players rebuild the station as they like (a reactor may stand in the old chapel), so the
+mood follows what is around the player, not the room's original name:
+
+```
+/music/vault/      inside the Continuity Vault, the watchdog server's room
+/music/space/      outside the hull
+/music/engine/     near a power generator, wherever it was built
+/music/derelict/   inside, where the air is too thin to breathe (below 50 kPa)
+/music/station/    inside, with air
+```
+
+The checks run in that order. Generators are supermatter crystals, tesla coils and
+grounding rods, portable generators (P.A.C.M.A.N. ...), thermoelectric generators, RTGs,
+turbines, RBMK reactors, stirling generators and wind turbines; solar panels and power
+storage do not count, nor generators packed in a crate. An empty `vault/` uses the other
+moods' rules; an empty `engine/` or `derelict/`
+falls back to the derelict or station music; an empty `space/` or `station/` is silent
+there. Other folders and files directly in `/music` are ignored (a world logs folders it
+does not know). Formats: `.ogg`, `.mp3` and `.wav`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BABYLON_MUSIC_ENGINE_RADIUS` | `10` | tiles around a generator that play `engine/` music (10 = a 21×21 square); `0` turns it off |
+| `BABYLON_MUSIC_DEBOUNCE_SECONDS` | `20` | how long a player stays in a new mood before its music takes over |
+
+Tracks play one after another in random order with a 30-second pause. A new mood's music
+takes over only after the player has stayed in it for the debounce time, so a short trip
+outside or past a generator keeps the current track; with nothing playing it starts at
+once. Players set the volume (or turn it off with 0) with **Server music volume**
+in the game preferences, or mute and unmute it with **Toggle Server Music** in the OOC
+tab. While a track plays, the status tab shows its file name (without the extension,
+underscores as spaces), so name files the way players should see them. Its **[?]**
+explains in chat that the server's tracks have their own licenses and that players who
+record or stream should mute them. Worlds scan the folder when they start, so new tracks reach a
+world on its next start. Without the folder nothing plays and nothing else changes.
+
+To fill the volume on the host, for example:
+
+```sh
+docker volume inspect <project>_babylon-music --format '{{ .Mountpoint }}'
+sudo mkdir -p <mountpoint>/space && sudo cp my-tracks/*.ogg <mountpoint>/space/
+```
+
+### Loop sets
+
+Music sold as loops or stems (separate drums, pad, lead, ... of the same piece) goes into a
+subfolder of a mood folder with an `index.json`, for example `/music/space/drifting/`.
+The game builds a track from it: a few loops play at once, each repeating, and every so
+often one joins, leaves or is swapped for another. A loop set takes its turn in the mood like
+one plain track; after it ends (and the 30-second pause) the mood picks again. Every audio
+file in the folder is a loop, except the intro and outro. All keys are optional; times are
+seconds, and a range is `{"min": a, "max": b}` or a single number:
+
+```json
+{
+  "title": "Drifting",
+  "weight": 2,
+  "layers": {"min": 2, "max": 4},
+  "duration": {"min": 180, "max": 420},
+  "change_every": {"min": 20, "max": 45},
+  "overlap": 4,
+  "sync": true,
+  "always": ["pad.ogg"],
+  "never_together": [["drums_a.ogg", "drums_b.ogg"], ["lead_1.ogg", "lead_2.ogg", "lead_3.ogg"]],
+  "loops": {"lead_1.ogg": {"volume": 70, "weight": 2}, "fx.ogg": {"weight": 0}},
+  "intro": "intro.ogg",
+  "outro": "outro.ogg"
+}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `title` | folder name | name in the status tab |
+| `weight` | `1` | chance against the mood's other entries (a plain track weighs 1); `0` never plays |
+| `layers` | `1` | loops playing at once (at most 6) |
+| `duration` | `180`-`300` | how long the set plays before the mood picks again |
+| `change_every` | `30`-`60` | time between changes: with more layers wanted one joins, with fewer one leaves, otherwise one is swapped |
+| `overlap` | `4` | seconds a joining loop fades in while a leaving one fades out (also the fade at the end); `0` cuts |
+| `sync` | `true` | a loop joining later starts where it would be had it played from the start, so loops of the same tempo stay on the beat; `false` starts it from its beginning |
+| `always` | none | loops that play the whole time (they count toward `layers`) |
+| `never_together` | none | groups of loops of which at most one plays at a time |
+| `loops` | none | per loop: `volume` 0-100 (default 100) and `weight`, its chance to be picked (default 1; `0` plays it only through `always`) |
+| `intro`, `outro` | none | played once before the loops start, and while they fade out at the end |
+
+Mistakes (unknown files, bad numbers) are logged when a world starts; a set whose
+`index.json` is not valid JSON, or that has no loops, is skipped. For `sync`, cut loops to
+whole bars of the same tempo, ideally the same length or multiples of it.
+
+## Restarts and shutdown
+
+When the container stops (a deploy or `docker stop`), new worlds and joins are refused and
+every world counts down in chat (`BABYLON_RESTART_WARNING_SECONDS`, default 30, at the
+start and at 10 and 5 seconds); the lobby shows the same notice. Then each world saves and
+sends its players to the lobby. The lobby stays up until each of them has received its
+restart screen (at most 60 seconds, for players whose BYOND is slow to connect or who
+closed it), plus 3 seconds to show it. Only then does the lobby stop, so players are
+connected to the lobby address and its Reconnect button brings them back once the server is
+up again. The whole shutdown has to fit Docker's
+`stop_grace_period`.
+
+SIGTERM closes the lobby, saves/stops worlds, and waits for confirmed child
+exits for up to `BABYLON_SHUTDOWN_TIMEOUT_SECONDS` (default 600: a station
+world's final save takes about a minute). Docker's stop grace period must be at
+least the restart warning + that shutdown timeout + the lobby handoff, about
+12 minutes with the defaults: Compose grants `BABYLON_STOP_GRACE_PERIOD`
+(default 12m). Deployments that set `stop_grace_period` themselves must raise it
+accordingly. For plain Docker use `docker stop --time 720`; Docker's default short timeout can kill a
+world during its save. On save failure the process stays alive and retries;
+Docker can still force-kill it when its grace period expires.
+
+Measured in the H1 container run (no players connected, [VALIDATION.md](VALIDATION.md)):
+`docker stop` with a Babylon world, a Creative Plane S, MetaStation and IceBox running took
+127 seconds in all: the 30-second countdown, then the four final saves in parallel (Babylon
+2 s, Creative Plane 1 s, MetaStation 54 s, IceBox 81 s; the last world exited 94 seconds
+after the countdown). A single station save measured 53 to 80 seconds. Players' characters
+add to a station save. With the production values (`BABYLON_SHUTDOWN_TIMEOUT_SECONDS=180`,
+`stop_grace_period: 10m`) this fits; keep the shutdown timeout at least twice the slowest
+world's save time, since saves run in parallel and slow each other down. If the timeout
+runs out, the container keeps the unsaved worlds alive and retries until Docker's grace
+period kills it, so raise `stop_grace_period` with it.
+
+## Deployment
+
+### Docker on Linux (amd64)
+
+The root Dockerfile builds the pinned BYOND version, native rust-g/dreamluau
+libraries, TGUI, behavior trees, and the three production programs (the Babylon,
+station and lobby builds). The final image
+runs as UID 10001 and keeps the supervisor API inside the container. The lobby
+and child DreamDaemon ports are the only published endpoints.
+
+Copy `.env.example` to `.env`, set `BABYLON_PUBLIC_HOST` to the hostname/IP
+players can reach, and set `BABYLON_ADMINS` to a comma-separated list of BYOND
+accounts. These grant lobby administration and full game-admin rights in every
+world they join (granted on admission, for that world's run).
+
+```sh
+# Local checkout: automatically includes compose.override.yml, builds :local.
+docker compose up -d --build
+docker compose logs -f
+docker compose down
+
+# Published image: explicitly omit the automatic local override.
+BABYLON_IMAGE_TAG=unstable docker compose -f compose.yml up -d
+# After a release exists, use latest or a literal release tag such as 1.0.0.
+BABYLON_IMAGE_TAG=1.0.0 docker compose -f compose.yml up -d
+```
+
+Compose 2.24.4+ is required. `compose.override.yml` uses
+`image: !override ghcr.io/scolastico/babylon13:local` and `pull_policy: build`;
+it cannot select a downloaded game image even if `BABYLON_IMAGE_TAG` is set.
+Base images and pinned build dependencies are still downloaded when building.
+CI selects the independent kernel.org Ubuntu mirror with the Docker build
+argument `UBUNTU_MIRROR` to avoid the current Canonical DNS outage. A normal
+local build keeps Ubuntu's default mirrors; all mirrors use Ubuntu's signed
+repository metadata and the image's existing Ubuntu archive keys.
+
+The named `babylon-data` volume holds the database, worlds, logs and every
+checkpoint. Keep it when replacing images; `down -v` deletes this volume.
+The container locks its data volume so two instances cannot manage it at once.
+For a bind mount, make the directory writable by UID 10001. Existing private
+PoC saves are not automatically imported.
+
+Set `BABYLON_HUB_LISTED=true` to list the lobby on the BYOND hub (default:
+upstream's shared `Exadv1.spacestation13` entry; override with `BABYLON_HUB` and
+`BABYLON_HUB_PASSWORD`). Child worlds always start with DreamDaemon's
+`-invisible` flag, because they only admit lobby tickets. The hub's own player
+counter only sees lobby connections, so the lobby refreshes its hub status every
+30 seconds with the total across the lobby and all running worlds. The lobby
+never sleeps while empty, so the entry stays listed without players. It starts
+invisible and only becomes visible once the configured hub password is set: a
+world first announced with a wrong password is listed only while someone is
+connected.
+
+The status line is the HTML template `BABYLON_HUB_STATUS`, so links and wording
+can be changed without a rebuild. Placeholders: `{name}` (`BABYLON_SERVER_NAME`),
+`{players}` (total), `{lobby_players}`, `{world_players}`, `{running_worlds}`,
+`{running_worlds_label}` (for example "2 running worlds"; both count admin worlds
+like any other), `{admin_worlds}` (how many of them are admin worlds),
+`{max_running_worlds}` and `{address}` (the lobby's byond:// address). The
+default is
+`<b>{name}</b> &#8212; persistent station building<br>Players: <b>{players}</b> ({world_players} in {running_worlds_label}, {lobby_players} in the lobby)`.
+
+Logs: `docker logs` is the single log of the cluster. Every line is prefixed
+with its source: `[supervisor]` (world starts, stops, saves, joins and every
+lobby action, plus errors), `[lobby]` (the lobby's DreamDaemon: connects,
+handoffs to worlds, failed actions) and `[world <name> <id>]` (each child
+world's DreamDaemon output, including its round `dd.log` with runtime errors).
+The per-world files under `/data/worlds/<id>/` stay as before.
+
+### Configuration
+
+The container reads only environment variables; it writes the supervisor's and the lobby's
+JSON configuration itself (under `/run/babylon`, never into the data volume). Every
+variable is listed with its default in `.env.example` and passed through by `compose.yml`.
+Numbers must be whole numbers. A native (Windows or manual) installation sets the limits
+and timeouts as keys of `babylon-supervisor-config.json` (see
+`services/supervisor/config.example.json`): the key is the variable's name without
+`BABYLON_`, in lower case (`BABYLON_MAX_TOTAL_WORLDS_PER_PLAYER` is
+`max_total_worlds_per_player`). The ports are `listen_port`, `port_first` and `port_last`
+there.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BABYLON_PUBLIC_HOST` | `127.0.0.1` | address players connect to (no scheme, no port) |
+| `BABYLON_SERVER_NAME` | `Babylon13` | lobby and game name |
+| `BABYLON_ADMINS` | empty | BYOND accounts, comma-separated: lobby admins and full game admins in every world they join |
+| `BABYLON_HUB_LISTED`, `BABYLON_HUB`, `BABYLON_HUB_PASSWORD`, `BABYLON_HUB_STATUS` | `false`, upstream's entry | BYOND hub listing of the lobby (see above) |
+| `BABYLON_LOBBY_PORT`, `BABYLON_API_PORT` | `1361`, `1360` | lobby port (published) and the supervisor's internal API port (never published) |
+| `BABYLON_WORLD_PORT_FIRST`, `BABYLON_WORLD_PORT_LAST` | `1400`, `1420` | world ports; publish them with the same host and container numbers |
+| `BABYLON_MAX_RUNNING_WORLDS`, `_MAX_RUNNING_WORLDS_PER_PLAYER`, `_MAX_WORLDS_PER_PLAYER`, `_MAX_TOTAL_WORLDS_PER_PLAYER`, `_MAX_PLAYERS_PER_WORLD` | `4`, `1`, `3`, `20`, `4` | [Limits](#limits) |
+| `BABYLON_KEPT_SAVE_POINTS_PER_WORLD` | `4` | checkpoints kept per world, the current one included |
+| `BABYLON_DELETE_UNUSED_WORLDS_AFTER_DAYS` | `60` | stopped worlds unused this long are deleted; `0` never |
+| `BABYLON_EMPTY_GRACE_SECONDS` | `120` | an empty world saves and stops after this |
+| `BABYLON_AFK_TIMEOUT_SECONDS` | `900` | inactive players go back to the lobby; `0` never |
+| `BABYLON_STARTUP_TIMEOUT_SECONDS` | `300` | a Babylon world must be ready within this |
+| `BABYLON_STATION_STARTUP_TIMEOUT_SECONDS` | `600` | the same for station-build worlds (the larger of the two applies) |
+| `BABYLON_TICKET_LIFETIME_SECONDS` | `60` | how long a join ticket is valid |
+| `BABYLON_STATION_AUTOSAVE_MINUTES` | `30` | autosave interval of station-build worlds (Babylon worlds: 15 minutes) |
+| `BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS` | `6` | hours between two tutorial submissions of one player; `0` off |
+| `BABYLON_SHUTDOWN_TIMEOUT_SECONDS` | `600` | how long a container stop waits for the worlds' final saves ([Restarts and shutdown](#restarts-and-shutdown)) |
+| `BABYLON_RESTART_WARNING_SECONDS` | `30` | countdown in every world before a container stop; `0` skips it |
+| `BABYLON_STOP_GRACE_PERIOD` | `12m` | Compose only: Docker's `stop_grace_period` |
+| `BABYLON_MUSIC_DIRECTORY`, `BABYLON_MUSIC_ENGINE_RADIUS`, `BABYLON_MUSIC_DEBOUNCE_SECONDS` | `/music`, `10`, `20` | [Server music](#server-music) |
+| `BABYLON_DISCORD_*`, `BABYLON_JOIN_URL`, `BABYLON_RULES_URL`, `BABYLON_REQUIRE_DISCORD_TO_CREATE`, `BABYLON_REQUIRE_DISCORD_TO_JOIN` | empty | [Discord](#discord), including `BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL` for tutorial submissions |
+| `BABYLON_CONFIG_DIRECTORY` | `container/default-config` | a custom SPLURT config directory (below) |
+| `BABYLON_DATA_DIRECTORY` | `/data` | database, worlds, checkpoints, tutorials and logs |
+| `BABYLON_MAP_CATALOG` | the image's `_maps/babylon/catalog.json` | the map catalog |
+
+All supported settings and defaults are listed in `.env.example`: lobby and
+world ports, internal API port, admin CSV, global/per-owner world limits,
+player limits, retained checkpoints, unused-world expiry, admission lifetime,
+empty grace and startup/shutdown timeouts. World port mappings must use the
+same host/container numbers because those ports are advertised to clients.
+Worlds on station maps (normal tg rounds, several z-levels) boot much longer than
+Babylon worlds (about 1.5 to 3 minutes measured); they use
+`BABYLON_STATION_STARTUP_TIMEOUT_SECONDS` (default 600) instead of
+`BABYLON_STARTUP_TIMEOUT_SECONDS` (default 300), whichever is larger.
+For an advanced custom SPLURT config, mount a directory read-only and set
+`BABYLON_CONFIG_DIRECTORY` to its container path; it must contain `config.txt`
+including `comms.txt`. The supervisor generates each child's control key.
+`BABYLON_DATA_DIRECTORY` defaults to `/data` and should remain on a volume.
+
+### Discord
+
+The supervisor also runs an optional Discord bot (discord.py, in the same
+process). It starts when `BABYLON_DISCORD_TOKEN` and `BABYLON_DISCORD_GUILD_ID`
+are set; `BABYLON_DISCORD_FEATURES` picks what it does:
+
+| Feature | What it does | Needs |
+| --- | --- | --- |
+| `link` | `/link`, `/unlink`; moderators get `/whois`. Links a Discord account to a BYOND account. | |
+| `roles` | Buttons with `custom_id` `babylon:role:<role id>` toggle a role from `BABYLON_DISCORD_SELF_ROLES`; `babylon:color:<role id>` picks one of `BABYLON_DISCORD_COLOR_ROLES` (exclusive), `babylon:color:none` removes it. | role IDs |
+| `voice` | Joining the voice lobby creates a room for the member, which is deleted when empty. | `_VOICE_LOBBY_CHANNEL` |
+| `logs` | Member, message, voice and moderation logs, each in its own channel (unset channels are skipped). | log channels |
+| `status` | A status message (players, running worlds; private worlds stay anonymous), updated every minute and marked offline on shutdown. | `_STATUS_CHANNEL` |
+| `gamelog` | Every `[supervisor]` log line, batched into a channel. | `_GAME_LOG_CHANNEL` |
+| `ahelp` | Every adminhelp from a world becomes a message with a thread in a staff channel: the player's messages and replies, and in-game admins' answers. Staff answer with the "Reply" button; the player gets it as an admin PM (shown as "Administrator" unless `SHOW_IRC_NAME` is set). "Close ticket" closes it in the world and archives the thread. The player is told "Created an adminhelp for you." and, if any member of `_AHELP_ROLES` (default: the staff roles) is online on Discord, how many; that count needs the bot's Presence Intent, without it the bot runs and the count is left out. | `_AHELP_CHANNEL`, `_STAFF_ROLES`, optional `_AHELP_ROLES` |
+| `tickets` | An "Open a ticket" button in a read-only channel opens a private channel for the member and `BABYLON_DISCORD_STAFF_ROLES`. Creator and staff can add people; closing it sends a `.txt` transcript to the creator by DM and to the ticket log. | `_TICKET_PANEL_CHANNEL`, `_TICKET_LOG_CHANNEL`, `_TICKET_CATEGORY`, `_STAFF_ROLES` |
+
+`BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL` (no feature needed) is a staff channel
+that gets a "New tutorial submitted" message with the title, author, map and
+description of every submitted tutorial and a hint to review it in the lobby.
+Without it (or without the bot) a submission is only logged; it still waits in
+the lobby under **Pending tutorials**.
+
+`/status` is always available. In the developer portal, enable the
+**Server Members Intent** for `link`, `logs` and `ahelp`, and the **Message
+Content Intent** for `logs`; without them Discord refuses the connection and the
+bot stays off (the game keeps running). The **Presence Intent** is optional: with
+`ahelp`, the bot asks for it to count online admins and runs without the count
+when it is not enabled. The bot's role must be above every role it
+assigns. Voice rooms and open tickets are remembered in the data volume.
+
+Linking: **Link Discord** in the lobby shows a one-time code (valid 10
+minutes) to type as `/link code:ABCD-EFGH`. One Discord account links to one
+BYOND account. `BABYLON_REQUIRE_DISCORD_TO_CREATE` and
+`BABYLON_REQUIRE_DISCORD_TO_JOIN` (both off by default, independent) make a
+linked account a condition for creating, and for joining or starting worlds;
+lobby admins are exempt. While the bot's member cache is ready, a linked
+account must also still be on the Discord server. The lobby shows the link
+state and the requirements, with Link, Unlink and Discord invite buttons.
+
+`BABYLON_DISCORD_INVITE` also adds a **Discord** button to the in-game escape
+menu (Resources); `BABYLON_RULES_URL` sets its **Rules** button. Babylon hides
+upstream's /tg/station wiki, forum, rules and config links.
+
+### Image publishing
+
+`.github/workflows/babylon-containers.yml` compiles production, test and
+ordinary upstream builds and runs Python/browser tests for PRs and pushes to
+`main`/`master`. Publication is restricted to the default branch (currently
+`master`) and published GitHub releases. PRs never log into GHCR.
+
+- A successful default-branch push replaces `:unstable`. A temporary
+  `:unstable-<commit>` marker permits cleanup even after a cancelled run; all
+  older marked unstable image versions are deleted after successful publishing.
+- Publishing release tag `1.0.0` attaches both `:1.0.0` and `:latest` to the
+  same image. If the released commit already has an `:unstable-<commit>` image
+  (normally: the release is the latest default-branch commit), the release waits
+  for that commit's push run, then only retags that image instead of compiling
+  and building again. Tag changes of all runs share one concurrency group.
+- After a successful release, the workflow can trigger a Komodo procedure (for
+  example a redeploy) through its GitLab-style webhook. Set the action secrets
+  `KOMODO_WEBHOOK_URL` (listener URL ending in `/<default branch>`) and
+  `KOMODO_WEBHOOK_SECRET`; without both the step is skipped. Set the action variable
+  `KOMODO_NOTIFY_UNSTABLE` to `true` to also trigger it after every published
+  unstable build of the default branch (for deployments tracking `:unstable`). Release tags are literal Docker tags; `v1.0.0` remains `:v1.0.0`.
+- The separate `Discord changelog` workflow posts to a Discord channel as embed
+  cards. Set the action secret `DISCORD_CHANGELOG_WEBHOOK` (the channel's webhook
+  URL) and the action variable `DISCORD_CHANGELOG`: `commit` posts every commit of
+  each push to the default branch (all of them when several are pushed at once,
+  continued on further cards when one is not enough), `release` posts each published
+  release's description. Unset, nothing is posted. The optional variable
+  `DISCORD_CHANGELOG_ROLE` (a role ID) is mentioned above each post.
+- Main/default-branch runs cancel older runs in their concurrency group. PRs
+  are grouped by ref; release runs use separate groups and are not cancelled.
+- Cleanup never deletes versions with `latest`, a release tag, or any other
+  non-unstable tag. Images use a single amd64 manifest without extra attestation
+  manifests, so obsolete unstable versions do not leave dangling child images.
+
+The workflow uses `GITHUB_TOKEN` with package-write permission and an OCI
+source label linking the package to this repository. For a pre-existing GHCR
+package, the repository must have package-admin access for cleanup. GHCR
+visibility is managed in the package's settings; a public repository does not
+automatically make a newly created package public. Private images need registry
+login. Existing documentation and map-viewer workflows are unchanged.
+
+Players authenticate with BYOND; ckeys are taken from server-side clients.
+The API trusts the lobby credential, not arbitrary HTTP callers claiming ckeys.
+Do not expose the supervisor API to the internet or publish configuration files.
+Public connections use the lobby port and the configured child port range.
+The example binds game ports to loopback too. To host for other machines, set
+`public_host` to the reachable hostname and `bind_address` to the desired
+interface (for example `0.0.0.0`), and update `lobby_address` accordingly.
+
+### Windows setup
+
+Build `babylon.dme -DCBT` with the pinned BYOND version, native dependencies and
+upstream TGUI assets as described in the repository build instructions. Compile
+`babylon-lobby.dme` too. Supply a clean, operator-controlled SPLURT configuration
+directory; inherited SQL, external integrations, hub settings, bans and admin
+configuration remain the operator's responsibility. Do not use a production
+server's live configuration or secrets for a test cluster.
+
+```powershell
+powershell -File tools/babylon/Initialize-Cluster.ps1 `
+  -DreamDaemon C:\BYOND\bin\dd.exe `
+  -ConfigDirectory C:\BabylonConfig `
+  -Admins YourByondAccount
+
+# Review babylon-supervisor-config.json, especially paths, host and quotas.
+powershell -File tools/babylon/Start-Cluster.ps1 -Python C:\Python\python.exe
+```
+
+Initialization generates a fresh shared lobby credential in two ignored JSON
+files. It refuses to overwrite them. Admin accounts come only from the supplied
+`-Admins` list; no account is automatically granted access.
+
+Once configured and compiled, double-click **Start Babylon Server.cmd** or
+**Stop Babylon Server.cmd** in the repository root. They find Python through
+`uv`, the Windows `py` launcher, or `python` on PATH. The PowerShell entry points
+also accept `-Python` for an explicit executable path.
+
+Start reports an already-running cluster instead of launching duplicates.
+Stop closes the lobby to prevent new starts, waits for any starting worlds to
+initialize, requests a final save/stop for every running world, and waits for
+confirmed exits before stopping the supervisor. A save failure or timeout
+leaves the supervisor and affected children running for recovery; it never
+force-kills a world. The scripts do not delete worlds or checkpoints.
+
+For manual operation, run Python with
+`services/supervisor/supervisor.py --config babylon-supervisor-config.json` and
+DreamDaemon with `babylon-lobby.dmb 1361 -trusted -close -params
+"lobby-config=babylon-lobby-config.json"` from the checkout root. On Linux,
+configure the native-library/executable paths and use these manual commands.
+
+The supervisor can restart while children remain alive. It stores run IDs,
+per-run control credentials and PIDs in SQLite and checks authenticated child
+identity before trusting status. Keep its data directory private. Lobby and
+supervisor process IDs/logs are under that directory. Stop worlds through the
+lobby before stopping the cluster processes. Do not kill a child to save it.
+
 ## Validation
 
 ```powershell
@@ -941,33 +1101,6 @@ abuse/load testing, operational backup/restore tooling, stronger crash/launch
 reconciliation, schema migrations, moderation/bans, delegated manager roles,
 and a controlled update policy for worlds saved by older game builds. Worlds
 are isolated processes/directories, not an OS security sandbox.
-
-## Deleting worlds
-
-Owners and server admins can permanently delete a stopped world using
-**Delete world** on its lobby card. The confirmation covers every checkpoint.
-Running worlds must be saved/stopped first. Deletion revokes memberships,
-tickets and sessions, releases the owner's world quota, and removes that
-world's data directory. Filesystem failures retain a cleanup journal for retry.
-
-Every lobby prompt is an in-page dialog (no BYOND system popups): the
-New world wizard (map cards grouped into Babylon, Creative Plane with an
-S/M/L size choice, and Stations, with a Multi-level badge for multi-z maps
-and a top-down preview rendered by `tools/babylon/render_map_previews.py`
-into `_maps/babylon/previews` (rerun it when a station map changes); then name, description, who can join, password, capacity and the Creative and
-Persistent switches, with the owner's saved/total world counters), world
-settings, members, saved checkpoints, the join password, Discord link/unlink
-and the stop/delete/reset/rollback confirmations. Delete and Reset need the
-world's name typed; confirmations never trigger on Enter. Esc or a click
-beside the dialog cancels (not while a request runs); errors appear inside the
-dialog, which stays open. Members lists the current members with a remove
-button and works while the world runs. A station world whose round ended shows
-"Round over" while it shuts down. Status polls never redraw an open dialog, so typing is kept.
-Joining and stopping show the loading panel; shutdown stays on it until the
-final save and process exit are confirmed, or an error or timeout is reported.
-Background status polls update the existing browser document only when its
-content changes; each tab keeps its scroll position. Late poll responses
-cannot overwrite an action's loading state.
 
 ## Persistence repairs carried over from the local prototype
 
