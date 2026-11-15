@@ -834,15 +834,54 @@ class Launches(unittest.TestCase):
         self.s.background_launches = True
         w = self.create()
         self.s.dispatch("owner", "member", {"world": w, "member": "friend"})
-        self.driver.prepare = lambda world, run: (_ for _ in ()).throw(OSError("disk full"))
-        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
-        self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and w in self.s.launch_failures))
-        # Only the player who started it hears it, once; their lobby stops polling then.
-        with self.assertRaisesRegex(Denied, "Child startup failed"):
+        prepares = []
+
+        def failing(world, run):
+            prepares.append(run["id"])
+            raise OSError("disk full")
+        self.driver.prepare = failing
+        # N4-1: the failure is recorded before the run is removed (both under the lock), so no
+        # poll can find the run gone without it and start the world again.
+        real, seen = self.s.db, []
+
+        class Watch:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def execute(self, sql, *args):
+                if sql.startswith("DELETE FROM runs WHERE id="):
+                    seen.append(w in launches.s.launch_failures)
+                return real.execute(sql, *args)
+
+            def __enter__(self):
+                return real.__enter__()
+
+            def __exit__(self, *exc):
+                return real.__exit__(*exc)
+        launches = self
+        self.s.db = Watch()
+        try:
+            self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+            self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and not self.s.launching))
+        finally:
+            self.s.db = real
+        self.assertEqual(seen, [True])
+        # N4-4: during the back-off a member's poll is told the reason and starts nothing.
+        with self.assertRaisesRegex(Denied, "Child startup failed.*Try again in 30 seconds"):
+            self.s.dispatch("friend", "join", {"world": w})
+        # The starter hears it once (their lobby stops polling then), then the back-off applies.
+        with self.assertRaisesRegex(Denied, "^Child startup failed; check the supervisor and daemon logs$"):
             self.s.dispatch("owner", "join", {"world": w})
+        with self.assertRaisesRegex(Denied, "Try again in"):
+            self.s.dispatch("owner", "join", {"world": w})
+        self.assertEqual(len(prepares), 1)
+        self.assertIsNone(self.run_of(w))
+        # After the back-off the world can be started again.
+        self.now += Supervisor.LAUNCH_BACKOFF_SECONDS
         self.driver.prepare = lambda world, run: None
-        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
-        self.assertTrue(self.wait_until(lambda: self.run_of(w)["pid"] == 123))
+        self.assertTrue(self.s.dispatch("friend", "join", {"world": w})["pending"])
+        self.assertTrue(self.wait_until(lambda: (self.run_of(w) or {}).get("pid") == 123))
+        self.assertNotIn(w, self.s.launch_failures, "a new start supersedes the old failure")
 
     def test_a_cancelled_background_launch_is_told_on_the_next_join(self):
         self.s.background_launches = True
@@ -853,16 +892,46 @@ class Launches(unittest.TestCase):
         self.assertTrue(preparing.wait(10))
         self.s.dispatch("owner", "stop", {"world": w})
         release.set()
-        self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and w in self.s.launch_failures))
-        # Someone else's Join is not refused; the starter's poll is, so it does not start it again.
+        self.assertTrue(self.wait_until(lambda: self.run_of(w) is None and not self.s.launching))
+        # The starter's poll is refused, so it does not start the world again.
         with self.assertRaisesRegex(Denied, "it was stopped"):
             self.s.dispatch("friend", "join", {"world": w})
         self.assertEqual(self.driver.starts, 0)
-        # An old failure is forgotten.
-        self.s.launch_failures[w] = ("friend", "old", self.now - Supervisor.LAUNCH_FAILURE_SECONDS - 1)
+        # A cancel has no back-off: the Stop was meant, the next Join may start it.
         self.driver.prepare = lambda world, run: None
-        self.assertTrue(self.s.dispatch("friend", "join", {"world": w})["pending"])
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
         self.assertTrue(self.wait_until(lambda: (self.run_of(w) or {}).get("pid") == 123))
+
+    def test_old_launch_failures_are_forgotten(self):
+        w = self.create()
+        with self.s.lock:
+            self.s.record_launch_failure(w, "owner", "old")
+        self.now += Supervisor.LAUNCH_FAILURE_SECONDS + 1
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+
+    def test_join_and_stop_in_background_mode(self):
+        # The production mode end to end: Join answers pending, polls until an address, Stop.
+        self.s.background_launches = True
+        w = self.create()
+        self.assertTrue(self.s.dispatch("owner", "join", {"world": w})["pending"])
+        self.assertTrue(self.wait_until(lambda: (self.run_of(w) or {}).get("pid") == 123))
+        self.s.tick()
+        self.assertIn("address", self.s.dispatch("owner", "join", {"world": w}))
+        self.s.dispatch("owner", "stop", {"world": w})
+        self.assertTrue(self.wait_until(lambda: not self.s.stop_workers))
+        self.s.tick()
+        self.assertIsNone(self.run_of(w))
+
+    def test_maintenance_skips_worlds_being_deleted(self):
+        # N4-5: recovering a rollback must not write into a half-deleted world.
+        w = self.create()
+        retained = []
+        self.s.checkpoints.retain = lambda world, expected=None: retained.append(world)
+        with self.s.lock, self.s.db:
+            self.s.queue_world_deletion(w, "owner", "delete_world")
+        self.s.maintain_checkpoints(w)
+        self.s.run_maintenance()
+        self.assertEqual(retained, [])
 
     def test_startup_drops_runs_that_never_started_a_process(self):
         # m-a: a supervisor that stopped while it prepared a world leaves a pid-less run behind.

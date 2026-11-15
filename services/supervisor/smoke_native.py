@@ -78,7 +78,7 @@ def main():
                 raise RuntimeError(run["error"])
             if world in service.launch_failures:
                 # The start failed in the background (the join answered "pending" at once).
-                raise RuntimeError(service.launch_failures[world][1])
+                raise RuntimeError(service.launch_failures[world]["message"])
             time.sleep(2)
         raise TimeoutError("Child did not become ready")
 
@@ -271,7 +271,7 @@ def main():
                 if legacy_run and legacy_run["state"] == "running":
                     break
                 assert not (legacy_run and legacy_run["state"] == "error"), legacy_run
-                assert legacy_world not in service.launch_failures, service.launch_failures[legacy_world]
+                assert legacy_world not in service.launch_failures, service.launch_failures[legacy_world]["message"]
                 time.sleep(2)
             restored = call(legacy_run, "session", "test_legacy_babylon_restore",
                             [version, "gas_compression", state["research"]["target"]])

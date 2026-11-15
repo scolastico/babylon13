@@ -725,6 +725,96 @@ class Instances(TutorialFixture):
                 self.s.dispatch("admin", action, {"tutorial": tid})
 
 
+class BackgroundInstances(TutorialFixture):
+    """Play and Edit in the production mode (background launches): the lobby polls Join with the
+    instance's world id, and a failed or cancelled start shows its real reason there (N4-1)."""
+
+    def tearDown(self):
+        for _ in range(500):
+            if not self.s.launching:
+                break
+            time.sleep(.01)
+        time.sleep(.05)
+        TutorialFixture.tearDown(self)
+
+    def wait_until(self, condition):
+        return test_supervisor.Launches.wait_until(self, condition)
+
+    def run_of(self, world):
+        with self.s.lock:
+            return self.s.row("SELECT * FROM runs WHERE world=?", (world,))
+
+    def hold_deletion(self):
+        """Holds each instance's file deletion until released, like a long rmtree."""
+        deleting, release = threading.Event(), threading.Event()
+        real = self.s.finish_world_deletion
+
+        def held(world):
+            deleting.set()
+            release.wait(10)
+            return real(world)
+        self.s.finish_world_deletion = held
+        return deleting, release
+
+    def test_play_and_edit_poll_until_the_instance_runs(self):
+        tid = self.published()
+        self.s.background_launches = True
+        for actor, action in (("player", "tutorial_play"), ("admin", "tutorial_edit")):
+            with self.subTest(action=action):
+                if action == "tutorial_edit":
+                    self.s.db.execute("UPDATE tutorials SET status='pending' WHERE id=?", (tid,))
+                    self.s.db.commit()
+                    self.s.tutorials.unpublish(tid)
+                result = self.s.dispatch(actor, action, {"tutorial": tid})
+                self.assertTrue(result["pending"])
+                world = result["world"]
+                self.assertTrue(self.wait_until(lambda: (self.run_of(world) or {}).get("pid") == 123))
+                self.s.tick()
+                self.assertIn("address", self.s.dispatch(actor, "join", {"world": world}))
+        self.assertFalse(self.s.tutorial_readers)
+
+    def test_a_failed_instance_start_shows_its_reason_during_the_cleanup(self):
+        tid = self.published()
+        self.s.background_launches = True
+        self.driver.prepare = lambda world, run: (_ for _ in ()).throw(Denied("The tutorial snapshot is missing"))
+        deleting, release = self.hold_deletion()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.assertTrue(deleting.wait(10))
+        # The instance row is gone and its files are still being deleted: the poll gets the reason.
+        self.assertFalse(self.s.row("SELECT 1 FROM worlds WHERE id=?", (world,)))
+        with self.assertRaisesRegex(Denied, "^The tutorial snapshot is missing$"):
+            self.s.dispatch("player", "join", {"world": world})
+        release.set()
+        self.assertTrue(self.wait_until(lambda: not self.s.launching))
+        self.assertFalse((self.data / "worlds" / world).exists())
+        self.assertFalse(self.s.tutorial_readers)
+
+    def test_a_stopped_instance_start_shows_the_cancel_during_the_cleanup(self):
+        tid = self.published()
+        self.s.background_launches = True
+        preparing, go_on = threading.Event(), threading.Event()
+
+        def prepare(world, run):
+            (self.data / "worlds" / world["id"]).mkdir(parents=True, exist_ok=True)
+            preparing.set()
+            go_on.wait(10)
+        self.driver.prepare = prepare
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.assertTrue(preparing.wait(10))
+        self.assertTrue(self.s.dispatch("player", "join", {"world": world})["pending"])
+        self.s.dispatch("player", "stop", {"world": world})
+        deleting, release = self.hold_deletion()
+        go_on.set()
+        self.assertTrue(deleting.wait(10))
+        with self.assertRaisesRegex(Denied, "cancelled: it was stopped"):
+            self.s.dispatch("player", "join", {"world": world})
+        release.set()
+        self.assertTrue(self.wait_until(lambda: not self.s.launching))
+        self.assertFalse(self.s.row("SELECT 1 FROM worlds WHERE id=?", (world,)))
+        self.assertFalse((self.data / "worlds" / world).exists())
+        self.assertEqual(self.driver.starts, 1)  # only the author's world
+
+
 class Robustness(TutorialFixture):
     def pending(self):
         world, run = self.creative_run()

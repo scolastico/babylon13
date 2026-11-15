@@ -139,7 +139,7 @@ def main():
                 raise RuntimeError(run["error"])
             if world in service.launch_failures:
                 # The start failed in the background (the join answered "pending" at once).
-                raise RuntimeError(service.launch_failures[world][1])
+                raise RuntimeError(service.launch_failures[world]["message"])
             time.sleep(5)
         raise TimeoutError("Child did not become ready")
 
