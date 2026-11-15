@@ -65,6 +65,10 @@ function lobbyUpdateState(state) {
   if (modal.type === 'discord' && !wasLinked && state.discord && state.discord.linked) {
     lobbyClose();
     lobbyToast('Discord linked' + (state.discord.name ? ' as ' + state.discord.name : '') + '.');
+  } else if (modal.type === 'tutorial' && !modal.busy && !modal.gone && !lobbyTutorial(modal.tutorial)) {
+    // Its tutorial was dropped by this refresh: show that it is gone and disable the confirm button.
+    modal.gone = true;
+    lobbyRenderModal();
   } else if (modal.refreshOnState && !modal.busy) {
     // Only dialogs that asked for it (Members after a change) redraw on a refresh.
     modal.refreshOnState = false;
@@ -1179,6 +1183,12 @@ function lobbyTutorialButton(label, onclick, id, kind, title) {
     (title ? ' title="' + lobbyEsc(title) + '"' : '') + '>' + lobbyEsc(label) + '</button>';
 }
 
+/// What the player's own run that Play refuses needs, shown on its card as text.
+var LOBBY_TUTORIAL_RUN_HINTS = {
+  stopping: 'Your last run of this tutorial is still ending. Press Play again in a moment.',
+  error: 'Your run of this tutorial ran into a problem. Stop it under My worlds, then press Play again.'
+};
+
 function lobbyTutorialCard(tutorial, admin) {
   var pending = tutorial.status === 'pending';
   var id = tutorial.id;
@@ -1191,14 +1201,15 @@ function lobbyTutorialCard(tutorial, admin) {
       : (pending ? '<span class="badge review">Pending review</span>' : '')) +
     (playing ? '<span class="badge running">' + (tutorial.playing === 'starting' ? 'Starting' : 'You are playing') + '</span>' : '') +
     // A run that is ending or broke refuses Play until it is gone: say so before the click.
-    (tutorial.playing === 'stopping' ? '<span class="badge stopping" title="Your last run of it is still ending">Ending</span>' : '') +
-    (tutorial.playing === 'error' ? '<span class="badge error" title="Your run of it ran into a problem. Stop it under My worlds, then press Play again.">Problem</span>' : '') +
+    (tutorial.playing === 'stopping' ? '<span class="badge stopping">Ending</span>' : '') +
+    (tutorial.playing === 'error' ? '<span class="badge error">Problem</span>' : '') +
     '</span></div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
     '<div class="tutorial-meta">by <b>' + lobbyEsc(tutorial.author) + '</b>' +
     (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'Submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
     (pending && tutorial.based_on ? '<div class="tutorial-meta based-on">Based on <b>' + lobbyEsc(tutorial.based_on.title) + '</b> by <b>' +
       lobbyEsc(tutorial.based_on.author) + '</b></div>' : '') +
     (tutorial.description ? '<p class="tutorial-desc">' + lobbyEsc(tutorial.description) + '</p>' : '<p class="tutorial-desc none">No description.</p>') +
+    (LOBBY_TUTORIAL_RUN_HINTS[tutorial.playing] ? '<p class="card-hint tutorial-hint">' + LOBBY_TUTORIAL_RUN_HINTS[tutorial.playing] + '</p>' : '') +
     '<div class="actions">';
   html += lobbyTutorialButton(playing ? 'Rejoin' : 'Play', 'lobbyPlayTutorial(this)', id, 'primary',
     playing ? 'Back to your running copy of this tutorial' : 'Start a private copy of this tutorial and join it');
@@ -1228,6 +1239,8 @@ function lobbyTutorialSection(title, help, list, empty, admin, extra) {
   return html + '</div></section>';
 }
 
+var lobbyTutorialsErrorShown = '';
+
 function lobbyTutorialsHtml() {
   var tutorials = lobbyState.tutorials || [];
   var admin = !!lobbyState.admin;
@@ -1240,7 +1253,22 @@ function lobbyTutorialsHtml() {
   // The review queue reads oldest first; the published list newest first (as listed).
   pending.sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
   var html = '';
-  if (lobbyState.tutorials_error) html += '<p class="notice" role="alert">' + lobbyEsc(lobbyState.tutorials_error) + '</p>';
+  if (lobbyState.tutorials_error) {
+    // The page is redrawn on every change; the alert role only on its first drawing, so it is
+    // announced once (like the notices from lobby.dm).
+    var fresh = lobbyTutorialsErrorShown !== lobbyState.tutorials_error;
+    lobbyTutorialsErrorShown = lobbyState.tutorials_error;
+    html += '<p class="notice"' + (fresh ? ' role="alert"' : '') + '>' + lobbyEsc(lobbyState.tutorials_error) + '</p>';
+  } else {
+    lobbyTutorialsErrorShown = '';
+  }
+  // Play on any other tutorial is refused while the player has one open: say so up front.
+  for (var j = 0; j < tutorials.length; j++) {
+    if (!tutorials[j].playing) continue;
+    html += '<p class="tutorial-note">Your tutorial <b>' + lobbyEsc(tutorials[j].title) + '</b> is still open. ' +
+      'Leave it, or stop it under My worlds, before you play a different one.</p>';
+    break;
+  }
   // The page description above already explains Play and Copy; players get the list alone.
   var publishedHtml = lobbyTutorialSection(admin ? 'Published tutorials' : '', '',
     published, lobbyState.tutorials_error ? 'Press the Tutorials tab again to retry.' : LOBBY_TUTORIALS_EMPTY, admin);
@@ -1305,7 +1333,13 @@ function lobbyCopyLimitText(info) {
 }
 
 function lobbyTutorialHtml(modal) {
-  var tutorial = lobbyTutorial(modal.tutorial) || modal.card || { title: '', author: '', map_name: '' };
+  var current = lobbyTutorial(modal.tutorial);
+  var tutorial = current || modal.card || { title: '', author: '', map_name: '' };
+  // Dropped by a refresh (another admin reviewed or deleted it): say so, and nothing to confirm.
+  var gone = !current;
+  var goneHtml = gone ? '<div class="callout" id="tutorial-gone">This tutorial is no longer available. It may have been reviewed or deleted by another administrator.</div>' : '';
+  var editingHtml = tutorial.editing === 'running' || tutorial.editing === 'starting'
+    ? '<div class="callout">An admin is editing this tutorial right now; unsaved changes in that edit world will be lost.</div>' : '';
   var title = '<b>' + lobbyEsc(tutorial.title) + '</b>';
   var by = ' by <b>' + lobbyEsc(tutorial.author) + '</b>';
   var map = lobbyEsc(tutorial.map_name || tutorial.map);
@@ -1321,8 +1355,8 @@ function lobbyTutorialHtml(modal) {
         '<p>This creates a new world of your own from the tutorial: <b>Creative</b>, <b>saved</b> and private, on ' + map +
         '. It is a fresh copy, so nothing you build changes the original.</p>' +
         '<p class="muted">The copy counts against your world limits like any saved world.</p>' +
-        lobbyLimitsHtml(info) + (full ? '<div class="callout" id="copy-limit">' + lobbyEsc(lobbyCopyLimitText(info)) + '</div>' : ''),
-      footer: lobbyButtons(modal, [cancel, { label: 'Copy to my worlds', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: full,
+        lobbyLimitsHtml(info) + (full ? '<div class="callout" id="copy-limit">' + lobbyEsc(lobbyCopyLimitText(info)) + '</div>' : '') + goneHtml,
+      footer: lobbyButtons(modal, [cancel, { label: 'Copy to my worlds', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: full || gone,
         title: full ? lobbyCopyLimitText(info) : '', describedby: full ? 'copy-limit' : '' }])
     });
   }
@@ -1334,17 +1368,16 @@ function lobbyTutorialHtml(modal) {
           ? 'An administrator is already editing this tutorial. You join their Creative world.'
           : 'This starts a <b>Creative, unsaved</b> world from the pending copy, owned by you. Other administrators can join it.') +
         '</p><p>To keep changes, press <b>Save back to pending tutorial</b> in the Creative panel’s Tutorial tab. Only that overwrites the pending copy. ' +
-        'The world is deleted when it stops.</p></div>',
-      footer: lobbyButtons(modal, [cancel, { label: joining ? 'Join edit session' : 'Start editing', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
+        'The world is deleted when it stops.</p></div>' + goneHtml,
+      footer: lobbyButtons(modal, [cancel, { label: joining ? 'Join edit session' : 'Start editing', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: gone }])
     });
   }
   if (action === 'accept') {
     return lobbyDialog(modal, {
       title: 'Publish this tutorial?', body: summary +
         '<div class="callout info"><p>' + title + by + ' becomes visible to every player in the Tutorials tab. Players can play it and copy it into their worlds.</p></div>' +
-        (tutorial.editing === 'running' || tutorial.editing === 'starting'
-          ? '<div class="callout">An admin is editing this tutorial right now; unsaved changes in that edit world will be lost.</div>' : ''),
-      footer: lobbyButtons(modal, [cancel, { label: 'Accept and publish', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
+        editingHtml + goneHtml,
+      footer: lobbyButtons(modal, [cancel, { label: 'Accept and publish', kind: 'primary', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: gone }])
     });
   }
   var reject = action === 'reject';
@@ -1354,7 +1387,7 @@ function lobbyTutorialHtml(modal) {
         ? '<p>' + title + by + ' is <b>permanently deleted</b>. Its author is not told automatically; let them know on Discord if you want to explain why.</p>'
         : '<p>' + title + ' disappears from the Tutorials tab for everyone and its files are <b>permanently deleted</b>.</p>' +
           '<p>Copies players already made stay theirs, and tutorials being played right now finish normally.</p>') +
-      '<p>This cannot be undone.</p></div>',
-    footer: lobbyButtons(modal, [cancel, { label: reject ? 'Reject and delete' : 'Delete permanently', kind: 'danger solid', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm' }])
+      '<p>This cannot be undone.</p></div>' + editingHtml + goneHtml,
+    footer: lobbyButtons(modal, [cancel, { label: reject ? 'Reject and delete' : 'Delete permanently', kind: 'danger solid', onclick: 'return lobbyTutorialConfirm()', busy: true, id: 'modal-confirm', disabled: gone }])
   });
 }

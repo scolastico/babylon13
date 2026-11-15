@@ -604,21 +604,53 @@ context.lobbyClose();
     assert.equal(modal(), null);
   }
 
-  // A tutorial dropped by a refresh while its dialog is open (another admin reviewed it):
-  // nothing is sent and the dialog still says which tutorial it was.
+  // A tutorial dropped by a refresh while its dialog is open (another admin reviewed it): the
+  // dialog redraws at once, says so, keeps which tutorial it was and can't be confirmed.
+  for (const action of ['reject', 'accept', 'edit']) {
+    context.lobbyOpenTutorial(action, button({ 'data-tutorial': 'q2' }));
+    assert.doesNotMatch(modalHtml(), /tutorial-gone/);
+    renderTutorials(published.concat([pending[1]]), { admin: 1 });
+    assert.match(modalHtml(), /class="callout" id="tutorial-gone">This tutorial is no longer available\./, action + ' says it is gone');
+    assert.match(modalHtml(), /id="modal-confirm"[^>]* disabled>/, action + ' cannot be confirmed');
+    assert.match(modalHtml(), /<b>Tutorial q2<\/b><br><small>by builder · IceBoxStation<\/small>/, 'the summary is kept');
+    expectNoRequest(() => context.lobbyTutorialConfirm(), 'a vanished tutorial is not sent');
+    context.lobbyClose();
+    renderTutorials(published.concat(pending), { admin: 1 });
+  }
+  // A dialog in flight is not redrawn by the refresh its own success causes.
   context.lobbyOpenTutorial('reject', button({ 'data-tutorial': 'q2' }));
+  context.lobbyTutorialConfirm();
   renderTutorials(published.concat([pending[1]]), { admin: 1 });
-  expectNoRequest(() => context.lobbyTutorialConfirm(), 'a vanished tutorial is not sent');
-  assert.match(modalHtml(), /modal-error">This tutorial is no longer available\./);
-  assert.match(modalHtml(), /<b>Tutorial q2<\/b><br><small>by builder · IceBoxStation<\/small>/, 'the summary is kept');
+  assert.doesNotMatch(modalHtml(), /tutorial-gone/);
+  context.lobbyResult(JSON.stringify({ request: lastRequest().request, ok: 1 }));
+  assert.equal(modal(), null);
+  renderTutorials(published.concat(pending), { admin: 1 });
+
+  // Reject and Delete warn about an open edit world, like Accept.
+  const edited = tutorial('p4', { editing: 'running' });
+  renderTutorials(published.concat(pending, [edited]), { admin: 1 });
+  for (const [action, id] of [['reject', 'q1'], ['delete', 'p4']]) {
+    context.lobbyOpenTutorial(action, button({ 'data-tutorial': id }));
+    assert.match(modalHtml(), /An admin is editing this tutorial right now; unsaved changes in that edit world will be lost\./, action);
+    context.lobbyClose();
+  }
+  context.lobbyOpenTutorial('reject', button({ 'data-tutorial': 'q2' }));
+  assert.doesNotMatch(modalHtml(), /An admin is editing/);
   context.lobbyClose();
   renderTutorials(published.concat(pending), { admin: 1 });
 
-  // The player's own run that is ending or broke is shown on its card (Play is refused until then).
-  renderTutorials([tutorial('p1', { playing: 'stopping' }), tutorial('p3', { playing: 'error' })]);
-  assert.match(page(), /<span class="badge stopping"[^>]*>Ending<\/span>/);
-  assert.match(page(), /<span class="badge error" title="Your run of it ran into a problem\. Stop it under My worlds, then press Play again\.">Problem<\/span>/);
+  // The player's own run that is ending or broke is shown on its card, with what to do as
+  // visible text (Play is refused until then), and the tab says why other tutorials refuse Play.
+  renderTutorials([tutorial('p1', { playing: 'stopping' }), tutorial('p3', { playing: 'error' }), tutorial('p5')]);
+  assert.match(page(), /<span class="badge stopping">Ending<\/span>/);
+  assert.match(page(), /<span class="badge error">Problem<\/span>/);
+  assert.match(page(), /<p class="card-hint tutorial-hint">Your last run of this tutorial is still ending\. Press Play again in a moment\.<\/p>/);
+  assert.match(page(), /<p class="card-hint tutorial-hint">Your run of this tutorial ran into a problem\. Stop it under My worlds, then press Play again\.<\/p>/);
+  assert.equal((page().match(/tutorial-hint/g) || []).length, 2, 'only the cards with such a run get a hint');
   assert.doesNotMatch(page(), /Rejoin|You are playing/, 'neither is offered as a rejoin');
+  assert.match(page(), /<p class="tutorial-note">Your tutorial <b>Tutorial p1<\/b> is still open\. Leave it, or stop it under My worlds, before you play a different one\.<\/p>/);
+  renderTutorials([tutorial('p5')]);
+  assert.doesNotMatch(page(), /tutorial-note|tutorial-hint/, 'no note without an open run');
   renderTutorials(published.concat(pending), { admin: 1 });
 
   // Empty states and a failed list.
@@ -626,6 +658,11 @@ context.lobbyClose();
   assert.match(page(), /No tutorials have been published yet\. Want to be the first\? Build something in a Creative world on a station map, then submit it from the Creative panel\./);
   renderTutorials([], { tutorials_error: 'The tutorials could not be loaded. Please try again in a moment.' });
   assert.match(page(), /class="notice" role="alert">The tutorials could not be loaded\. Please try again in a moment\./);
+  renderTutorials([], { tutorials_error: 'The tutorials could not be loaded. Please try again in a moment.' });
+  assert.match(page(), /class="notice">The tutorials could not be loaded/, 'a redraw does not announce it again');
+  renderTutorials([]);
+  renderTutorials([], { tutorials_error: 'The tutorials could not be loaded. Please try again in a moment.' });
+  assert.match(page(), /class="notice" role="alert">The tutorials could not be loaded/, 'a new failure is announced');
   assert.match(page(), /class="empty">Press the Tutorials tab again to retry\./);
   // A failed Play shows its notice at the top: the page comes back scrolled up.
   context.renderLobby(JSON.stringify({ html: placeholder, view: 'tutorials', revision: revision++, complete: true, state: state(worlds, null, { tutorials: published }) }));
@@ -648,24 +685,40 @@ context.lobbyClose();
   context.lobbyClose();
   const lobbyDm = fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/lobby.dm'), 'utf8');
   assert.match(lobbyDm, />Stop tutorial\.\.\.</, 'tutorial runs get a Stop button in the world list');
-  // The notices that send a player back name the button that does it (lobby_retry_notice, DM):
-  // Join on a world card, Rejoin or Play on a tutorial card, Edit on a pending tutorial.
-  const retry = lobbyDm.match(/^\/proc\/lobby_retry_notice\([\s\S]*?(?=^\S)/m);
-  assert.ok(retry, 'lobby.dm words the retry notices in one place');
-  assert.match(retry[0], /"join" = "press Join"/);
-  assert.match(retry[0], /"play" = "open Tutorials and press Rejoin \(or Play, if it has ended\)"/);
-  assert.match(retry[0], /"edit" = "open Tutorials and press Edit on the pending tutorial"/);
-  assert.match(retry[0], /The world took too long to let you in\. \[sentence\] to try again\./, 'the admission timeout is worded per button');
-  assert.match(lobbyDm, /join_world\(world_id, world_name, list\("world" = world_id\), 0, stage, action == "tutorial_edit" \? "edit" : "play"\)/,
-    'Edit and Play pass their own retry wording');
-  assert.match(lobbyDm, /last_retry = retry\n\t+src << link\(result\["address"\]\)/, 'the lobby remembers how the player was sent');
-  assert.match(lobbyDm, /mob:set_notice\(lobby_retry_notice\(world_notice, mob:last_retry\), TRUE\)/, 'a bounced player gets the matching wording');
+  // DM contracts (no DM test runner exists; these check behaviour-carrying facts, not layout).
+  // The notices that send a player back name the button that does it (lobby_retry_notice):
+  // Join on a world card, Rejoin or Play on a tutorial card, Edit on a pending tutorial, and a
+  // neutral wording when the lobby does not know.
+  const proc = name => {
+    const found = lobbyDm.match(new RegExp('^/(?:mob/lobby/)?proc/' + name + '\\([\\s\\S]*?(?=^\\S)', 'm'));
+    assert.ok(found, name + ' exists');
+    return found[0];
+  };
+  const retry = proc('lobby_retry_notice');
+  assert.match(retry, /"join"\s*=\s*"[^"]*\bJoin\b/);
+  assert.match(retry, /"play"\s*=\s*"[^"]*\bRejoin\b[^"]*\bPlay\b/);
+  assert.match(retry, /"edit"\s*=\s*"[^"]*\bEdit\b/);
+  assert.match(retry, /go back to the world or tutorial you chose/, 'a fresh mob gets a neutral wording');
+  assert.doesNotMatch(retry, /\] again\./, 'every retry sentence ends "to try again"');
+  assert.match(proc('tutorial_action'), /"tutorial_edit" \? "edit" : "play"/, 'Edit and Play pass their own retry wording');
+  // A join (also the automatic rejoin after a hidden-window bounce) of a tutorial run keeps its wording.
+  assert.match(proc('handle_action'), /"tutorial" = "play", "tutorial_edit" = "edit"/);
+  assert.match(proc('join_world'), /last_retry = retry/, 'the lobby remembers how the player was sent');
+  assert.match(lobbyDm, /lobby_retry_notice\(world_notice, mob:last_retry\)/, 'a bounced player gets the matching wording');
+  assert.match(lobbyDm, /var\/last_retry = ""/, 'a fresh mob does not claim it was Join');
   assert.doesNotMatch(lobbyDm, /Press Join to try again|press Play again/, 'no fixed Join or Play wording is left');
-  // Problems in the page notice are alerts, like the page's other errors; confirmations stay status.
-  assert.match(lobbyDm, /<p class='notice' role='\[notice_alert \? "alert" : "status"\]'>/);
-  assert.match(lobbyDm, /set_notice\(data\["error"\] \|\| data\["notice"\], !!data\["error"\]\)/, 'a refused Play is an alert');
-  assert.equal((lobbyDm.match(/(?<!var\/)\bnotice = /g) || []).length, 1, 'the notice is only set through set_notice (which also sets its role)');
-  assert.doesNotMatch(lobbyDm, /<p class='notice'>/, 'every notice has a role');
+  // Live messages: every role on the page goes through announce(), which gives it only on the
+  // first drawing of a text (the page is redrawn whole); a refused Play is an alert.
+  // (The loading and restart panels keep theirs: they are not part of the polled list.)
+  for (const name of ['show_browser', 'world_card']) {
+    assert.doesNotMatch(proc(name), /role='(alert|status)'/, name + ': no fixed live role outside announce()');
+    assert.match(proc(name), /\[announce\(/, name + ' announces its messages');
+  }
+  assert.match(proc('announce'), /announced\[key\] == text[\s\S]*return ""/);
+  assert.match(proc('set_notice'), /announced -= "notice"/, 'a new notice is announced even with the same text');
+  assert.match(proc('respond'), /set_notice\([^\n]*data\["error"\][^\n]*, !!data\["error"\]\)/, 'a refused Play is an alert');
+  const outsideSetNotice = lobbyDm.replace(proc('set_notice'), '').replace(/var\/notice\b[^\n]*/, '');
+  assert.doesNotMatch(outsideSetNotice, /(^|[^\w"])notice\s*(\+|-)?=(?!=)/m, 'the notice is only changed through set_notice (which also sets its role)');
   // Other tabs have no placeholder and are left alone.
   render(worlds);
   assert.equal(page(), '<p>list ' + (revision - 1) + '</p>');

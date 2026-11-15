@@ -960,12 +960,21 @@ class Robustness(TutorialFixture):
         forwarded |= set(re.findall(r'"(\w+)" = [\w(]*item\["\1"\]', builder))
         for keys in re.findall(r"for\(var/key in list\(([^)]*)\)\)", builder):
             forwarded |= set(re.findall(r'"(\w+)"', keys))
-        read = set(re.findall(r"\btutorial\.(\w+)", script))
+        # Fields read through any name for a tutorial: tutorial.x, current.x, tutorials[i].x, ...
+        read = set(re.findall(r"\b(?:tutorial|current|tutorials\[\w+\])\.(\w+)", script))
+        read -= {"length"}
         nested = set(re.findall(r"\bbased_on\.(\w+)", script))
         self.assertIn("based_on", read)
         self.assertEqual(read - forwarded, set(), "fields lobby.js reads that lobby.dm drops")
         based_on_kept = set(re.findall(r'"(\w+)" = based_on\["\1"\]', builder))
         self.assertEqual(nested - based_on_kept, set(), "based_on fields lobby.js reads that lobby.dm drops")
+        # The page escapes them as text: lobby.dm keeps only text (or drops based_on whole).
+        for field in nested:
+            self.assertIn('istext(based_on["%s"])' % field, builder)
+        # The page state carries the list (and who may review) from the Tutorials tab's builder.
+        page_state = re.search(r"^/mob/lobby/proc/show_browser\(.*?(?=^\S)", dm, re.M | re.S).group(0)
+        for key in set(re.findall(r"\blobbyState\.(tutorials\w*|admin)\b", script)):
+            self.assertRegex(page_state, r'(state\["%s"\] =|"%s" = )' % (key, key), key)
         # ...and the supervisor sends them all (an admin's item for a copied, pending tutorial).
         original = self.published()
         copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": original})["id"]
