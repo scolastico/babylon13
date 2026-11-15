@@ -2,6 +2,7 @@
 and copy (lobby actions), and the end of tutorial instances."""
 import json
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -945,6 +946,33 @@ class Robustness(TutorialFixture):
         self.assertEqual(items[tid]["based_on"], based_on)
         self.assertIsNone(items[original]["based_on"])
         self.assertNotIn("based_on", self.s.dispatch("player", "tutorials", {})["tutorials"][0])
+
+    def test_lobby_forwards_every_field_the_page_reads(self):
+        # Contract (the DM item builder can't run here): every field lobby.js reads from a tutorial
+        # comes from the supervisor's real list item and is forwarded by lobby.dm's
+        # lobby_tutorial_item; a field it drops never reaches the page, whatever the JS test injects.
+        lobby = Path(__file__).resolve().parents[2] / "modular_babylon/lobby"
+        script = (lobby / "lobby.js").read_text(encoding="utf-8")
+        dm = (lobby / "lobby.dm").read_text(encoding="utf-8")
+        builder = re.search(r"^/proc/lobby_tutorial_item\(.*?(?=^\S)", dm, re.M | re.S).group(0)
+        # clean["x"] = ..., "x" = item["x"] / lobby_number(item["x"]), and for(var/key in list("x", ...)).
+        forwarded = set(re.findall(r'clean\["(\w+)"\]', builder))
+        forwarded |= set(re.findall(r'"(\w+)" = [\w(]*item\["\1"\]', builder))
+        for keys in re.findall(r"for\(var/key in list\(([^)]*)\)\)", builder):
+            forwarded |= set(re.findall(r'"(\w+)"', keys))
+        read = set(re.findall(r"\btutorial\.(\w+)", script))
+        nested = set(re.findall(r"\bbased_on\.(\w+)", script))
+        self.assertIn("based_on", read)
+        self.assertEqual(read - forwarded, set(), "fields lobby.js reads that lobby.dm drops")
+        based_on_kept = set(re.findall(r'"(\w+)" = based_on\["\1"\]', builder))
+        self.assertEqual(nested - based_on_kept, set(), "based_on fields lobby.js reads that lobby.dm drops")
+        # ...and the supervisor sends them all (an admin's item for a copied, pending tutorial).
+        original = self.published()
+        copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": original})["id"]
+        tid = self.submit(self.start(copied, "player"), actor="player", title="Extended")
+        item = next(i for i in self.s.dispatch("admin", "tutorials", {})["tutorials"] if i["id"] == tid)
+        self.assertEqual(read - set(item), set(), "fields lobby.js reads that the supervisor does not send")
+        self.assertEqual(nested - set(item["based_on"]), set())
 
 
 class SnapshotCopiedAtPrepare(test_driver.DriverFixture):

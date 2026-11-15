@@ -648,7 +648,24 @@ context.lobbyClose();
   context.lobbyClose();
   const lobbyDm = fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/lobby.dm'), 'utf8');
   assert.match(lobbyDm, />Stop tutorial\.\.\.</, 'tutorial runs get a Stop button in the world list');
-  assert.match(lobbyDm, /Open Tutorials and press Play again\./, 'tutorials have their own startup timeout notice');
+  // The notices that send a player back name the button that does it (lobby_retry_notice, DM):
+  // Join on a world card, Rejoin or Play on a tutorial card, Edit on a pending tutorial.
+  const retry = lobbyDm.match(/^\/proc\/lobby_retry_notice\([\s\S]*?(?=^\S)/m);
+  assert.ok(retry, 'lobby.dm words the retry notices in one place');
+  assert.match(retry[0], /"join" = "press Join"/);
+  assert.match(retry[0], /"play" = "open Tutorials and press Rejoin \(or Play, if it has ended\)"/);
+  assert.match(retry[0], /"edit" = "open Tutorials and press Edit on the pending tutorial"/);
+  assert.match(retry[0], /The world took too long to let you in\. \[sentence\] to try again\./, 'the admission timeout is worded per button');
+  assert.match(lobbyDm, /join_world\(world_id, world_name, list\("world" = world_id\), 0, stage, action == "tutorial_edit" \? "edit" : "play"\)/,
+    'Edit and Play pass their own retry wording');
+  assert.match(lobbyDm, /last_retry = retry\n\t+src << link\(result\["address"\]\)/, 'the lobby remembers how the player was sent');
+  assert.match(lobbyDm, /mob:set_notice\(lobby_retry_notice\(world_notice, mob:last_retry\), TRUE\)/, 'a bounced player gets the matching wording');
+  assert.doesNotMatch(lobbyDm, /Press Join to try again|press Play again/, 'no fixed Join or Play wording is left');
+  // Problems in the page notice are alerts, like the page's other errors; confirmations stay status.
+  assert.match(lobbyDm, /<p class='notice' role='\[notice_alert \? "alert" : "status"\]'>/);
+  assert.match(lobbyDm, /set_notice\(data\["error"\] \|\| data\["notice"\], !!data\["error"\]\)/, 'a refused Play is an alert');
+  assert.equal((lobbyDm.match(/(?<!var\/)\bnotice = /g) || []).length, 1, 'the notice is only set through set_notice (which also sets its role)');
+  assert.doesNotMatch(lobbyDm, /<p class='notice'>/, 'every notice has a role');
   // Other tabs have no placeholder and are left alone.
   render(worlds);
   assert.equal(page(), '<p>list ' + (revision - 1) + '</p>');
