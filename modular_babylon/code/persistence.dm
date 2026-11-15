@@ -178,6 +178,9 @@
 			value = babylon_true_plane(value)
 		if(babylon_save_keeps_default_text(thing, field, value))
 			continue
+		if(isdatum(value) && (field in object_type_fields_of(thing)))
+			var/datum/held = value
+			value = held.type
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (field in list_fields))
 			fields[field] = encode_value(value)
 	if(istype(thing, /obj/machinery/portable_atmospherics))
@@ -326,10 +329,18 @@
 	var/list/fields = metadata_fields_by_type[thing.type]
 	if(isnull(fields))
 		fields = list()
-		for(var/field in structural_fields | map_link_fields | type_metadata_fields(thing))
+		for(var/field in structural_fields | map_link_fields | type_metadata_fields(thing) | object_type_fields_of(thing))
 			if(field in thing.vars)
 				fields += field
 		metadata_fields_by_type[thing.type] = fields
+	return fields
+
+/// The object_type_fields (state.dm) that apply to this atom's type.
+/datum/babylon_save/proc/object_type_fields_of(atom/thing)
+	var/list/fields = list()
+	for(var/path in object_type_fields)
+		if(istype(thing, path))
+			fields |= object_type_fields[path]
 	return fields
 
 /// The typed_fields that apply to this atom's type.
@@ -378,6 +389,9 @@
 			value = babylon_true_plane(value)
 		if(babylon_save_keeps_default_text(thing, field, value))
 			continue
+		if(isdatum(value) && (field in object_type_fields_of(thing)))
+			var/datum/held = value
+			value = held.type
 		if(isnull(value) || isnum(value) || istext(value) || ispath(value) || (islist(value) && (field in list_map_fields)))
 			entries += "[field] = [tgm_encode(istext(value) ? babylon_save_text(value) : value)]"
 	if(is_turf && isopenturf(thing) && !isspaceturf(thing))
@@ -679,7 +693,12 @@
 					turf_data["gas"] = encode_gas(open.return_air())
 				turfs += list(turf_data)
 			var/list/objects = list()
+			// CentCom loads its own template on every start (Babylon saves its tiles with the
+			// level): only the floor and area are kept there, never its objects.
+			var/centcom = istype(room, /area/centcom)
 			for(var/obj/object in tile)
+				if(centcom)
+					break
 				// A multi-tile object (lift and tram platforms, wide airlocks) is in the contents of
 				// every tile it covers: it is saved once, on the tile it stands on.
 				if(QDELETED(object) || object.loc != tile)
@@ -702,7 +721,7 @@
 					continue
 				objects += "[object.type][metadata(object)]"
 				capture(object, records, null)
-			for(var/mob/living/saved_mob as anything in mobs_by_turf[tile])
+			for(var/mob/living/saved_mob as anything in (centcom ? list() : mobs_by_turf[tile]))
 				if(!QDELETED(saved_mob))
 					objects += "[saved_mob.type][metadata(saved_mob)]"
 					capture(saved_mob, records, null)
@@ -1250,6 +1269,7 @@
 			programs_to_resume[thing] = record
 		CHECK_TICK
 	restore_session_state(state)
+	remove_saved_companion_copies(records)
 	play_time = isnum(state["play_time"]) ? state["play_time"] : 0
 	loading_saved_map = FALSE
 	to_chat(world, span_notice("Babylon resumed from [last_save]."))
@@ -1332,6 +1352,117 @@
 		if(!(failed in before))
 			babylon_failed_maps |= failed
 
+// ---------------------------------------------------------------------------------------------
+// Companions: objects another atom makes in its Initialize and puts on the map beside it (a gravity
+// generator's parts, a turret's cover, a wide airlock's fillers, a cult floor's effect, a shield
+// generator's field). Their maker makes them again whenever it initializes, also when a save
+// loads, so a save that kept them got one more copy on every restart. They are marked when they
+// are made and never saved (babylon_skip_save()); a restore removes the copies older saves hold
+// (remove_saved_companion_copies()). Atoms a map template places are never companions, even when
+// the template loads during another atom's Initialize.
+
+/datum/controller/subsystem/atoms
+	/// The atoms whose Initialize runs right now, innermost last.
+	var/list/babylon_initializing = list()
+	/// Above 0 while an Initialize makes something only a fresh map gets (a random default that
+	/// stands back for a saved map): what it makes is saved, it is no companion.
+	var/babylon_fresh_map_only = 0
+
+/datum/controller/subsystem/atoms/InitAtom(atom/A, from_template = FALSE, list/arguments)
+	var/depth = length(babylon_initializing)
+	if(depth && !from_template && !babylon_fresh_map_only && ismovable(A) && isturf(A.loc))
+		var/atom/movable/companion = A
+		companion.babylon_companion_of = WEAKREF(babylon_initializing[depth])
+		companion.babylon_companion_turf = A.loc
+	babylon_initializing += A
+	// The stack must shrink back whatever happens, or every later atom would count as a companion.
+	try
+		. = ..()
+	catch(var/exception/error)
+		babylon_initializing.Cut(depth + 1)
+		throw error
+	babylon_initializing.Cut(depth + 1)
+
+/atom/movable
+	/// The atom whose Initialize made this one (a weakref), see Companions above.
+	var/datum/weakref/babylon_companion_of
+	/// The tile it was made on: one that was moved away (picked up, carried off) is a player's now.
+	var/turf/babylon_companion_turf
+
+/// A companion its maker still owns: still where it was made, its maker alive and not inside it
+/// (a paper that put itself into a bottle it made keeps the bottle).
+/atom/movable/proc/babylon_is_companion()
+	if(!babylon_companion_of || loc != babylon_companion_turf)
+		return FALSE
+	var/atom/maker = babylon_companion_of.resolve()
+	if(!maker || QDELETED(maker))
+		return FALSE
+	for(var/atom/holder = maker.loc; holder && !isturf(holder); holder = holder.loc)
+		if(holder == src)
+			return FALSE
+	return TRUE
+
+/atom/movable/babylon_skip_save()
+	return ..() || babylon_is_companion()
+
+/// After a restore: a saved object of the same type on the same tile as a companion made during this
+/// load is a copy an older save kept; the companion stays (its maker holds it). The same holds for
+/// CentCom, whose template loads again on every start (Babylon saves its tiles with the level).
+/datum/babylon_save/proc/remove_saved_companion_copies(list/records)
+	var/removed = 0
+	for(var/list/record as anything in records)
+		if(record["parent"])
+			continue
+		var/atom/movable/saved = restored_atoms[record["id"]]
+		if(!istype(saved) || QDELETED(saved) || !isturf(saved.loc))
+			continue
+		var/in_centcom = istype(get_area(saved), /area/centcom)
+		for(var/atom/movable/other in saved.loc)
+			if(other == saved || other.type != saved.type || other.babylon_save_id)
+				continue
+			if(other.babylon_is_companion() || in_centcom)
+				qdel(saved)
+				removed++
+				break
+		CHECK_TICK
+	if(removed)
+		log_world("Babylon restore: removed [removed] saved cop[removed == 1 ? "y" : "ies"] of objects the world makes itself.")
+	return removed
+
+/// Once the world finished initializing after a restore (both builds' boot, before ready): what
+/// the load made anew on top of the save that the companion rule cannot see (made outside an
+/// Initialize: a LateInitialize, a subsystem, a timer): an unsaved object of the same type on the
+/// same tile as a saved one is a regenerated copy, and the saved one, with its state, stays.
+/// Restricted to objects without a save id that are no companions, on saved levels.
+/datum/babylon_save/proc/remove_regenerated_copies()
+	if(!length(restored_atoms))
+		return 0
+	var/list/saved_here = list()
+	for(var/id in restored_atoms)
+		var/atom/movable/saved = restored_atoms[id]
+		if(istype(saved) && !QDELETED(saved) && isturf(saved.loc))
+			saved_here["[saved.type]|[saved.x]|[saved.y]|[saved.z]"] = TRUE
+	var/list/levels = persisted_levels()
+	var/list/removed = list()
+	for(var/atom/movable/thing in world)
+		if(thing.babylon_save_id || !isturf(thing.loc) || !(thing.z in levels))
+			continue
+		if(!saved_here["[thing.type]|[thing.x]|[thing.y]|[thing.z]"] || thing.babylon_is_companion())
+			continue
+		if(ismob(thing))
+			var/mob/creature = thing
+			if(creature.client || creature.mind)
+				continue
+		removed["[thing.type]"] = (removed["[thing.type]"] || 0) + 1
+		qdel(thing)
+		CHECK_TICK
+	if(length(removed))
+		var/list/parts = list()
+		for(var/kind in removed)
+			parts += "[kind] x[removed[kind]]"
+		log_world("Babylon restore: removed objects the load made again over saved ones: [parts.Join(", ")].")
+	return removed
+
 /// Applies what a restore or paste wrote into this atom's variables. fields: the saved fields.
 /atom/proc/babylon_after_restore(list/fields)
 	return
@@ -1341,7 +1472,14 @@
 /turf/open/floor/MakeDirty()
 	if(babylon_loading_saved_map())
 		return
-	return ..()
+	// Made once, on a fresh map, never again on a load: saved like anything else, not a companion.
+	SSatoms.babylon_fresh_map_only++
+	try
+		. = ..()
+	catch(var/exception/error)
+		SSatoms.babylon_fresh_map_only--
+		throw error
+	SSatoms.babylon_fresh_map_only--
 
 // Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and
 // rat or spider nests into maintenance. A saved world keeps its own decay; decaying it again on
@@ -1351,6 +1489,22 @@
 		log_world("SSDecay skipped: this world resumes a save.")
 		return SS_INIT_NO_NEED
 	return ..()
+
+// Skyrat's area spawns: at round start they place extra machines, pets, job start points and the
+// like on random free tiles. A saved world has them saved where they were; placing them again
+// put a new set elsewhere on every restart.
+/datum/controller/subsystem/area_spawn/Initialize()
+	if(fexists("data/babylon/resume-state.json"))
+		log_world("Area spawns skipped: this world resumes a save.")
+		return SS_INIT_NO_NEED
+	return ..()
+
+// Emergency closets: upstream deletes 1% of them as they initialize; a saved one stays. (The
+// radiation-nebula swap happens before the closet initializes and is left alone.)
+/obj/structure/closet/emcloset/Initialize(mapload)
+	. = ..()
+	if(. == INITIALIZE_HINT_QDEL && (flags_1 & INITIALIZED_1) && mapload && babylon_loading_saved_map())
+		return INITIALIZE_HINT_NORMAL
 
 // Disposal bins: upstream hides an animal in some mapped bins; a saved bin keeps what it held.
 /obj/machinery/disposal/bin/spawn_contained_animal()

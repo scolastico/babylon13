@@ -70,6 +70,11 @@
 		var/datum/computer_file/program/program = computer.find_file_by_name(record["active_program"])
 		if(program)
 			computer.open_program(null, program, FALSE)
+	// Before ready: nothing may save or admit anyone while copies are cleaned up.
+	try
+		remove_regenerated_copies()
+	catch(var/exception/cleanup_error)
+		log_world("Babylon restore: cleaning up regenerated copies failed: [cleanup_error] ([cleanup_error?.file]:[cleanup_error?.line])")
 	ready = TRUE
 	next_autosave_at = world.time + 15 MINUTES
 	// One runtime error would otherwise end this loop for the rest of the run: nobody joining

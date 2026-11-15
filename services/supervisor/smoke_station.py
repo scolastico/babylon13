@@ -28,6 +28,8 @@ On the first map, a running round also gets two players' characters (a damaged o
 and a dead one watched as a ghost), saves them twice (the second time on an unchanged level),
 stops and checks after the restart that both are back for their ckeys, once, with their items,
 damage and job.
+Last, every --stability-maps map (default metastation) is saved and restored three times and must
+keep exactly its saved objects, type by type (smoke_stability.py); --only-stability runs just that.
 """
 import argparse
 import json
@@ -41,6 +43,7 @@ import urllib.error
 import urllib.request
 
 from protocol import topic
+from smoke_stability import restore_cycles
 from supervisor import Driver, Supervisor, serve
 
 
@@ -64,11 +67,18 @@ def main():
     parser.add_argument("--only-characters", action="store_true",
                         help="only the characters' save and restore on the first --maps map")
     parser.add_argument("--only-planes", action="store_true", help="only the --creative-planes checks")
+    parser.add_argument("--stability-maps", nargs="*", default=["metastation"],
+                        help="maps restored three times that must keep exactly their saved objects")
+    parser.add_argument("--only-stability", action="store_true", help="only the --stability-maps checks")
     parser.add_argument("--only-tutorial-tests", nargs="+", metavar="PROC",
                         help="only these DM tests, in the tutorial world on the first --maps map")
     args = parser.parse_args()
-    if args.only_characters or args.only_planes or args.only_tutorial_tests:
+    if args.only_characters or args.only_planes or args.only_tutorial_tests or args.only_stability:
         args.only_multiz, args.no_multiz, args.restore_maps = True, True, []
+    if args.only_characters or args.only_planes or args.only_tutorial_tests:
+        args.stability_maps = []
+    if args.only_stability:
+        args.creative_planes = []
     root = Path(__file__).resolve().parents[2]
     for ext in ("dmb", "rsc"):
         if not (root / f"babylon-station-test.{ext}").is_file():
@@ -591,6 +601,11 @@ def main():
         if not args.no_multiz:
             report["multiz"] = {args.multiz_map: run_multiz(args.multiz_map)}
             print(json.dumps({"multiz": report["multiz"]}), flush=True)
+        for map_id in args.stability_maps:
+            stable = api("create", dict(name="Stability smoke %s" % map_id, visibility="private", map=map_id))["id"]
+            report.setdefault("stability", {})[map_id] = restore_cycles(
+                stable, wait_ready, stop, data, census=lambda run: values(run, "test_companion_census"))
+            print(json.dumps({"stability": {map_id: report["stability"][map_id]}}), flush=True)
         report["passed"] = not any("failed" in entry for entry in report["maps"].values())
         (data / "result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))

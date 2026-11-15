@@ -50,6 +50,13 @@ GLOBAL_DATUM_INIT(babylon_save, /datum/babylon_save, new)
 		// Whose card it is and what it opens (its trim is saved as "babylon_trim", persistence.dm).
 		/obj/item/card/id = list("access", "registered_name", "assignment", "registered_age"),
 	)
+	/// Fields that hold an object the atom's Initialize makes from a type path the mapper (or its
+	/// maker) set: the map entry keeps that object's type, so Initialize can make it again (the
+	/// object itself is saved as a child and takes the new one's place). Without it a flatpack
+	/// loaded without its board and deleted itself.
+	var/list/object_type_fields = list(
+		/obj/item/flatpack = list("board"),
+	)
 	/// TRUE while this world loads a saved map (Babylon's active.dmm, the station's saved levels:
 	/// a staged resume-state.json) until restore_world() has finished, and while the area tools
 	/// load a copy. Mapload Initialize defaults that only fit a fresh map (random light breakage,

@@ -362,6 +362,21 @@ class SmokeDeterminism(unittest.TestCase):
             used += ["%s: %s" % (path.name, kind) for kind in sorted(types) if re.search(re.escape(kind) + r"(?!\w)", text)]
         self.assertEqual(used, [])
 
+    def test_saved_objects_never_delete_themselves_at_random_on_load(self):
+        # A restored object runs its Initialize again: one that deletes itself at random would
+        # vanish from a saved world now and then. Each such type stands back for a saved map.
+        hooked = {"/obj/structure/closet/emcloset": "/obj/structure/closet/emcloset/Initialize(mapload)",
+                  "/mob/living/basic/bot/mulebot": "/mob/living/basic/bot/mulebot/Initialize(mapload)"}
+        allowed = {
+            "/obj/effect/spawner/message_in_a_bottle",  # a spawner: deletes itself either way
+            "/obj/effect/mob_spawn/ghost_role/human/lavaland_syndicate/comms/space",  # commented out (Bubber)
+            "/mob/living/basic/migo",  # 0.1%: replaced by the same mob with a wig, nothing is lost
+        }
+        persistence = (DM / "persistence.dm").read_text(encoding="utf-8")
+        self.assertEqual(randomly_deleted_types() - set(hooked) - allowed, set())
+        for hook in hooked.values():
+            self.assertIn(hook, persistence)
+
     def test_marker_tiles_are_solid_floors(self):
         # Markers and the emptied locker's items must lie on a floor that moves nothing (no
         # planetary wind, conveyors or stairs): test_marker_turf() prefers such a floor.
@@ -381,13 +396,17 @@ class SaveFiles(unittest.TestCase):
         # babylon_write_pieces(), which checks every write and the size; only the two tiny files
         # are written directly.
         text = (DM / "persistence.dm").read_text(encoding="utf-8")
-        direct = [line.strip() for line in text.splitlines() if "rustg_file_write(" in line]
+        direct = [line.strip() for path, source in dm_sources().items() if not path.name.startswith("testing")
+                  for line in source.splitlines() if "rustg_file_write(" in line]
         self.assertEqual(len(direct), 2, direct)
         self.assertTrue(any('"1", "[base]/tutorial-snapshot"' in line for line in direct), direct)
         self.assertTrue(any("saves/latest.json" in line for line in direct), direct)
         self.assertIn('babylon_write_pieces(level_maps[z_text]', text)
         self.assertIn('babylon_write_pieces(pieces, "[base]/state.json")', text)
         self.assertNotIn('"map_text"', text)
+        # The area tools' copies are map files too (up to 10,000 tiles).
+        tools = (DM / "tutorial/area_tools.dm").read_text(encoding="utf-8")
+        self.assertEqual(tools.count("babylon_write_pieces(babylon_area_map_pieces("), 2)
 
     def test_a_restore_refuses_levels_that_did_not_load(self):
         text = (DM / "persistence.dm").read_text(encoding="utf-8")
@@ -425,6 +444,7 @@ class MaploadDefaults(unittest.TestCase):
             self.assertIn(hook, persistence)
         # Round-start decay (modular_skyrat decaySS.dm) is the same kind of decision, per world.
         self.assertIn("/datum/controller/subsystem/decay/Initialize()", persistence)
+        self.assertIn("/datum/controller/subsystem/area_spawn/Initialize()", persistence)
         # Lights decide their breakage through allow_break_on_init.
         self.assertIn("allow_break_on_init = FALSE", persistence)
 
@@ -437,6 +457,29 @@ class Readiness(unittest.TestCase):
         body = flags.split("/proc/babylon_world_ready()", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(body.strip(), "return !!GLOB.babylon_save?.ready")
         self.assertIn("while(!babylon_station_boot_complete())", (DM / "station_session.dm").read_text(encoding="utf-8"))
+
+
+class Companions(unittest.TestCase):
+    def test_companions_are_marked_at_creation_and_never_saved(self):
+        # Objects another atom makes in its Initialize are made again on every load: marked when
+        # made (not when a map template places them), skipped by every save, and the copies older
+        # saves hold are removed on restore.
+        text = (DM / "persistence.dm").read_text(encoding="utf-8")
+        hook = text.split("/datum/controller/subsystem/atoms/InitAtom(", 1)[1].split("\n/", 1)[0]
+        self.assertIn("!from_template", hook)
+        self.assertIn("try", hook)
+        self.assertEqual(hook.count("babylon_initializing.Cut(depth + 1)"), 2)
+        self.assertIn("/atom/movable/babylon_skip_save()\n\treturn ..() || babylon_is_companion()", text)
+        self.assertIn("remove_saved_companion_copies(records)", text)
+        # The fallback for copies made outside an Initialize runs in both builds before ready.
+        for name in ("session.dm", "station_session.dm"):
+            boot = (DM / name).read_text(encoding="utf-8")
+            self.assertLess(boot.index("remove_regenerated_copies()"), boot.index("\tready = TRUE"), name)
+        # What a random mapload default makes stays saved (the default stands back on a load).
+        self.assertIn("!babylon_fresh_map_only", hook)
+        for proc in ("/turf/open/floor/MakeDirty()",):
+            body = text.split(proc, 1)[1].split("\n/", 1)[0]
+            self.assertIn("SSatoms.babylon_fresh_map_only++", body)
 
 
 if __name__ == "__main__":

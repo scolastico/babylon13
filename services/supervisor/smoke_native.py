@@ -10,6 +10,7 @@ import time
 import urllib.request
 
 from protocol import topic
+from smoke_stability import restore_cycles
 from supervisor import Driver, Supervisor, serve
 
 
@@ -20,6 +21,8 @@ def main():
     parser.add_argument("--data-directory", required=True)
     parser.add_argument("--api-port", type=int, default=1368)
     parser.add_argument("--child-port", type=int, default=1458)
+    parser.add_argument("--only-stability", action="store_true",
+                        help="only the restore stability check (a world restored 3 times keeps its objects)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     # Closet/crate contents are generated on first opening; count the papers
@@ -97,8 +100,39 @@ def main():
             time.sleep(1)
         assert not current(), "Child did not exit after checkpoint"
 
+    def stability():
+        """A Babylon world restored three times keeps exactly its saved objects (smoke_stability.py)."""
+        stable = api("create", dict(name="Stability smoke", visibility="private"), actor="stabilityowner")["id"]
+
+        def start(world):
+            api("join", {"world": world}, actor="stabilityowner")
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                run = current()
+                if run and run["state"] == "running":
+                    return run
+                assert not (run and run["state"] == "error"), run
+                time.sleep(2)
+            raise TimeoutError("Stability child did not become ready")
+
+        def stop_world(world):
+            api("stop", {"world": world}, actor="stabilityowner")
+            deadline = time.time() + 120
+            while time.time() < deadline and current():
+                time.sleep(1)
+            assert not current(), "Stability child did not exit"
+        def census(run):
+            packed = call(run, "session", "test_companion_census")
+            return {entry["entry"]: entry["value"] for entry in packed["entries"]}
+        return restore_cycles(stable, start, stop_world, data, census=census)
+
     try:
         time.sleep(.5)
+        if args.only_stability:
+            report = dict(passed=True, restore_stability=stability())
+            (data / "result.json").write_text(json.dumps(report, indent=2))
+            print(json.dumps(report, indent=2))
+            return
         world = api("create", dict(name="Native smoke", visibility="private"))["id"]
         run = wait_ready(world)
         assert topic(run["port"], run["secret"], "status")["players"] == []
@@ -283,6 +317,7 @@ def main():
             while time.time() < deadline and current():
                 time.sleep(1)
             assert not current(), "Legacy child did not exit"
+        restore_stability = stability()
         report = dict(passed=True, real_child_start_stop=True, http_ticket_redemption=True,
                       afk_policy=True, showcase_read_only_visitor=True,
                       showcase_ticket_redemption=True,
@@ -290,7 +325,8 @@ def main():
                       second_inventory=True, second_respawn=True, enclosed_drone=True,
                       empty_respawn=True, ghost_hud_trimmed=True, physical_cafe_turfs=0,
                       lore_papers=expected_lore, return_button_order=True,
-                      generations=[generation, generation2], legacy_saves=legacy)
+                      generations=[generation, generation2], legacy_saves=legacy,
+                      restore_stability=restore_stability)
         (data / "result.json").write_text(json.dumps(report, indent=2))
         print(json.dumps(report, indent=2))
     finally:

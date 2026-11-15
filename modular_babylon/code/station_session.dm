@@ -46,6 +46,11 @@ SUBSYSTEM_DEF(babylon_station)
 		if(boot_error)
 			return
 		sleep(1 SECONDS)
+	// Before ready: nothing may save or admit anyone while copies are cleaned up.
+	try
+		remove_regenerated_copies()
+	catch(var/exception/cleanup_error)
+		log_world("Babylon restore: cleaning up regenerated copies failed: [cleanup_error] ([cleanup_error?.file]:[cleanup_error?.line])")
 	ready = TRUE
 	next_autosave_at = world.time + autosave_interval
 	INVOKE_ASYNC(src, PROC_REF(reset_stray_trams))

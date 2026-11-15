@@ -797,3 +797,21 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 				result["[thing.type] plane [thing.plane]"] = FALSE
 	result["pasted_planes_consistent"] = consistent
 	return result
+
+/// Not asserted: which objects on saved levels a save leaves out as companions (made by another
+/// atom's Initialize, persistence.dm) or as CentCom's, by type, with the type of their maker.
+/datum/babylon_save/proc/test_companion_census()
+	var/list/result = list()
+	var/list/levels = persisted_levels()
+	for(var/atom/movable/thing in world)
+		if(!isturf(thing.loc) || !(thing.z in levels))
+			continue
+		var/key
+		if(thing.babylon_is_companion())
+			var/atom/maker = thing.babylon_companion_of.resolve()
+			key = "[thing.type] (made by [maker?.type])"
+		else if(istype(get_area(thing), /area/centcom) && !ismob(thing))
+			key = "[thing.type] (centcom)"
+		if(key)
+			result[key] = (result[key] || 0) + 1
+	return result

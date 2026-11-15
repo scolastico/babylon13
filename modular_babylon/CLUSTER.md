@@ -341,13 +341,16 @@ What a save keeps and what it does not:
   bots, monkeys) by type, name, health and whether they are dead. NPC humans (ruin
   corpses) are not kept yet. Scenery (plants,
   rocks, decals, dirt) keeps only its place, look and colour. A restart decides nothing
-  anew that a fresh map would (no new dirt, decay, webs or nests, no animals hidden in
-  disposal bins): lights keep their tubes (working, empty, broken or burned
+  anew that a fresh map would (no new dirt, decay, webs or nests, area spawns or animals
+  hidden in disposal bins): lights keep their tubes (working, empty, broken or burned
   out, also in fixtures players built), cameras stay on or off, half-built fire and air
   alarms stay half-built, and bots keep their personality setting. Every deck of a
-  multi-deck station keeps its own rendering layer. Vending machines still restock. Known gap: objects another object makes when it is created
-  (gravity generator parts, turret covers, wide airlocks' fillers and the like) are restored
-  and made again, so each restart adds a copy of them.
+  multi-deck station keeps its own rendering layer. Vending machines still restock. Objects another object makes when it is created (a
+  gravity generator's parts, a turret's cover, a wide airlock's fillers, a shield generator's
+  field) are not saved: their maker makes them again on every start. CentCom's objects are not
+  saved either (its template loads on every start), and a restored world gets no new round-start
+  decay or extra area spawns (machines, pets and job start points placed at random). Older saves
+  that still hold such copies are cleaned up on their next start.
 - Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
   (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,
   idle; whatever was aboard is lost. Shuttles players built themselves are saved where
