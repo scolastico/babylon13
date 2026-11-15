@@ -130,7 +130,12 @@
 	// An autosave in progress finishes first (it releases the world as usual); then the final save.
 	stop_pending = TRUE
 	last_stop_result = null
-	. = managed_stop_now()
+	// A runtime must not leave the stop pending: every later stop would wait for it in vain.
+	try
+		. = managed_stop_now()
+	catch(var/exception/error)
+		log_world("Babylon managed stop failed: [error] ([error?.file]:[error?.line])")
+		. = list("error" = "The stop failed: [error]")
 	last_stop_result = .
 	stop_pending = FALSE
 
@@ -142,21 +147,27 @@
 		return list("error" = "A save is still running; try stopping again in a moment")
 	draining = TRUE
 	var/list/result
-	var/saves = babylon_stop_saves()
-	if(saves && (!ready || boot_error))
-		// It never finished starting (or failed to): there is nothing new to save, and refusing
-		// would leave the world stuck in an error state.
-		saves = FALSE
-		to_chat(world, span_notice("This world is stopping before it finished starting; nothing is saved. Returning you to the lobby."))
-	else
-		to_chat(world, span_notice(babylon_stop_message(saves)))
-	if(saves)
-		// save_world keeps both physics and player controls paused until process exit.
-		result = save_world()
-	else
-		// Worlds that are not saved stop at once and report success: the supervisor would
-		// otherwise keep them in an error state and never clean them up.
-		result = list("ok" = TRUE, "saved" = FALSE)
+	// A runtime before the outcome is known must not leave the world draining (no more saves,
+	// players no longer looked after): it counts as a failed stop.
+	try
+		var/saves = babylon_stop_saves()
+		if(saves && (!ready || boot_error))
+			// It never finished starting (or failed to): there is nothing new to save, and refusing
+			// would leave the world stuck in an error state.
+			saves = FALSE
+			to_chat(world, span_notice("This world is stopping before it finished starting; nothing is saved. Returning you to the lobby."))
+		else
+			to_chat(world, span_notice(babylon_stop_message(saves)))
+		if(saves)
+			// save_world keeps both physics and player controls paused until process exit.
+			result = save_world()
+		else
+			// Worlds that are not saved stop at once and report success: the supervisor would
+			// otherwise keep them in an error state and never clean them up.
+			result = list("ok" = TRUE, "saved" = FALSE)
+	catch(var/exception/error)
+		log_world("Babylon managed stop failed: [error] ([error?.file]:[error?.line])")
+		result = list("error" = "The stop failed: [error]")
 	if(!result["ok"])
 		draining = FALSE
 		return result

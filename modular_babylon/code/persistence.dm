@@ -417,16 +417,18 @@
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
 	busy = TRUE
-	before_checkpoint()
-	// The chat subsystem stops with the master: these messages go out at once.
-	to_chat_immediate(world, span_notice("Saving... the world is paused for about [estimated_pause_seconds()] seconds."))
 	checkpoint_processing = Master.processing
-	checkpoint_started = REALTIMEOFDAY
-	Master.processing = FALSE
-	checkpoint_hold(TRUE)
-	sleep(1 TICKS)
 	var/list/result
+	// Everything between busy = TRUE and busy = FALSE runs inside the try: a runtime must never
+	// leave the world flagged busy (no save ever again) or the master paused.
 	try
+		before_checkpoint()
+		// The chat subsystem stops with the master: these messages go out at once.
+		to_chat_immediate(world, span_notice("Saving... the world is paused for about [estimated_pause_seconds()] seconds."))
+		checkpoint_started = REALTIMEOFDAY
+		Master.processing = FALSE
+		checkpoint_hold(TRUE)
+		sleep(1 TICKS)
 		result = save_world_impl(for_tutorial)
 	catch(var/exception/error)
 		result = list("error" = "Checkpoint failed: [error]")
@@ -494,13 +496,20 @@
 	if(autosave_countdown_active)
 		return
 	autosave_countdown_active = TRUE
+	// A runtime must not leave the countdown flagged active: no autosave would ever run again.
+	try
+		autosave_countdown_steps(allow_unoccupied)
+	catch(var/exception/error)
+		log_world("Babylon autosave countdown failed: [error] ([error?.file]:[error?.line])")
+	autosave_countdown_active = FALSE
+
+/datum/babylon_save/proc/autosave_countdown_steps(allow_unoccupied)
 	autosave_notices = list()
 	var/remaining = 30
 	for(var/seconds_left in list(30, 10, 5, 1))
 		if(remaining > seconds_left)
 			sleep((remaining - seconds_left) SECONDS)
 		if(!allow_unoccupied && !length(GLOB.clients))
-			autosave_countdown_active = FALSE
 			return
 		var/message = seconds_left == 1 ? "Babylon autosave now: the world pauses for about [estimated_pause_seconds()] seconds." : "Babylon autosave in [seconds_left] seconds; the world pauses for about [estimated_pause_seconds()] seconds."
 		autosave_notices += list(list("remaining" = seconds_left, "at" = world.time, "message" = message))
@@ -510,7 +519,6 @@
 	sleep(1 SECONDS)
 	if((allow_unoccupied || length(GLOB.clients)) && !busy)
 		save_world()
-	autosave_countdown_active = FALSE
 
 // Only snapshot capture is frozen. Serialization and disk writes use detached data.
 /datum/babylon_save/proc/release_checkpoint()
@@ -620,7 +628,7 @@
 /datum/babylon_save/proc/level_file(z)
 	return writes_level_files() ? "z[z].dmm" : "map.dmm"
 
-/// Saves one z-level: list("map_text" = its .dmm (a single-level TGM map), "records" = saved
+/// Saves one z-level: list("map_pieces" = its .dmm (a single-level TGM map) in pieces, "records" = saved
 /// objects (state.json "records"), "turfs" = room air and temperature (state.json "turfs")).
 /// Records and turfs carry their z when writes_level_files(); Babylon's do not.
 /datum/babylon_save/proc/save_level(z, list/mobs_by_turf = checkpoint_mobs(), list/skipped_tiles = checkpoint_skipped_tiles(), list/tile_extras = checkpoint_tile_extras())
@@ -719,14 +727,19 @@
 			record["z"] = z
 		for(var/list/turf_data as anything in turfs)
 			turf_data["z"] = z
-	return list("map_text" = "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]", "records" = records, "turfs" = turfs)
+	// The map text of a station level is tens of MB: it is kept and written in pieces of at most
+	// BABYLON_SAVE_PIECE_BYTES (babylon_write_pieces()), never spliced into one string.
+	var/list/map_pieces = list("//[DMM2TGM_MESSAGE]\n")
+	map_pieces += babylon_join_in_pieces(headers)
+	map_pieces += babylon_join_in_pieces(grid)
+	return list("map_pieces" = map_pieces, "records" = records, "turfs" = turfs)
 
 /datum/babylon_save/proc/save_world_impl(for_tutorial = FALSE)
 	var/list/levels = persisted_levels()
 	// Which levels changed is taken now, while the world is paused (changes from here on count
 	// for the next save).
 	begin_level_capture()
-	// z (as text) -> the level's map text, records and turf records (levels captured now)
+	// z (as text) -> the level's map text (in pieces), records and turf records (levels captured now)
 	var/list/level_maps = list()
 	var/list/level_records = list()
 	var/list/level_turfs = list()
@@ -750,7 +763,7 @@
 		level_capture_ms["[z]"] = (REALTIMEOFDAY - level_started) * 100
 		level_records["[z]"] = level["records"]
 		level_turfs["[z]"] = level["turfs"]
-		level_maps["[z]"] = level["map_text"]
+		level_maps["[z]"] = level["map_pieces"]
 	turf_metadata_cache = list()
 	var/generation = "save-[time2text(world.realtime, "YYYYMMDD-hhmmss")]-[++save_count]"
 	var/base = "data/babylon/saves/[generation]"
@@ -787,12 +800,18 @@
 		// First, so even a half-written snapshot is never taken for a checkpoint (the supervisor's
 		// constants.TUTORIAL_SNAPSHOT_MARKER: never listed or restored, deleted once old).
 		rustg_file_write("1", "[base]/tutorial-snapshot")
+	// Every file is checked: a level map written short loads as a broken level ("Undefined model
+	// key"), and the next save would write that loss over the world.
+	var/list/write_errors = list()
 	for(var/z_text in level_maps)
-		bytes += length(level_maps[z_text])
-		rustg_file_write(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")
+		var/list/written = babylon_write_pieces(level_maps[z_text], "[base]/[level_file(text2num(z_text))]")
+		bytes += written["bytes"]
+		if(written["error"])
+			write_errors += "[level_file(text2num(z_text))]: [written["error"]]"
 	for(var/z_text in reused_levels)
 		var/file_name = level_file(text2num(z_text))
-		fcopy("data/babylon/saves/[reused_levels[z_text]]/[file_name]", "[base]/[file_name]")
+		if(!fcopy("data/babylon/saves/[reused_levels[z_text]]/[file_name]", "[base]/[file_name]"))
+			write_errors += "[file_name]: copying it from [reused_levels[z_text]] failed"
 		bytes += length(file("[base]/[file_name]"))
 	var/state_text = json_encode(state)
 	// json_encode writes an empty list as []; the save contract's "characters" is an object
@@ -812,31 +831,16 @@
 	for(var/index in 1 to length(turf_parts))
 		pieces += index > 1 ? ",[turf_parts[index]]" : turf_parts[index]
 	pieces += list(close_list, copytext(state_text, turfs_at + length("\"@babylon-turfs@\"")))
-	fdel("[base]/state.json")
-	var/state_bytes = 0
-	var/append_error
-	for(var/piece in pieces)
-		state_bytes += length(piece)
-		// rust-g answers an error text when a write fails; one failed piece fails the save.
-		var/append_result = rustg_file_append(piece, "[base]/state.json")
-		if(append_result && !append_error)
-			append_error = "[append_result]"
-		CHECK_TICK
-	bytes += state_bytes
-	var/state_file_size = fexists("[base]/state.json") ? length(file("[base]/state.json")) : 0
-	// latest.json is committed only after every generation file is present and state.json was
-	// written whole: every append succeeded and the file is as long as its text. The text is
-	// pure ASCII (json_encode escapes everything else), so the two are equal, but DM numbers
-	// are 32-bit floats: past 16 MB (2^24) every length, sum and file size is rounded to a few
-	// bytes. That rounding was the "+8 to 12 bytes" of a 40 to 50 MB state.json. The tolerance
-	// is twice its worst case: half a float step per piece added and for the file size.
-	var/size_matches = babylon_written_size_matches(state_file_size, state_bytes, length(pieces))
-	if(!size_matches)
-		log_world("Babylon save [generation]: state.json is [num2text(state_file_size, 12)] bytes on disk for [num2text(state_bytes, 12)] bytes of text in [length(pieces)] pieces.")
-		log_non_ascii_text(pieces, generation)
-	var/complete = !append_error && size_matches
-	if(append_error)
-		log_world("Babylon save [generation]: writing state.json failed: [append_error]")
+	var/list/state_written = babylon_write_pieces(pieces, "[base]/state.json")
+	bytes += state_written["bytes"]
+	if(state_written["error"])
+		write_errors += "state.json: [state_written["error"]]"
+		if(state_written["size_mismatch"])
+			log_non_ascii_text(pieces, generation)
+	// latest.json is committed only after every generation file is present and was written whole.
+	var/complete = !length(write_errors)
+	for(var/error in write_errors)
+		log_world("Babylon save [generation]: [error]")
 	for(var/z in levels)
 		if(!fexists("[base]/[level_file(z)]"))
 			complete = FALSE
@@ -867,6 +871,45 @@
 	// Below 2^24 every length and sum is an exact integer.
 	var/tolerance = max(file_size, text_bytes) < 2 ** 24 ? 0 : (piece_count + 1) * max(file_size, text_bytes) / (2 ** 23)
 	return abs(file_size - text_bytes) <= tolerance
+
+/// The strings joined into pieces of at most BABYLON_SAVE_PIECE_BYTES (a single string is never
+/// split): large save files are written piece by piece (babylon_write_pieces()).
+/proc/babylon_join_in_pieces(list/strings)
+	var/list/pieces = list()
+	var/list/current = list()
+	var/current_bytes = 0
+	for(var/text in strings)
+		var/size = length(text)
+		if(current_bytes && current_bytes + size > BABYLON_SAVE_PIECE_BYTES)
+			pieces += current.Join()
+			current = list()
+			current_bytes = 0
+		current += text
+		current_bytes += size
+	if(length(current))
+		pieces += current.Join()
+	return pieces
+
+/// Writes the pieces as the file at path (replacing it) and checks the result. Large DM strings
+/// spliced into one and written at once came out truncated or damaged, so every save file goes
+/// through here: list("bytes" = text bytes, "error" = text or null, "size_mismatch" = TRUE when
+/// the file on disk is not as long as its text). rust-g answers an error text when a write fails.
+/proc/babylon_write_pieces(list/pieces, path)
+	fdel(path)
+	var/text_bytes = 0
+	var/error
+	for(var/piece in pieces)
+		text_bytes += length(piece)
+		var/result = rustg_file_append(piece, path)
+		if(result && !error)
+			error = "writing failed: [result]"
+		CHECK_TICK
+	var/file_size = fexists(path) ? length(file(path)) : 0
+	// The pieces' text is ASCII or UTF-8; length() counts bytes either way, as the file size does.
+	var/mismatch = !babylon_written_size_matches(file_size, text_bytes, length(pieces))
+	if(mismatch && !error)
+		error = "[num2text(file_size, 12)] bytes on disk for [num2text(text_bytes, 12)] bytes of text in [length(pieces)] pieces"
+	return list("bytes" = text_bytes, "error" = error, "size_mismatch" = mismatch)
 
 /// Diagnostics for a state.json whose size is off: where its text holds characters outside
 /// ASCII (json_encode should leave none), with some context, for the first few hits.
@@ -907,6 +950,10 @@
 /datum/babylon_save/proc/restore_world()
 	if(!fexists("data/babylon/resume-state.json"))
 		return
+	// A saved level that did not load (a damaged map file) must fail the start: the world would
+	// run without it and its next save would write the loss over the checkpoint.
+	if(length(SSmapping.babylon_failed_maps))
+		CRASH("Saved map files failed to load: [jointext(SSmapping.babylon_failed_maps, ", ")]")
 	var/list/state = resume_data || json_decode(file2text("data/babylon/resume-state.json"))
 	var/list/sun = state["sun"]
 	if(sun)
@@ -1273,6 +1320,18 @@
 /proc/babylon_loading_saved_map()
 	return !!GLOB.babylon_save?.loading_saved_map
 
+/datum/controller/subsystem/mapping
+	/// Map files LoadGroup() could not load in this run (upstream only announces them): a restore
+	/// refuses to run over them (restore_world()).
+	var/list/babylon_failed_maps = list()
+
+/datum/controller/subsystem/mapping/LoadGroup(list/errorList, name, path, files, list/traits, list/default_traits, silent = FALSE, height_autosetup = TRUE)
+	var/list/before = islist(errorList) ? errorList.Copy() : list()
+	. = ..()
+	for(var/failed in errorList)
+		if(!(failed in before))
+			babylon_failed_maps |= failed
+
 /// Applies what a restore or paste wrote into this atom's variables. fields: the saved fields.
 /atom/proc/babylon_after_restore(list/fields)
 	return
@@ -1285,6 +1344,13 @@
 	return ..()
 
 /obj/machinery/light/babylon_after_restore(list/fields)
+	// Its backup cell came back as a saved child in its contents, but the light still holds the
+	// mock flag, so update() (get_cell()) would make a second cell on every restart.
+	if(!cell)
+		var/obj/item/stock_parts/power_store/restored_cell = locate() in contents
+		if(restored_cell)
+			cell = restored_cell
+			has_mock_cell = FALSE
 	update(trigger = FALSE)
 
 // Cameras: upstream switches 3% of mapped station cameras off; a saved camera keeps its saved

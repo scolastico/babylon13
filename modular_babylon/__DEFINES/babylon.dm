@@ -25,3 +25,6 @@
 /// How long a world waits for the supervisor's answer to an ordinary request (redeem, world
 /// management, round end, adminhelp relays): babylon_supervisor_request_within().
 #define BABYLON_SUPERVISOR_TIMEOUT (30 SECONDS)
+/// Largest piece a save file is written in (babylon_write_pieces()): large DM strings written at
+/// once came out truncated or damaged.
+#define BABYLON_SAVE_PIECE_BYTES 1048576

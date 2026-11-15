@@ -130,6 +130,9 @@ SUBSYSTEM_DEF(babylon_builder)
 		session.restore_world()
 		session.prepared = TRUE
 	catch(var/exception/error)
+		// restore_world() clears it on its last line, which a failure skips: the mapload defaults
+		// (babylon_loading_saved_map()) must not stay held back for the rest of the run.
+		session.loading_saved_map = FALSE
 		session.boot_error = "Restore failed: [error]"
 		return SS_INIT_FAILURE
 	INVOKE_ASYNC(GLOB.babylon_save, TYPE_PROC_REF(/datum/babylon_save, boot))

@@ -75,7 +75,13 @@
 	// (cleared again; the counter keeps going).
 	var/first_new_id = next_id
 	var/list/level = save_level(station_z)
-	result["map_text"] = findtext(level["map_text"], "//[DMM2TGM_MESSAGE]") == 1
+	var/list/map_pieces = level["map_pieces"]
+	result["map_text"] = length(map_pieces) > 1 && findtext(map_pieces[1], "//[DMM2TGM_MESSAGE]") == 1
+	var/largest_piece = 0
+	for(var/piece in map_pieces)
+		largest_piece = max(largest_piece, length(piece))
+	// Written in pieces (babylon_write_pieces()); one tile column's grid line is never split.
+	result["map_in_pieces"] = largest_piece <= BABYLON_SAVE_PIECE_BYTES + 4096
 	var/list/records = level["records"]
 	var/list/turfs = level["turfs"]
 	result["records"] = length(records) > 0
@@ -242,10 +248,17 @@
 	result["refresh_all_is_safe_in_a_running_round"] = isnull(babylon_refresh_starter_titles(TRUE))
 	return result
 
-/// An open, free tile near the middle of level z for a test marker, or null.
-/datum/babylon_save/proc/test_marker_turf(z, list/skipped_tiles)
+/// An open, free tile near the middle of level z for a test marker, or null. With solid_floor (the
+/// station's own level), a solid floor is preferred: nothing on it or under it may move what lies
+/// there: no planetary air (wind and gas flows push items), no glass or other non-floor ground, no
+/// structure or machine (conveyors, stairs, disposals, trapdoors); a level without one falls back to
+/// any open tile. Other levels take the nearest open tile: their floors near the middle belong to
+/// randomly generated ruins, which a restore does not always bring back the same.
+/datum/babylon_save/proc/test_marker_turf(z, list/skipped_tiles, solid_floor = TRUE)
 	var/best
 	var/best_distance = INFINITY
+	var/fallback
+	var/fallback_distance = INFINITY
 	var/center_x = round(world.maxx / 2)
 	var/center_y = round(world.maxy / 2)
 	for(var/turf/open/tile in block(1, 1, z, world.maxx, world.maxy, z))
@@ -254,10 +267,31 @@
 		if(islava(tile) || ischasm(tile) || iswaterturf(tile))
 			continue
 		var/distance = abs(tile.x - center_x) + abs(tile.y - center_y)
-		if(distance < best_distance)
-			best = tile
-			best_distance = distance
-	return best
+		if(distance < fallback_distance)
+			fallback = tile
+			fallback_distance = distance
+		if(distance >= best_distance || (solid_floor && !babylon_test_solid_floor(tile)))
+			continue
+		best = tile
+		best_distance = distance
+	return best || fallback
+
+/// A plain station floor whose contents stay put (test_marker_turf()).
+/proc/babylon_test_solid_floor(turf/open/tile)
+	if(!istype(tile, /turf/open/floor) || istype(tile, /turf/open/floor/glass) || tile.planetary_atmos)
+		return FALSE
+	return !(locate(/obj/structure) in tile) && !(locate(/obj/machinery) in tile)
+
+/// The multi-z save's locker: it fills itself on first opening like any closet, always with the
+/// same items. An emergency closet deletes itself on 1% of creations (and turns into a radiation
+/// closet under a station trait), which left nothing to empty.
+/obj/structure/closet/babylon_test_locker
+	name = "babylon marker locker"
+
+/obj/structure/closet/babylon_test_locker/PopulateContents()
+	..()
+	new /obj/item/wrench(src)
+	new /obj/item/crowbar(src)
 
 /// Multi-z save, first half (smoke_station.py runs it on icebox): markers on the station's first
 /// level and on a level without the station trait, a locker emptied by hand and an animal; then a
@@ -284,12 +318,12 @@
 	var/list/skipped = checkpoint_skipped_tiles()
 	var/list/markers = list()
 	for(var/z in list(station_level, other_level))
-		var/turf/spot = test_marker_turf(z, skipped)
+		var/turf/spot = test_marker_turf(z, skipped, z == station_level)
 		if(!spot)
 			continue
 		var/obj/item/paper/marker = new(spot)
 		marker.name = "babylon marker z[z]"
-		markers += list(list("name" = marker.name, "x" = spot.x, "y" = spot.y, "z" = spot.z))
+		markers += list(list("name" = marker.name, "x" = spot.x, "y" = spot.y, "z" = spot.z, "turf" = "[spot.type]", "area" = "[spot.loc.type]"))
 	result["markers_placed"] = length(markers) == 2
 	// Saved on the level without the station trait, moved later (below).
 	var/obj/item/paper/traveller
@@ -300,8 +334,7 @@
 	var/turf/station_spot = test_marker_turf(station_level, skipped)
 	// A locker fills itself the first time it opens: emptied by hand, it must stay empty after a
 	// restart (contents_initialized is saved).
-	var/obj/structure/closet/emcloset/locker = new(station_spot)
-	locker.name = "babylon marker locker"
+	var/obj/structure/closet/babylon_test_locker/locker = new(station_spot)
 	var/list/lying = station_spot.contents.Copy()
 	locker.dump_contents()
 	var/dumped = 0
@@ -428,6 +461,17 @@
 				found++
 				break
 	result["markers_restored"] = length(markers) == 2 && found == length(markers)
+	if(!result["markers_restored"])
+		// Not asserted: where each marker was saved and where its paper is now.
+		var/list/where = list()
+		for(var/list/marker as anything in markers)
+			var/list/papers = list()
+			for(var/obj/item/paper/paper in world)
+				if(paper.name == marker["name"])
+					papers += "[paper.loc?.type] ([paper.x],[paper.y],[paper.z])"
+			var/turf/spot = locate(marker["x"], marker["y"], marker["z"])
+			where += "[marker["name"]] saved on [marker["turf"]] in [marker["area"]] at ([marker["x"]],[marker["y"]],[marker["z"]]), now [spot?.type]: [papers.Join(", ") || "gone"]"
+		result["markers_where"] = where.Join("; ")
 	var/travellers = 0
 	var/traveller_in_place = FALSE
 	var/list/landing = json_decode("[encoded_traveller]")
@@ -436,8 +480,8 @@
 			travellers++
 			traveller_in_place = length(landing) == 3 && paper.x == landing[1] && paper.y == landing[2] && paper.z == landing[3]
 	result["moved_object_restored_once"] = travellers == 1 && traveller_in_place
-	var/obj/structure/closet/emcloset/locker
-	for(var/obj/structure/closet/emcloset/candidate in world)
+	var/obj/structure/closet/babylon_test_locker/locker
+	for(var/obj/structure/closet/babylon_test_locker/candidate in world)
 		if(candidate.name == "babylon marker locker")
 			locker = candidate
 			break

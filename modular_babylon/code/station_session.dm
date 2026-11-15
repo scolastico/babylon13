@@ -31,6 +31,9 @@ SUBSYSTEM_DEF(babylon_station)
 	try
 		session.restore_station()
 	catch(var/exception/error)
+		// restore_world() clears it on its last line, which a failure skips: the mapload defaults
+		// (babylon_loading_saved_map()) must not stay held back for the rest of the run.
+		session.loading_saved_map = FALSE
 		session.boot_error = "Restore failed: [error]"
 		return SS_INIT_FAILURE
 	// Restored (or fresh): the master controller may start the simulation.

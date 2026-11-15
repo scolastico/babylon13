@@ -116,7 +116,12 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	if(findtext(trim(LOWER_TEXT(message)), "ticket ") == 1)
 		return list("ok" = FALSE, "result" = "Replies starting with 'ticket ' are ticket commands")
 	GLOB.babylon_relaying_reply = TRUE
-	var/result = TgsPm(target, message, istext(sender) && length(sender) ? "[sender] (Discord)" : "Discord")
+	var/result
+	// A runtime must not leave the flag set: every later in-game admin PM would skip Discord.
+	try
+		result = TgsPm(target, message, istext(sender) && length(sender) ? "[sender] (Discord)" : "Discord")
+	catch(var/exception/error)
+		result = "Error: [error]"
 	GLOB.babylon_relaying_reply = FALSE
 	if(result == "Error: No client")
 		result = "The player is no longer in this world"

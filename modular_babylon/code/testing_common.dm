@@ -612,10 +612,18 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 /// Counts of state that a restored map must not decide anew, on the saved levels.
 /datum/babylon_save/proc/saved_state_counts()
 	var/list/levels = persisted_levels()
-	var/list/counts = list("lights_not_ok" = 0, "cameras_off" = 0, "alarms_unbuilt" = 0)
+	var/list/counts = list("lights_not_ok" = 0, "cameras_off" = 0, "alarms_unbuilt" = 0, "lights_with_two_cells" = 0)
 	for(var/obj/machinery/light/light as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/light))
-		if(!QDELETED(light) && (light.z in levels) && light.status != LIGHT_OK)
+		if(QDELETED(light) || !(light.z in levels))
+			continue
+		if(light.status != LIGHT_OK)
 			counts["lights_not_ok"]++
+		// A restart must not give a light a second backup cell.
+		var/cells = 0
+		for(var/obj/item/stock_parts/power_store/cell in light)
+			cells++
+		if(cells > 1)
+			counts["lights_with_two_cells"]++
 	for(var/obj/machinery/camera/camera as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/camera))
 		if(!QDELETED(camera) && (camera.z in levels) && !camera.camera_enabled)
 			counts["cameras_off"]++

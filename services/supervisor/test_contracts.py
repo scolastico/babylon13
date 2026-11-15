@@ -263,5 +263,138 @@ class RestoreGuards(unittest.TestCase):
         self.assertGreaterEqual(calls, 2)
 
 
+REPO = DM.parents[1]
+# A guard flag set and cleared in one proc around code that may fail (see FlagGuards). These set
+# and clear it in different branches, or inside a try whose catch clears it.
+FLAG_PAIRS_ALLOWED = {
+    ("creative/powers.dm", "user.babylon_creative_noclip"),  # on and off in separate branches
+    ("persistence.dm", "can_rotate"),  # reflector Initialize: a plain field toggle around ..()
+    ("station_characters.dm", "menu.spawning"),  # inside a try; the catch clears it
+}
+FLAG_SET = re.compile(r"\s+([\w.\[\]\"]+)\s*=\s*(?:TRUE|1)\s*$")
+FLAG_CLEAR = re.compile(r"\s+([\w.\[\]\"]+)\s*=\s*(?:FALSE|0|null)\s*$")
+
+
+def dm_procs(text):
+    """(first line index, [(index, line)]) for each top-level block of a DM file."""
+    blocks = []
+    for index, line in enumerate(text.splitlines()):
+        if line and not line[0].isspace() and not line.startswith(("//", "#")):
+            blocks.append((index, []))
+        if blocks:
+            blocks[-1][1].append((index, line))
+    return blocks
+
+
+class FlagGuards(unittest.TestCase):
+    def test_no_guard_flag_is_left_set_by_a_runtime(self):
+        # A proc that sets a flag, calls other code and clears the flag again must run that code
+        # inside a try: a runtime in between would leave the flag set for the rest of the run
+        # (a world flagged busy never saves again, a pending stop blocks every later stop).
+        found = []
+        for root in (DM, REPO / "modular_babylon/lobby"):
+            for path in sorted(root.rglob("*.dm")):
+                if path.name.startswith("testing"):
+                    continue
+                name = path.relative_to(root).as_posix()
+                for _, body in dm_procs(path.read_text(encoding="utf-8")):
+                    sets = {}
+                    for index, line in body:
+                        match = FLAG_SET.match(line)
+                        if match:
+                            sets.setdefault(match.group(1), index)
+                            continue
+                        match = FLAG_CLEAR.match(line)
+                        if not match or match.group(1) not in sets or (name, match.group(1)) in FLAG_PAIRS_ALLOWED:
+                            continue
+                        between = [text for number, text in body if sets[match.group(1)] < number < index]
+                        calls = [text for text in between if re.search(r"\w\(", text) and not text.strip().startswith("//")]
+                        if calls and not any(text.strip() == "try" for text in between):
+                            found.append("%s:%d %s" % (name, sets[match.group(1)] + 1, match.group(1)))
+        self.assertEqual(found, [])
+
+    def test_a_failed_restore_clears_the_saved_map_flag(self):
+        # babylon_loading_saved_map() holds mapload defaults back while a save loads; a restore
+        # that throws must not leave it set for the rest of the run.
+        calls = 0
+        for path, text in dm_sources().items():
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                if line.strip() not in ("session.restore_world()", "session.restore_station()"):
+                    continue
+                calls += 1
+                self.assertEqual(lines[index - 1].strip(), "try", "%s:%d" % (path.name, index + 1))
+                catch = next(number for number in range(index, len(lines)) if lines[number].strip().startswith("catch"))
+                handler = []
+                for following in lines[catch + 1:]:
+                    if not following.startswith("\t\t"):
+                        break
+                    handler.append(following.strip())
+                self.assertIn("session.loading_saved_map = FALSE", handler, "%s:%d" % (path.name, index + 1))
+        self.assertEqual(calls, 2)
+
+
+# Upstream types whose Initialize deletes the object at random (prob(...) next to
+# INITIALIZE_HINT_QDEL): a smoke test that spawns one fails now and then.
+def randomly_deleted_types():
+    found = set()
+    for folder in ("code", "modular_skyrat", "modular_zubbers", "modular_zzplurt"):
+        for path in (REPO / folder).rglob("*.dm"):
+            current, body = None, []
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines() + ["/end"]:
+                if line and not line[0].isspace():
+                    if current and any("prob(" in text for text in body) and any("INITIALIZE_HINT_QDEL" in text for text in body):
+                        found.add(current)
+                    match = re.match(r"(/[\w/]+)/Initialize\(", line)
+                    current, body = (match.group(1) if match else None), []
+                elif current:
+                    body.append(line)
+    return found
+
+
+class SmokeDeterminism(unittest.TestCase):
+    def test_smoke_tests_spawn_nothing_that_deletes_itself_at_random(self):
+        types = randomly_deleted_types()
+        self.assertIn("/obj/structure/closet/emcloset", types)
+        used = []
+        for path in sorted(DM.rglob("testing*.dm")):
+            text = path.read_text(encoding="utf-8")
+            used += ["%s: %s" % (path.name, kind) for kind in sorted(types) if re.search(re.escape(kind) + r"(?!\w)", text)]
+        self.assertEqual(used, [])
+
+    def test_marker_tiles_are_solid_floors(self):
+        # Markers and the emptied locker's items must lie on a floor that moves nothing (no
+        # planetary wind, conveyors or stairs): test_marker_turf() prefers such a floor.
+        text = (DM / "testing_station.dm").read_text(encoding="utf-8")
+        body = text.split("/datum/babylon_save/proc/test_marker_turf(", 1)[1].split("\n/", 1)[0]
+        self.assertIn("babylon_test_solid_floor(tile)", body)
+        floor = text.split("/proc/babylon_test_solid_floor(", 1)[1].split("\n/", 1)[0]
+        for condition in ("/turf/open/floor", "planetary_atmos", "/obj/structure", "/obj/machinery"):
+            self.assertIn(condition, floor)
+
+
+class SaveFiles(unittest.TestCase):
+    def test_save_files_are_written_in_checked_pieces(self):
+        # A save file written from one huge DM string came out truncated (state.json earlier, a
+        # level map in the H1 container run: "Undefined model key"); the next start then ran
+        # without that level and its save wrote the loss over the world. Save files go through
+        # babylon_write_pieces(), which checks every write and the size; only the two tiny files
+        # are written directly.
+        text = (DM / "persistence.dm").read_text(encoding="utf-8")
+        direct = [line.strip() for line in text.splitlines() if "rustg_file_write(" in line]
+        self.assertEqual(len(direct), 2, direct)
+        self.assertTrue(any('"1", "[base]/tutorial-snapshot"' in line for line in direct), direct)
+        self.assertTrue(any("saves/latest.json" in line for line in direct), direct)
+        self.assertIn('babylon_write_pieces(level_maps[z_text]', text)
+        self.assertIn('babylon_write_pieces(pieces, "[base]/state.json")', text)
+        self.assertNotIn('"map_text"', text)
+
+    def test_a_restore_refuses_levels_that_did_not_load(self):
+        text = (DM / "persistence.dm").read_text(encoding="utf-8")
+        body = text.split("/datum/babylon_save/proc/restore_world()", 1)[1].split("\n/", 1)[0]
+        self.assertIn("if(length(SSmapping.babylon_failed_maps))", body)
+        self.assertIn("babylon_failed_maps |= failed", text)
+
+
 if __name__ == "__main__":
     unittest.main()

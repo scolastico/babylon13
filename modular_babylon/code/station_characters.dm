@@ -181,8 +181,8 @@
 			continue // an NPC human (ruin corpses): not kept (checkpoint_mobs()).
 		captured_bodies[body] = TRUE
 		// A body its player is in (a ckey on it), while their record holds no other character:
-		// theirs, not left behind.
-		var/datum/babylon_player/owner = owner_key && body.ckey == owner_key ? player_sessions[owner_key] : null
+		// theirs, not left behind. A player who joined a moment ago may have no record yet.
+		var/datum/babylon_player/owner = owner_key && body.ckey == owner_key ? ensure_station_player(owner_key) : null
 		if(owner && !characters[owner_key] && !owner.character())
 			owner.set_character(body)
 			try
