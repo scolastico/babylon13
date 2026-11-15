@@ -41,8 +41,10 @@
 	// on the panel's own body and on a body of another type (a corgi: not carbon, with its own sight update).
 	result["xray_fullbright_change_sight"] = babylon_creative_test_sight(panel, body)
 	var/mob/living/animal = new /mob/living/basic/pet/dog/corgi(start)
-	animal.ckey = "babylonsmokecreative"
-	result["xray_fullbright_non_carbon"] = !iscarbon(animal) && babylon_creative_test_sight(panel, animal)
+	animal.ckey = "babylonsmokeanimal"
+	var/datum/babylon_creative_panel/animal_panel = babylon_creative_panel_for(animal.ckey)
+	result["xray_fullbright_non_carbon"] = !iscarbon(animal) && babylon_creative_test_sight(animal_panel, animal)
+	GLOB.babylon_creative_panels -= animal.ckey
 	animal.ckey = null
 	cleanup += animal
 	body.adjust_brute_loss(20)
