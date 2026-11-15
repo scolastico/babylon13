@@ -562,7 +562,14 @@
 		made += npc
 		var/obj/babylon_tutorial/action/harm/burn_npc = babylon_tutorial_test_place(/obj/babylon_tutorial/action/harm, base, "pl_burn_npc", list("apply_to" = "npc", "target" = "pl_npc", "effect" = "burn", "amount" = 25), made)
 		var/obj/babylon_tutorial/action/heal/heal_npc = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "pl_heal_npc", list("apply_to" = "npc", "target" = "pl_npc", "heal" = "full"), made)
-		result["npc_target_validated"] = !burn_npc.issues()["target"] && !!hurt.set_setting("effect", "gib")
+		result["npc_target_no_issue_when_spawned"] = !burn_npc.issues()["target"] && !heal_npc.issues()["target"]
+		result["unknown_effect_refused"] = !!hurt.set_setting("effect", "gib")
+		// Without its NPC, both actions warn the builder.
+		var/obj/babylon_tutorial/npc_spawner/missing = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 7, base.y + 2, base.z), "pl_missing", list("spawn_at_start" = 0), made)
+		var/obj/babylon_tutorial/action/harm/harm_missing = babylon_tutorial_test_place(/obj/babylon_tutorial/action/harm, base, "pl_harm_missing", list("apply_to" = "npc", "target" = "pl_missing"), made)
+		var/obj/babylon_tutorial/action/heal/heal_missing = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "pl_heal_missing", list("apply_to" = "npc", "target" = "pl_missing"), made)
+		result["npc_not_spawned_warned"] = !missing.current_npc() && findtext(harm_missing.issues()["target"], "no NPC") && findtext(heal_missing.issues()["target"], "no NPC")
+		var/obj/babylon_tutorial/trigger/used_on/scan = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/used_on, base, "pl_scan", list("item_type" = "[/obj/item/healthanalyzer]", "target" = "pl_npc"), made)
 
 		// Two players without clients, keyed like real ones (the run follows the key).
 		var/mob/living/carbon/human/first = new(locate(base.x, base.y + 1, base.z))
@@ -598,6 +605,28 @@
 		run.check_triggers()
 		result["fired_step_shared"] = run.fired[zone] == 1
 
+		// A late joiner gets the objective that is already on screen.
+		var/mob/living/carbon/human/late = new(locate(base.x + 2, base.y + 1, base.z))
+		made += late
+		late.real_name = "Late Tester"
+		run.add_player(late)
+		run.check_triggers()
+		var/atom/movable/screen/alert/late_alert = late.alerts["babylon_tutorial_objective"]
+		result["late_joiner_sees_objective"] = late_alert && findtext(late_alert.maptext, "Late Tester")
+		qdel(late)
+		result["left_player_forgotten"] = !(late in run.players())
+
+		// A client-less mob nobody plays (a monkey, an AI mob) using the item is no player.
+		var/mob/living/carbon/human/stray = new(get_step(npc, EAST))
+		made += stray
+		var/obj/item/healthanalyzer/stray_item = new(get_turf(stray))
+		made += stray_item
+		stray.put_in_hands(stray_item)
+		SSbabylon_tutorial.refresh_hooks()
+		stray_item.melee_attack_chain(stray, npc)
+		run.check_triggers()
+		result["stray_mob_no_player"] = !run.fired[scan] && !(stray in run.players()) && !run.hits[scan]
+
 		// #8 on every player and on an NPC.
 		run.perform(null, hurt)
 		result["damage_hits_every_player"] = first.get_brute_loss() >= 29 && second.get_brute_loss() >= 29
@@ -619,6 +648,14 @@
 		babylon_tutorial_harm(dummy, list("effect" = "disease", "disease" = "[/datum/disease/cold]"))
 		var/datum/disease/illness = length(dummy.diseases) ? dummy.diseases[1] : null
 		result["effect_disease_not_contagious"] = illness?.spread_flags == DISEASE_SPREAD_NON_CONTAGIOUS
+		babylon_tutorial_harm(dummy, list("effect" = "tox", "amount" = 12))
+		result["effect_tox"] = dummy.get_tox_loss() >= 11
+		babylon_tutorial_harm(dummy, list("effect" = "oxy", "amount" = 13))
+		result["effect_oxy"] = dummy.get_oxy_loss() >= 12
+		var/wounds_before = length(dummy.all_wounds)
+		babylon_tutorial_harm(dummy, list("effect" = "wound", "wound" = "[/datum/wound/blunt/bone/severe]", "zone" = BODY_ZONE_R_LEG))
+		result["effect_wound"] = length(dummy.all_wounds) > wounds_before
+		result["effect_wound_refuses_unlisted"] = !babylon_tutorial_harm(dummy, list("effect" = "wound", "wound" = "[/datum/wound]"))
 		ADD_TRAIT(dummy, TRAIT_GODMODE, "babylon_test")
 		result["god_mode_spared"] = !babylon_tutorial_harm(dummy, list("effect" = "brute", "amount" = 50)) && dummy.get_brute_loss() < 1
 
@@ -648,29 +685,46 @@
 		result["revive_surviving_body"] = first.stat != DEAD && first.ckey == first_key && (QDELETED(ghost) || ghost.ckey != first_key)
 		result["dead_false_after_revive"] = !dead_check.evaluate(run)
 
-		// #19 a destroyed body: a new one with the same looks and clothes, where it died.
+		// #19 a destroyed body: a new one with the same looks and clothes, where it died. The
+		// scrubs fell off when it was destroyed (as in a gib): the new body wears those, no copy.
+		// The shoes are destroyed: they are made again.
 		var/obj/item/clothing/under/rank/medical/doctor/scrubs = new(second)
 		second.equip_to_slot_or_del(scrubs, ITEM_SLOT_ICLOTHING)
-		result["test_body_dressed"] = second.w_uniform == scrubs
+		var/obj/item/clothing/shoes/sneakers/white/shoes = new(second)
+		second.equip_to_slot_or_del(shoes, ITEM_SLOT_FEET)
+		result["test_body_dressed"] = second.w_uniform == scrubs && second.shoes == shoes
 		var/turf/death_tile = locate(base.x + 2, base.y + 3, base.z)
 		second.forceMove(death_tile)
 		second.death()
 		var/mob/dead/observer/second_ghost = second.ghostize(TRUE)
 		made += second_ghost
+		second.dropItemToGround(scrubs, TRUE)
+		made += scrubs
+		qdel(shoes)
 		qdel(second)
 		result["destroyed_body_counts_dead"] = !!dead_check.evaluate(run) && !run.body_of(second_key)
-		var/list/second_shot = run.snapshots[second_key]
-		var/datum/outfit/second_outfit = second_shot?["outfit"]
-		result["snapshot_has_clothes"] = second_outfit?.uniform == /obj/item/clothing/under/rank/medical/doctor
 		run.perform(null, revive)
 		var/mob/living/carbon/human/rebuilt = run.body_of(second_key)
 		made += rebuilt
 		result["revive_rebuilds_body"] = istype(rebuilt) && rebuilt != second && rebuilt.stat != DEAD && get_turf(rebuilt) == death_tile
 		result["rebuilt_looks_the_same"] = rebuilt?.real_name == "Second Tester"
-		result["rebuilt_wears_the_same"] = istype(rebuilt?.w_uniform, /obj/item/clothing/under/rank/medical/doctor)
+		var/scrubs_on_floor = 0
+		for(var/obj/item/clothing/under/rank/medical/doctor/loose in death_tile)
+			scrubs_on_floor++
+		result["rebuilt_wears_the_originals"] = rebuilt?.w_uniform == scrubs && !scrubs_on_floor
+		result["rebuilt_gets_gone_items_again"] = istype(rebuilt?.shoes, /obj/item/clothing/shoes/sneakers/white) && rebuilt?.shoes != shoes
 		result["rebuilt_gets_player"] = rebuilt?.ckey == second_key && (QDELETED(second_ghost) || second_ghost.ckey != second_key)
 		result["nobody_dead_after_revive"] = !dead_check.evaluate(run)
 		result["revive_leaves_living_alone"] = isnull(run.revive_player(first_key))
+
+		// Nobody around to come back (an SSD corpse; a player in the lobby has no ghost either):
+		// a revive leaves the body dead and pulls no one in.
+		var/mob/living/carbon/human/absent = new(locate(base.x + 4, base.y + 3, base.z))
+		made += absent
+		run.add_player(absent)
+		var/absent_key = babylon_tutorial_player_key(absent)
+		absent.death()
+		result["absent_player_not_revived"] = isnull(run.revive_player(absent_key)) && absent.stat == DEAD
 		babylon_tutorial_end()
 		result["end_clears_objective"] = !first.alerts["babylon_tutorial_objective"]
 	catch(var/exception/error)

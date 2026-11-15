@@ -465,9 +465,11 @@
 				character.buckled?.unbuckle_mob(character, TRUE)
 				character.forceMove(start)
 			// Play instances run the tutorial: the first player starts the world's one run, later
-			// ones join it. Admins editing one test-run it.
+			// ones join it. Admins editing one test-run it. Started from a timer, with no try
+			// above it: starting a run spawns NPCs (outfits), and a harmless stack_trace in there
+			// must not unwind to a catch and leave the world without its run.
 			if(isliving(character) && GLOB.babylon_world.plays_tutorial_on_join())
-				babylon_tutorial_player_spawned(character)
+				addtimer(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_tutorial_player_spawned), character), 0)
 	catch(var/exception/error)
 		log_world("Babylon: spawning [player_key] in the tutorial failed: [error] ([error?.file]:[error?.line])")
 	tutorial_spawning -= player_key

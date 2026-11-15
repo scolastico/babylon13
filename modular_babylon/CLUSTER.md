@@ -656,7 +656,7 @@ tiles.
 | Spawn NPC | (re)creates an NPC spawner's NPC |
 | Give item | puts an item in every living player's hand |
 | Damage / effect | on every living player or one NPC: brute, burn, toxin or suffocation damage, a bleeding cut, a wound, setting them on fire, a knockdown, blurred vision, blindness or a disease (never contagious); god mode and unhurtable NPCs are spared |
-| Heal / revive | on every player or one NPC: a full heal, healing one damage type by an amount, or reviving the dead: a dead player's body is revived and the player put back in; when the body was destroyed, a new one with the same looks and clothes appears where it was (or at the start marker) |
+| Heal / revive | on every player or one NPC: a full heal, healing one damage type by an amount, or reviving the dead: a dead player's body is revived and the player put back in; when the body was destroyed, a new one with the same looks appears where it was (or at the start marker), wearing the clothes the old body dropped (only lost items are made again); players in the lobby or SSD are not pulled back |
 | Enable/disable triggers | chains steps: only the next step's triggers listen |
 | Sound | plays one of a dozen sounds for the players |
 | Complete | the "Tutorial complete!" screen with **Back to lobby**, for every player |

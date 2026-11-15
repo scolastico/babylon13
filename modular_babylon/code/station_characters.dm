@@ -221,33 +221,17 @@
 	var/list/bodyparts = list()
 	for(var/obj/item/bodypart/part as anything in body.bodyparts)
 		bodyparts += list(list("zone" = part.body_zone, "brute" = part.brute_dam, "burn" = part.burn_dam))
-	var/datum/dna/dna = body.dna
-	var/list/dna_data = list(
-		"unique_enzymes" = dna.unique_enzymes,
-		"unique_identity" = dna.unique_identity,
-		"unique_features" = dna.unique_features,
-		"features" = islist(dna.features) ? dna.features.Copy() : list(),
-		"mutant_bodyparts" = islist(dna.mutant_bodyparts) ? dna.mutant_bodyparts.Copy() : list(),
-		"body_markings" = islist(dna.body_markings) ? dna.body_markings.Copy() : list(),
-		"blood_type" = dna.blood_type?.id,
-	)
 	var/datum/bank_account/account = SSeconomy.bank_accounts_by_id["[body.account_id]"]
 	// A body on a shuttle's tile, which the level saves as what lies beneath the shuttle (it loads
 	// again at its roundstart dock; players' own shuttles are saved where they are), would come back
 	// over that. The same tiles as the level writer's (checkpoint_skipped_tiles()).
-	return list(
+	var/list/entry = list(
 		"id" = body_id,
 		"type" = "[body.type]",
 		"x" = tile.x,
 		"y" = tile.y,
 		"z" = tile.z,
 		"on_shuttle" = !!skipped_tiles[tile],
-		"real_name" = babylon_save_text(body.real_name),
-		"gender" = body.gender,
-		"physique" = body.physique,
-		"age" = body.age,
-		"species" = "[dna.species.type]",
-		"dna" = dna_data,
 		"job" = body.mind?.assigned_role?.title,
 		"balance" = account?.account_balance,
 		"stat" = body.stat,
@@ -257,6 +241,11 @@
 		"oxy" = body.get_oxy_loss(),
 		"records" = records,
 	)
+	// Name, gender, physique, age, species and DNA: the shared identity format (tutorial/players.dm).
+	var/list/identity = babylon_capture_identity(body)
+	for(var/key in identity)
+		entry[key] = identity[key]
+	return entry
 
 // --- Restoring ------------------------------------------------------------------------------
 
@@ -324,37 +313,9 @@
 		body.set_ssd_indicator(TRUE)
 	return body
 
-/// Species, DNA, name, blood type and look of a saved character.
+/// Species, DNA, name, blood type and look of a saved character (the shared identity helper).
 /datum/babylon_save/proc/apply_character_identity(mob/living/carbon/human/body, list/entry)
-	var/list/saved = islist(entry["dna"]) ? entry["dna"] : list()
-	var/species_type = text2path(entry["species"])
-	if(!ispath(species_type, /datum/species))
-		species_type = /datum/species/human
-	var/list/features = islist(saved["features"]) ? saved["features"] : body.dna.features.Copy()
-	var/list/mutant_parts = islist(saved["mutant_bodyparts"]) ? saved["mutant_bodyparts"] : list()
-	var/list/markings = islist(saved["body_markings"]) ? saved["body_markings"] : list()
-	// set_species() keeps the DNA's current features over the ones it is given: the saved ones go
-	// into the DNA first, so the species' organs (tails, ears ...) are made from them.
-	body.dna.features = features.Copy()
-	body.dna.mutant_bodyparts = mutant_parts.Copy()
-	body.dna.body_markings = markings.Copy()
-	body.set_species(species_type, icon_update = FALSE, pref_load = FALSE, override_features = features.Copy(), override_mutantparts = mutant_parts.Copy(), override_markings = markings.Copy())
-	for(var/field in list("unique_enzymes", "unique_identity", "unique_features"))
-		if(istext(saved[field]))
-			body.dna.vars[field] = saved[field]
-	if(istext(saved["blood_type"]))
-		body.set_blood_type(saved["blood_type"])
-	if(istext(entry["gender"]))
-		body.gender = entry["gender"]
-	if(istext(entry["physique"]))
-		body.physique = entry["physique"]
-	if(isnum(entry["age"]))
-		body.age = entry["age"]
-	if(istext(entry["real_name"]) && length(entry["real_name"]))
-		body.real_name = entry["real_name"]
-		body.name = entry["real_name"]
-		body.dna.real_name = entry["real_name"]
-	body.updateappearance(icon_update = TRUE, mutcolor_update = TRUE, mutations_overlay_update = TRUE)
+	babylon_apply_identity(body, entry)
 
 /mob/living/carbon/human/babylon_after_restore(list/fields)
 	var/list/entry = fields["babylon_character"]

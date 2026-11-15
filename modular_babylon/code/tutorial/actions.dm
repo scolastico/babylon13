@@ -612,7 +612,7 @@
 
 /obj/babylon_tutorial/action/heal/own_schema()
 	return babylon_tutorial_body_target_fields("healed or revived") + list(
-		babylon_tutorial_field("heal", "Do", "choice", "full", "Full heal: all damage, wounds and illnesses. Revive: dead players (or the dead NPC) come back fully healed; a player is put back into their body, or into a new one that looks the same and wears the same, where the old body was destroyed. Living players are left as they are.", options = babylon_tutorial_options(list("full" = "Full heal", "type" = "Heal one damage type", "revive" = "Revive the dead"))),
+		babylon_tutorial_field("heal", "Do", "choice", "full", "Full heal: all damage, wounds and illnesses. Revive: dead players (or the dead NPC) come back fully healed; a player is put back into their body, or, where the old body was destroyed, into a new one that looks the same and wears the same clothes (the ones it dropped; only lost ones are made again). Only players in their body or watching as a ghost come back. Living players are left as they are.", options = babylon_tutorial_options(list("full" = "Full heal", "type" = "Heal one damage type", "revive" = "Revive the dead"))),
 		babylon_tutorial_field("damage_type", "Damage type", "choice", "brute", null, options = babylon_tutorial_damage_options(), when = list("heal" = list("type"))),
 		babylon_tutorial_field("amount", "Amount", "number", 50, "How much of that damage is healed.", min = 1, max = 500, when = list("heal" = list("type"))),
 	)
