@@ -747,7 +747,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 
 /// The clip as a map (TGM). skip_space: tiles that were space are left as they are. no_apc: tile
 /// indexes ("dx,dy") whose APCs are left out (the target area already has its own).
+/// The clip as map text (a single-level TGM map), for tests; files are written from the pieces.
 /proc/babylon_area_map_text(datum/babylon_area_clip/clip, skip_space, list/no_apc)
+	return jointext(babylon_area_map_pieces(clip, skip_space, no_apc), "")
+
+/// The clip as a TGM map in pieces of at most BABYLON_SAVE_PIECE_BYTES, written with
+/// babylon_write_pieces() (persistence.dm) like a save's level maps.
+/proc/babylon_area_map_pieces(datum/babylon_area_clip/clip, skip_space, list/no_apc)
 	var/list/headers = list()
 	var/list/dictionary = list()
 	var/list/grid = list()
@@ -777,7 +783,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				headers += "\"[key]\" = [header]"
 			grid += "[key]\n"
 		grid += "\"}\n"
-	return "//[DMM2TGM_MESSAGE]\n[headers.Join()][grid.Join()]"
+	var/list/pieces = list("//[DMM2TGM_MESSAGE]\n")
+	pieces += babylon_join_in_pieces(headers)
+	pieces += babylon_join_in_pieces(grid)
+	return pieces
 
 /datum/map_template/babylon_clipboard
 	name = "Babylon clipboard"
@@ -943,7 +952,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	// Map loading can pause; icon smoothing must not run then on neighbours of half-loaded tiles.
 	babylon_area_smooth_now(rect)
 	var/path = "data/babylon/clipboard/[file_name].dmm"
-	rustg_file_write(babylon_area_map_text(clip, skip_space, no_apc), path)
+	var/list/write_result = babylon_write_pieces(babylon_area_map_pieces(clip, skip_space, no_apc), path)
+	if(write_result["error"])
+		log_world("BABYLON AREA: writing the copy failed: [write_result["error"]]")
+		fdel(path)
+		return "The copy could not be written."
 	var/datum/map_template/babylon_clipboard/template = new(path, null, TRUE)
 	fdel(path)
 	if(!template.cached_map || template.width != clip.width || template.height != clip.height)
@@ -1273,7 +1286,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		error = babylon_area_too_full(rect)
 		if(!error)
 			clipboard = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5])
-			rustg_file_write(babylon_area_map_text(clipboard, FALSE), "data/babylon/clipboard/[world.port]-[ckey(key)].dmm")
+			var/list/written = babylon_write_pieces(babylon_area_map_pieces(clipboard, FALSE), "data/babylon/clipboard/[world.port]-[ckey(key)].dmm")
+			if(written["error"])
+				log_world("BABYLON AREA: writing the clipboard file failed: [written["error"]]")
 	catch(var/exception/failure)
 		log_world("BABYLON AREA: copy failed: [failure] ([failure.file]:[failure.line])")
 		error = "The copy failed."
