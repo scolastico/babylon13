@@ -109,17 +109,17 @@
 	// The reported tile is deliberately offset by a random amount inside the configured radius.
 	// Whatever listens on the websocket (map tools, but also any automation or bot) only ever gets
 	// a rough estimate of where the player is, never exact coordinates.
-	// "z" and "map" are in the atlas's frame, the same as the stat panel's map link: z within
-	// the station (null off the station) and the map's atlas key. "world_z" and "map_name" are
-	// the raw values, for debugging.
+	// "z" is the z of the whole world. "station_z" is the z within the station levels, the frame
+	// the atlas and the stat panel's map link use (null off the station: CentCom, lavaland, space
+	// ruins). "map" is the map's name, "map_key" its atlas key (null without an atlas URL).
 	var/radius = CONFIG_GET(number/atlas_position_fuzz_radius)
 	window.send_message("player/position", list(
 		"x" = clamp(location.x + rand(-radius, radius), 1, world.maxx),
 		"y" = clamp(location.y + rand(-radius, radius), 1, world.maxy),
-		"z" = atlas_station_z(location.z),
-		"world_z" = location.z,
+		"z" = location.z,
+		"station_z" = atlas_station_z(location.z),
 		"radius" = radius,
-		"map" = atlas_map_key(),
-		"map_name" = SSmapping.current_map?.map_name,
+		"map" = SSmapping.current_map?.map_name,
+		"map_key" = atlas_map_key(),
 		"round_id" = GLOB.round_id,
 	))

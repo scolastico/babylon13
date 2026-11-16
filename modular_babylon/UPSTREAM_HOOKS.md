@@ -178,9 +178,10 @@ entry links to the SPLURT atlas: `code/modules/client/client_procs.dm`
 `openWebMap`, `config/maps.txt` `webmap_url`s). They are not Babylon hooks: when
 upstream merges them, take upstream's version. Babylon worlds use
 `container/default-config`, which has no `maps.txt`, so their stat panel shows no
-map link and send no position updates (both need the map's atlas URL). Both use one
-z frame, the z within the station levels (`atlas_station_z()`), and the map's atlas
-key; a `webmap_url` without a `#` fragment still gets a working link. These follow-up
+map link and send no position updates (both need the map's atlas URL). The link uses
+the z within the station levels (`atlas_station_z()`); position updates send both the
+world z (`z`) and that station z (`station_z`), plus the map's name (`map`) and atlas
+key (`map_key`); a `webmap_url` without a `#` fragment still gets a working link. These follow-up
 fixes are their own commits, so they can be offered to the two pull requests.
 
 Upstream bug fixes (not Babylon hooks, no `BABYLON13` marker; report them upstream and take
