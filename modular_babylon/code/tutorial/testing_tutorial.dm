@@ -1714,35 +1714,27 @@
 		made += body
 		var/obj/item/storage/backpack/pack = new(tile)
 		body.equip_to_slot_if_possible(pack, ITEM_SLOT_BACK, disable_warning = TRUE)
-		var/mob/living/silicon/pai/packed_pai = new(tile)
-		packed_pai.mind_initialize()
-		var/obj/item/pai_card/packed_card = packed_pai.card
-		made += packed_pai
-		made += packed_card
-		packed_card.forceMove(pack)
-		var/mob/living/silicon/pai/held_pai = new(tile)
-		held_pai.mind_initialize()
-		var/obj/item/pai_card/held_card = held_pai.card
-		made += held_pai
-		made += held_card
-		body.put_in_hands(held_card)
-		result["pai_setup"] = packed_card.loc == pack && held_card.loc == body
+		var/list/packed = babylon_test_player_holder(tile, made)
+		var/obj/item/packed_holder = packed[1]
+		var/mob/living/packed_player = packed[2]
+		packed_holder.forceMove(pack)
+		var/list/held = babylon_test_player_holder(tile, made)
+		var/obj/item/held_holder = held[1]
+		var/mob/living/held_player = held[2]
+		body.put_in_hands(held_holder)
+		result["holder_setup"] = packed_holder.loc == pack && held_holder.loc == body && !QDELETED(packed_player) && !QDELETED(held_player)
 		babylon_tutorial_set_inventory(body, "clear_hands", null, FALSE)
-		result["held_card_dropped_not_deleted"] = !QDELETED(held_pai) && !QDELETED(held_card) && isturf(held_card.loc)
+		result["held_player_kept"] = babylon_test_player_freed(held_player, body)
 		babylon_tutorial_set_inventory(body, "clear_all", null, FALSE)
-		result["packed_card_on_floor"] = !QDELETED(packed_pai) && !QDELETED(packed_card) && isturf(packed_card.loc) && QDELETED(pack)
+		result["packed_player_kept"] = babylon_test_player_freed(packed_player, body) && QDELETED(pack)
 		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_find("fr_npc")
 		var/mob/living/carbon/human/npc = spawner.spawn_npc()
 		made += npc
-		var/mob/living/silicon/pai/npc_pai = new(tile)
-		npc_pai.mind_initialize()
-		var/obj/item/pai_card/npc_card = npc_pai.card
-		made += npc_pai
-		made += npc_card
-		npc.put_in_hands(npc_card)
+		var/list/carried = babylon_test_player_holder(tile, made)
+		npc.put_in_hands(carried[1])
 		var/mob/living/carbon/human/respawned = spawner.spawn_npc()
 		made += respawned
-		result["npc_respawn_keeps_pai"] = QDELETED(npc) && respawned != npc && !QDELETED(npc_pai) && !QDELETED(npc_card) && isturf(npc_card.loc)
+		result["npc_respawn_keeps_player"] = QDELETED(npc) && respawned != npc && babylon_test_player_freed(carried[2], respawned)
 
 		// B-M3: Give item counts against the run's cap like Spawn object.
 		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(body))
@@ -1763,3 +1755,30 @@
 	SSbabylon_tutorial.run = stashed_run
 	babylon_tutorial_test_cleanup(made)
 	return result
+
+/// An item holding a player-like mob (it has a mind): a pAI card with its pAI where the build has
+/// pAI cards (the Babylon drone build removes them, silicons.dm), else a mouse in a box.
+/// Returns list(item, mob).
+/proc/babylon_test_player_holder(turf/tile, list/made)
+	if(babylon_is_station_build())
+		var/mob/living/silicon/pai/pai = new(tile)
+		made += pai
+		var/obj/item/pai_card/card = pai.card
+		made += card
+		pai.mind_initialize()
+		return list(card, pai)
+	var/obj/item/storage/box/box = new(tile)
+	made += box
+	var/mob/living/basic/mouse/mouse = new(box)
+	made += mouse
+	mouse.mind_initialize()
+	return list(box, mouse)
+
+/// The player mob survived and is no longer carried by body (it lies somewhere on the floor).
+/proc/babylon_test_player_freed(mob/living/player, mob/living/body)
+	if(QDELETED(player) || !get_turf(player))
+		return FALSE
+	for(var/atom/holder = player.loc; holder && !isturf(holder); holder = holder.loc)
+		if(holder == body)
+			return FALSE
+	return TRUE
