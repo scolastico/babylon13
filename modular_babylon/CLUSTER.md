@@ -292,8 +292,11 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   that resetting or rolling back the world in the lobby begins fresh; worlds that are
   not saved (Persistent off, tutorials) say "Next time this world starts, it begins a
   fresh round."
-  An administrator's Reboot World ends the world the same way (a reboot would restart
-  the run behind the supervisor's back).
+  An administrator's Reboot World (or a TGS hard reboot) after the round has ended
+  does the same (a reboot would restart the run behind the supervisor's back). During
+  a running round of a saved world it saves first and then stops, like a stop from the
+  lobby, so nothing since the last autosave is lost; if that save fails the world keeps
+  running and the admins are told. A world that is not saved stops at once.
 - **Resumed rounds.** A world whose save contains a started round resumes it at once,
   without roundstart job assignment or antagonist rolls, and the station clock goes on
   from the saved station time. A returning player who had a character when the world was
@@ -321,7 +324,11 @@ once every 5 minutes) and **Save and stop world** verbs in the Babylon tab. The
 30/10/5/1 second countdown says how long the world will pause (the last save's time),
 "Saving... the world is paused for about N seconds" appears when it starts and "Saved.
 Play resumes." when it is done. A stop while an autosave runs waits for it (up to two
-minutes) and then saves again. A save writes every level a round can change as
+minutes) and then saves again; an autosave countdown that is still running when the
+world begins to stop gives way to the stop's save, and nothing is saved once the round
+has ended. A save also waits (up to 30 seconds) for a running area operation of the
+world-edit wand or a Paste area action to finish, and no area operation starts while a
+save runs, so a save never holds a half-pasted room. A save writes every level a round can change as
 `z<N>.dmm` in the checkpoint: the station's levels, the map's own extra levels (the
 ice moon's wilderness, mining levels), lavaland and the space levels with their ruins.
 CentCom, transit levels and the Interlink are rebuilt on every start and never saved.
@@ -352,12 +359,19 @@ What a save keeps and what it does not:
   decay, no extra area spawns (machines, pets and job start points placed at random) and no new
   station traits (their effects are in the save). A vehicle keeps its saved equipment (a mining
   Ripley does not roll a new drill on every start). Older saves
-  that still hold such copies are cleaned up on their next start.
+  that still hold such copies are cleaned up on their next start. The station's
+  research (researched nodes, their designs and the research point bank) and the
+  department budgets (cargo's included) are kept too.
 - Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
   (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,
-  idle; whatever was aboard is lost. Shuttles players built themselves are saved where
+  idle; whatever was aboard is lost. A shuttle flown to a dock that is not its roundstart
+  dock (for example a whiteship parked at a ruin) also returns to its home dock and loses
+  everything aboard. Shuttles players built themselves are saved where
   they are. Antagonists, ongoing events, the crew manifest
-  beyond names and jobs, and bank balances are not saved either.
+  beyond names and jobs, and the bank balances of accounts that are not a character's
+  are not saved either. Silicon players are not kept yet (known limitation): a
+  cyborg or the station AI is gone after a restart, with its laws and links, and its
+  player late-joins. Experiments and research logs start over as well.
 - Players' characters: each player's body is kept in its world, by account, with its
   name, species and look, job, injuries and lost limbs, where it stood, and everything it
   wore, held or carried (backpack contents included). ID cards keep their job design,
@@ -366,9 +380,12 @@ What a save keeps and what it does not:
   also when nothing else on their deck changed. They come back only when the save's round
   had started; the restored characters keep their job (counted in its slots), are on the
   crew manifest again and get their job's implants (mindshields) back. A body comes back
-  asleep until its player returns, so the usual cryo rules can free its job. A dead body
+  asleep until its player returns. Until its player has been back once in that run, no
+  one else can put it into a cryopod (it is only asleep because the world restarted);
+  afterwards the usual cryo rules can free its job. A dead body
   comes back dead, and its player rejoins as its ghost. A body saved aboard a shuttle (which
-  returns to its dock on a restart) comes back at the arrivals point. Bodies players left
+  returns to its dock on a restart), or on a level that is not saved (a shuttle in
+  transit, CentCom), comes back at the arrivals point with everything it carried. Bodies players left
   behind (a corpse whose player now plays someone else) are kept too, with their items, and
   belong to nobody. Bodies stay in their world: the character editor's preferences are
   shared between worlds, bodies are not. Not kept: quirks, scars, implants other than the
@@ -526,7 +543,9 @@ Plane or a station; Babylon worlds can build but not submit) and submit it from 
 Creative panel's **Tutorial** tab. The world's owner submits it with a title (1-60
 characters) and a short description (up to 500); the tutorial needs a marker with the
 id `start` (where players begin), and the tab says why Submit is disabled (no start
-marker, the cooldown with the time left, not the owner, not a Creative station world).
+marker, the cooldown with the time left, not the owner, not a Creative station world,
+a test run still running: stop it first, and check that the world is back to its starting
+state, since stopping a run never resets the world; the same applies to Save back).
 Submitting saves the world as it is (the world pauses, as for any save; also in an
 unsaved world) and the supervisor copies that save into
 `<data>/tutorials/pending/<id>/` (`meta.json` plus `save/`). The world keeps no trace
@@ -710,9 +729,9 @@ state and number.
 | Damage / effect | on every living player or one NPC: brute, burn, toxin or suffocation damage, a bleeding cut, a wound, setting them on fire, a knockdown, blurred vision, blindness or a disease (never contagious); god mode and unhurtable NPCs are spared |
 | Heal / revive | on every player or one NPC: a full heal, healing one damage type by an amount, or reviving the dead: a dead player's body is revived and the player put back in; when the body was destroyed, a new one with the same looks appears where it was (or at the start marker), wearing the clothes the old body dropped (only lost items are made again); players in the lobby or SSD are not pulled back |
 | Move NPC | an NPC walks to a marker along a path the game's pathfinder finds (it crawls, slower, when it can't stand); **Doors**: its ID card's doors (the default; job outfits come without an ID), public doors only, or all doors (each door on its way opens for it unless bolted, welded or unpowered); **On arrival** actions run once it is there (or next to the marker when something solid stands on it); after **Give up after** seconds (default 60) it stops where it is and the action's checks and the Test run tab say why |
-| Spawn object | creates anything the Creative panel's Spawn tab may (same search, same blocklist; no mobs) on a marker's tile or spread over a zone (at most 400 tiles): copies (at most 10) or one stack of the given size; one run spawns at most 500 objects |
+| Spawn object | creates anything the Creative panel's Spawn tab may (same search, same blocklist; no mobs) on a marker's tile or spread over a zone (at most 400 tiles): copies (at most 10) or one stack of the given size; one run makes at most 500 objects (Give item and a Set inventory loadout count towards the same 500) |
 | Remove objects | deletes every loose item, or objects of a type and its subtypes, on a marker's tile or in a zone; never players or other mobs, nothing with a mob inside or buckled to it, no tutorial objects, nothing protected (what the area tools keep), no builder tool (or a bag holding one); protected items inside a removed crate stay on the tile |
-| Set inventory | on every living player or one NPC: clear everything, clear the hands only, or replace everything with a stored loadout; the old items are deleted (default) or dropped; builder tools (the tutorial and world-edit wands) are never taken, also not from inside a bag that goes (they move to a free hand or the floor), and are never part of a loadout. **Store my current loadout** copies what you wear and hold (slots, names, settings, reagents, what is in bags; items inside bags keep name, amount, reagents and contents but not their other settings); the loadout can be edited (remove items, add items by type to a slot, a hand or the backpack). An NPC's new items are never saved, like its outfit |
+| Set inventory | on every living player or one NPC: clear everything, clear the hands only, or replace everything with a stored loadout; the old items are deleted (default) or dropped; builder tools (the tutorial and world-edit wands) are never taken, also not from inside a bag that goes (they move to a free hand or the floor), and are never part of a loadout. A player inside an item (a pAI in its card, a brain in an MMI) is never deleted with it: a bag that goes leaves that item on the floor, and such an item itself is dropped, not deleted (an NPC that is spawned again does the same with what it carries). **Store my current loadout** copies what you wear and hold (slots, names, settings, reagents, what is in bags; items inside bags keep name, amount, reagents and contents but not their other settings); the loadout can be edited (remove items, add items by type to a slot, a hand or the backpack). An NPC's new items are never saved, like its outfit |
 | Start event | starts a round event from the Creative panel's Events list, with its rules (no antagonists, nothing that picks on players or wrecks the world); tutorial actions start at most 3 events per 30 seconds; in a tutorial world without Creative the tutorial steps them |
 | Paste area | puts an area back the way it was (a room reset). **A stored snapshot** (the default): select the room with the world-edit wand, then **Store selection in this action** in the action's settings; the copy is kept in the action, so it is saved with the world and comes along when the tutorial is submitted, played or copied, and it pastes back where it was stored (or at a picked **Paste at** tile). **A live area**: copies a source area (a template room) to the picked tile each time it runs; players can change the source before that, so **Protect the source** (on by default) stops anyone from using tools or items on anything in it while the tutorial runs (builder wands still work). Both clear the target first (players are moved aside), paste over several ticks for big rooms and set up walls, pipes and cables as a paste does; tutorial objects, tutorial NPCs and builder tools in the target stay, and the copy never carries tutorial objects. At most 10,000 tiles and 20,000 objects, as the area tools; one area operation runs at a time (a paste waits up to 30 seconds for another). A snapshot stored in an older format is refused with a message to store it again, never pasted half understood |
 | Door / container | opens, closes, locks or unlocks airlocks, windoors, shutters and blast doors, lockers, closets and crates on a marker's tile, in a zone, or shutters by their button id. Open and close follow each thing's own rules (a bolted, welded or unpowered airlock and a locked or welded locker stay shut, and the Test run tab says so); lock and unlock are forced (airlock bolts drop also without power; secure lockers and crates lock, closing first); windoors, shutters and blast doors have no locks; firelocks and protected doors are never touched; closing or locking a locker shuts in whoever stands on its tile (they can climb out) |
@@ -722,7 +741,11 @@ state and number.
 
 Point and Highlight last until the next step's trigger fires (or some seconds, or a
 chosen trigger). Each action can wait (**Delay**) after the ones before it. **Preview**
-in an action's settings runs it for you alone instead of every player. Everything the
+in an action's settings runs it for you alone instead of every player. Preview is off
+(the button says why) for actions that change the world for everyone: Spawn NPC, Spawn
+object, Remove objects, Door / container, Start event, Paste area, Make NPC vulnerable,
+Move NPC, and Damage / effect, Heal / revive or Set inventory on an NPC; try those in a
+test run. A previewed Complete only offers Close. Everything the
 run shows (arrows, outlines, the objective) is shown to every player in the world,
 also to players who join while it runs.
 
@@ -871,9 +894,13 @@ connected to the lobby address and its Reconnect button brings them back once th
 up again. The whole shutdown has to fit Docker's
 `stop_grace_period`.
 
-SIGTERM closes the lobby, saves/stops worlds, and waits for confirmed child
+SIGTERM closes new joins, saves/stops worlds, and waits for confirmed child
 exits for up to `BABYLON_SHUTDOWN_TIMEOUT_SECONDS` (default 600: a station
-world's final save takes about a minute). Docker's stop grace period must be at
+world's final save takes about a minute). Running worlds are asked to stop at
+once; a world that is still starting is asked once it runs (it cannot save
+before), within the same deadline, which is then the longer of the shutdown
+timeout and the startup timeout (`station_startup_timeout_seconds`, 600, for a
+station map). Docker's stop grace period must be at
 least the restart warning + that shutdown timeout + the lobby handoff, about
 12 minutes with the defaults: Compose grants `BABYLON_STOP_GRACE_PERIOD`
 (default 12m). Deployments that set `stop_grace_period` themselves must raise it
@@ -1136,9 +1163,9 @@ Once configured and compiled, double-click **Start Babylon Server.cmd** or
 also accept `-Python` for an explicit executable path.
 
 Start reports an already-running cluster instead of launching duplicates.
-Stop closes the lobby to prevent new starts, waits for any starting worlds to
-initialize, requests a final save/stop for every running world, and waits for
-confirmed exits before stopping the supervisor. A save failure or timeout
+Stop closes the lobby to prevent new starts, requests a final save/stop for
+every running world at once and for each starting world once it has
+initialized, and waits for confirmed exits before stopping the supervisor. A save failure or timeout
 leaves the supervisor and affected children running for recovery; it never
 force-kills a world. The scripts do not delete worlds or checkpoints.
 

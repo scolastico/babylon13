@@ -206,6 +206,36 @@ exempt). `tutorial/npc.dm` overrides `/mob/living/CanAllowThrough`,
 `/mob/living/carbon/attach_rot` and `/obj/item/organ/on_death` for anchored and spawn-dead
 tutorial NPCs.
 
+Persistence overrides (both builds; modular, no upstream edit; merge upstream signature changes
+into them and re-check what each one relies on after every upstream merge):
+- `modular_babylon/code/persistence.dm`:
+  - `/datum/controller/subsystem/atoms/InitAtom`: a hot path with a copied argument list
+    (`atom/A, from_template, list/arguments`) and the `INITIALIZE_HINT_*` contract. It marks
+    companions (objects made during another atom's Initialize). Check its argument list and the
+    hint handling first.
+  - `/datum/controller/subsystem/mapping/LoadGroup` (saved levels instead of the fresh map).
+  - `/turf/open/floor/MakeDirty`, `/datum/controller/subsystem/processing/station/SetupTraits`,
+    `/datum/controller/subsystem/decay/Initialize` and `/datum/controller/subsystem/area_spawn/Initialize`
+    (fresh-map rolls that stand back for a resumed world).
+  - Mapload defaults that stand back while a save loads (`babylon_loading_saved_map()`):
+    `/obj/structure/closet/emcloset/Initialize`, `/obj/item/stack/merge_with_loc` (no stack
+    merging while a save loads), `/obj/machinery/disposal/bin/spawn_contained_animal`,
+    `/mob/living/basic/bot/mulebot/Initialize`, `/obj/machinery/light/Initialize`,
+    `/obj/machinery/camera/Initialize`, `/obj/structure/reflector/Initialize`.
+  - `babylon_after_restore` / `babylon_capture_settings` on lights, cameras, bots, ID cards and
+    mechs (`/obj/vehicle/sealed/mecha`): they read upstream variables (`cell`, `has_mock_cell`,
+    `camera_enabled`, `can_be_possessed`, `trim`, equipment slots).
+- `modular_babylon/code/station_round.dm`: `/world/Reboot` (saves a running round, then stops),
+  `/datum/controller/subsystem/ticker/standard_reboot` and `fire`.
+- `modular_babylon/code/station_characters.dm`: `/obj/machinery/cryopod/mouse_drop_receive`
+  (Skyrat's cryopod: a restored character waits for its player).
+
+The restore paths run without a `try` in some places and under the subsystem's `try` in others:
+a new harmless `stack_trace` in a restore path makes worlds refuse to start ("Restore failed")
+until it is fixed. That is deliberate (a half restore would be written over the world by the
+next save), so run `smoke_native.py` and `smoke_station.py` (including its stability step) after
+every upstream merge.
+
 ## BYOND 516.1686 slot quirk
 
 DreamMaker 516.1686 (`.tgs.yml`) sometimes mishandles whichever variable lands on one
@@ -220,13 +250,20 @@ change can break one build and not the other three. Treat a build that shows it 
 possibly miscompiled, not as noise: the slot is used for code generation too, and a
 clean build only means that whichever variable holds the slot now gives no diagnostic.
 A local that really is never read is an ordinary warning, not the quirk.
+It can also miscompile with no diagnostic at all: in the final review (H2) a clean
+`babylon-station-test.dme` build failed one tutorial test (an NPC's "All doors" walk)
+three times in a row, and the same code passed once a padding global moved the slot. A
+test that fails for no visible reason after an unrelated change is worth one pad move.
 
 Recipe: add or remove one padding global (`var/global/babylon_byond_1686_slot_pad_<n>`)
 in the block for the affected build at the end of `modular_babylon/code/world_flags.dm`,
 then compile all four builds again (repeat until all are clean). The pads do nothing
 else; remove the block once a BYOND build fixes the quirk (check newer 516 builds when
 bumping `.tgs.yml`). `tools/babylon/build_dme.py`, which the Dockerfile uses for every
-DreamMaker run, prints this recipe when a build log shows the quirk's signature.
+DreamMaker run, prints this recipe when a build log shows the quirk's signature, and then
+fails the build (exit 1), so an image is never built from a possibly miscompiled build. A
+maintainer who checked that the warning is a real unused local (not the quirk) and fixed it
+does not need the escape hatch; `BABYLON_ALLOW_SLOT_QUIRK=1` lets such a build pass anyway.
 
 ## Updating upstream
 
@@ -249,6 +286,9 @@ After every merge:
 4. Exercise a fresh wreck, a save/reload, pipe expansion, vent/alarm links,
    materials, airlock groups, and drone death/respawn. Use an isolated process
    and disposable world; never point tests at a player's running instance.
+5. Run `services/supervisor/smoke_native.py` and `smoke_station.py` (with its stability
+   step): a new upstream `stack_trace` in a restore path stops worlds from starting, and a
+   new random roll in an `Initialize` changes saved worlds on every restart.
 
 The private prototype's six upstream hooks were carried forward. Its chat
 transcript patch, personal config, owner name, repair object IDs, saved world,
