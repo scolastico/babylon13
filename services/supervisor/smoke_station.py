@@ -196,7 +196,7 @@ def main():
 
     def ticker_state(run):
         info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
-        return {e["entry"]: e["value"] for e in info["entries"]}["ticker_state"]
+        return dm_entries(info)["ticker_state"]
 
     def wait_round_running(run, timeout=180):
         deadline = time.time() + timeout
@@ -238,7 +238,7 @@ def main():
 
     def info(run):
         result = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
-        return {e["entry"]: e["value"] for e in result["entries"]}
+        return dm_entries(result)
 
     catalog = {entry["id"]: entry for entry in json.loads((root / "_maps/babylon/catalog.json").read_text())["maps"]}
 
@@ -251,7 +251,7 @@ def main():
         assert status.get("map") == map_id, status
         entry = dict(ready_seconds=round(time.time() - started))
         info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
-        entry["info"] = {e["entry"]: e["value"] for e in info["entries"]}
+        entry["info"] = dm_entries(info)
         expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
         assert entry["info"]["map_name"] == expected, (entry["info"], expected)
         entry["world_flags"] = checks(run, "test_station_world_flags")
@@ -286,9 +286,9 @@ def main():
             address = api("join", {"world": world}, actor="testadmin")["address"]
             query = dict(action="redeem", actor="testadmin", ticket=address.split("babylon_ticket=")[1])
             exported = debug(run, "call", dict(target="session", proc="test_supervisor_export", args=[json.dumps(query)]))["result"]
-            assert any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), exported
+            assert dm_entries(exported).get("ok"), exported
             exported = debug(run, "call", dict(target="session", proc="test_supervisor_export", args=[json.dumps(query)]))["result"]
-            assert not any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), "Ticket replay accepted"
+            assert not dm_entries(exported).get("ok"), "Ticket replay accepted"
             entry["ticket_redemption"] = True
             # Round control: hold, the owner's start, the round's end back to the lobby.
             entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
@@ -468,7 +468,7 @@ def main():
                 return values
             if time.time() > deadline:
                 info = debug(run, "call", dict(target="session", proc=proc + "_info", args=[]))["result"]
-                raise AssertionError((proc, values, {e["entry"]: e["value"] for e in info["entries"]}))
+                raise AssertionError((proc, values, dm_entries(info)))
             time.sleep(3)
 
     def run_creative_plane(map_id):
@@ -482,7 +482,7 @@ def main():
         assert status["ready"] and status.get("build") == "station" and status.get("map") == map_id, status
         entry = dict(ready_seconds=round(time.time() - started))
         info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
-        entry["info"] = {e["entry"]: e["value"] for e in info["entries"]}
+        entry["info"] = dm_entries(info)
         expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
         assert entry["info"]["map_name"] == expected, (entry["info"], expected)
         entry["world_flags"] = checks(run, "test_station_world_flags")

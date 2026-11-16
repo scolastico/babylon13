@@ -17,7 +17,6 @@
 /// How long a Paste area waits for another area operation to finish.
 #define BABYLON_TUTORIAL_PASTE_WAIT (30 SECONDS)
 
-
 /obj/babylon_tutorial/action/paste_area
 	tutorial_kind = "paste_area"
 	kind_name = "Paste area"

@@ -7,13 +7,21 @@
 // - Delete: removes a tutorial object from the tile.
 // The area tools (select, copy, paste, fill, border, clear, undo) are the world-edit wand's
 // (world_edit.dm, spec 12 #1): this wand keeps tutorial objects only.
-// Right-clicking the wand in hand switches to the next mode.
+// Right-clicking the wand in hand switches to the next mode (or cancels a pick or a Reposition).
 // Its window also lists every tutorial object (Overview, with warnings) and starts or stops a
 // test run for the holder. While the wand is in a hand, its holder's client sees every tutorial
 // object as an image with its id; nobody else does, and tutorial players never do.
+// Reposition (spec 12 #15): the Overview or an object's settings arm the wand; the next click on
+// a tile moves that object there, settings and links unchanged.
+// Visibility (spec 12 #17): each builder may hide objects (one by one or by group) from their own
+// view, for the session; nothing changes for players or for what the objects do.
 
 /// Every tutorial wand that exists (SSbabylon_tutorial keeps their views in sync).
 GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
+
+/// Builder key (ckey) => list(tutorial object => TRUE): the objects hidden in that builder's wand
+/// view (spec 12 #17). For this session only: never saved, and it changes nothing for players.
+GLOBAL_LIST_EMPTY(babylon_tutorial_hidden)
 
 /// The tutorial wand's type (the Creative panel hands it out).
 /proc/babylon_tutorial_wand_type()
@@ -52,6 +60,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	var/shown_version = -1
 	/// Last result line for the window: list(text, ok, id).
 	var/list/notice
+	/// The object a Reposition armed the wand for: the next click on a tile moves it there.
+	var/datum/weakref/moving
 
 /obj/item/babylon_tutorial_wand/Initialize(mapload)
 	. = ..()
@@ -68,6 +78,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		. += span_warning("It only works in creative worlds.")
 		return
 	. += span_notice("Mode: <b>[babylon_tutorial_mode_name(mode)]</b>. Use it in your hand to open its window, right-click it while holding it to switch modes, then click tiles with it.")
+	var/obj/babylon_tutorial/object = moving_object()
+	if(object)
+		. += span_notice("Repositioning <b>[html_encode(object.tutorial_id)]</b>: click its new tile, or right-click the wand in hand to cancel.")
 
 /proc/babylon_tutorial_mode_name(mode)
 	switch(mode)
@@ -112,6 +125,14 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	if(!usable_by(user))
 		to_chat(user, span_warning("The tutorial wand only works in creative worlds."))
 		return TRUE
+	// While the wand waits for a click (a Reposition, a zone or tile pick), right-click cancels.
+	if(moving_object())
+		stop_moving(user, "Reposition cancelled.")
+		return TRUE
+	if(picking)
+		picking = null
+		report(user, "Zone picking cancelled.", TRUE)
+		return TRUE
 	var/list/modes = babylon_tutorial_wand_modes()
 	// An unknown mode (a wand from before the split was in Select) goes on to the first one.
 	set_mode(user, modes[(modes.Find(mode) % length(modes)) + 1])
@@ -122,6 +143,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		return
 	mode = new_mode
 	picking = null
+	moving = null
 	user.balloon_alert(user, "[lowertext(babylon_tutorial_mode_name(mode))] mode")
 	sync_view(TRUE)
 	SStgui.update_uis(src)
@@ -149,6 +171,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	var/turf/tile = get_turf(target)
 	if(!tile)
 		return ITEM_INTERACT_BLOCKING
+	if(moving)
+		move_object(user, tile)
+		return ITEM_INTERACT_SUCCESS
 	if(picking)
 		pick_corner(user, tile)
 		return ITEM_INTERACT_SUCCESS
@@ -243,6 +268,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 /// Starts picking a zone for an object's setting: the next two clicks are its corners. A "tile"
 /// setting takes one click.
 /obj/item/babylon_tutorial_wand/proc/start_picking(mob/living/user, obj/babylon_tutorial/object, key)
+	// A pick replaces an armed Reposition: the next click is a corner.
+	moving = null
 	picking = list(WEAKREF(object), key, null)
 	if(babylon_tutorial_schema_field(object.type, key)?["type"] == "tile")
 		to_chat(user, span_notice("Click the tile with the wand."))
@@ -292,6 +319,123 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	report(user, "Zone of [object.tutorial_id] set: [abs(tile.x - first.x) + 1]x[abs(tile.y - first.y) + 1] tiles.", TRUE)
 	user.balloon_alert(user, "zone set")
 	open_editor(user, object)
+
+// ---------------------------------------------------------------------------------------------
+// Reposition (spec 12 #15)
+
+/// The object the wand is armed to move, if any.
+/obj/item/babylon_tutorial_wand/proc/moving_object()
+	var/obj/babylon_tutorial/object = moving?.resolve()
+	if(QDELETED(object))
+		moving = null
+		return null
+	return object
+
+/// Arms the wand: its next click on a tile moves the object there. Arming it again for the same
+/// object cancels.
+/obj/item/babylon_tutorial_wand/proc/toggle_moving(mob/living/user, obj/babylon_tutorial/object)
+	if(moving_object() == object)
+		stop_moving(user, "Reposition cancelled.")
+		return
+	picking = null
+	moving = WEAKREF(object)
+	focus = WEAKREF(object)
+	sync_view(TRUE)
+	user.balloon_alert(user, "click the new tile")
+	var/hidden = babylon_tutorial_is_hidden(babylon_tutorial_view_key(user), object)
+	report(user, "Click the new tile of [object.tutorial_id] with the wand[hidden ? " (it is hidden in your view: it shows until it is moved)" : ""]. Press Reposition again or right-click the wand in hand to cancel.", TRUE)
+
+/obj/item/babylon_tutorial_wand/proc/stop_moving(mob/living/user, text)
+	moving = null
+	sync_view(TRUE)
+	report(user, text, TRUE)
+
+/// Moves the armed object to a tile. Its settings and the links to it stay; an NPC spawner takes
+/// its NPC along. Zones and picked tiles are settings: they stay where they are.
+/obj/item/babylon_tutorial_wand/proc/move_object(mob/living/user, turf/tile)
+	var/obj/babylon_tutorial/object = moving_object()
+	moving = null
+	if(!object)
+		report(user, "The object to reposition is gone.", FALSE)
+		return
+	var/turf/old = get_turf(object)
+	babylon_tutorial_reposition(object, tile)
+	log_game("BABYLON TUTORIAL: [key_name(user)] moved [object.kind_name] [object.tutorial_id] from [AREACOORD(old)] to [AREACOORD(tile)].")
+	var/zones = babylon_tutorial_has_field_type(object.type, list("zone", "tile"))
+	report(user, "Moved [object.tutorial_id] to [tile.x], [tile.y].[zones ? " Its zones and picked tiles stay where they are." : ""]", TRUE)
+	user.balloon_alert(user, "moved")
+	sync_view(TRUE)
+
+/// Moves a tutorial object to a tile (an NPC spawner with its NPC). Everything else about it stays.
+/proc/babylon_tutorial_reposition(obj/babylon_tutorial/object, turf/tile)
+	object.forceMove(tile)
+	if(istype(object, /obj/babylon_tutorial/npc_spawner))
+		var/obj/babylon_tutorial/npc_spawner/spawner = object
+		var/mob/living/carbon/human/npc = spawner.current_npc()
+		if(npc)
+			npc.buckled?.unbuckle_mob(npc, TRUE)
+			npc.forceMove(tile)
+	babylon_tutorial_changed()
+
+// ---------------------------------------------------------------------------------------------
+// Visibility (spec 12 #17): the builder's own view only
+
+/// Whose view a mob's wand shows: the player's ckey (a ref for a mob without one).
+/proc/babylon_tutorial_view_key(mob/user)
+	return user?.ckey || REF(user)
+
+/// The view group of an object: "marker", "trigger", "gate", "action" or "npc".
+/proc/babylon_tutorial_view_group(obj/babylon_tutorial/object)
+	if(istype(object, /obj/babylon_tutorial/trigger/gate))
+		return "gate"
+	return object.tutorial_category
+
+/// The view groups, in the Overview's order.
+/proc/babylon_tutorial_view_groups()
+	return list("marker" = "Markers", "trigger" = "Triggers", "gate" = "Gates", "action" = "Actions", "npc" = "NPC spawners")
+
+/// Every placed object of a view group.
+/proc/babylon_tutorial_view_group_members(group)
+	var/list/members = list()
+	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
+		if(babylon_tutorial_view_group(object) == group)
+			members += object
+	return members
+
+/proc/babylon_tutorial_is_hidden(key, obj/babylon_tutorial/object)
+	var/list/hidden = GLOB.babylon_tutorial_hidden[key]
+	return !!(hidden && hidden[object])
+
+/// Hides or shows objects in one builder's view; that builder's wands redraw.
+/proc/babylon_tutorial_set_hidden(key, list/objects, hide)
+	var/list/hidden = GLOB.babylon_tutorial_hidden[key]
+	if(!hidden)
+		hidden = list()
+		GLOB.babylon_tutorial_hidden[key] = hidden
+	for(var/obj/babylon_tutorial/object as anything in objects)
+		if(hide)
+			hidden[object] = TRUE
+		else
+			hidden -= object
+	if(!length(hidden))
+		GLOB.babylon_tutorial_hidden -= key
+	for(var/obj/item/babylon_tutorial_wand/wand as anything in GLOB.babylon_tutorial_wands)
+		if(wand.viewer && babylon_tutorial_view_key(wand.viewer) == key)
+			wand.sync_view(TRUE)
+		SStgui.update_uis(wand)
+
+/// A deleted object leaves every builder's hidden list.
+/proc/babylon_tutorial_forget_hidden(obj/babylon_tutorial/object)
+	for(var/key in GLOB.babylon_tutorial_hidden.Copy())
+		var/list/hidden = GLOB.babylon_tutorial_hidden[key]
+		hidden -= object
+		if(!length(hidden))
+			GLOB.babylon_tutorial_hidden -= key
+
+/// How many placed objects a builder has hidden.
+/proc/babylon_tutorial_hidden_count(key)
+	var/list/hidden = GLOB.babylon_tutorial_hidden[key]
+	return length(hidden)
 
 /obj/item/babylon_tutorial_wand/proc/report(mob/user, text, ok)
 	notice = list("text" = text, "ok" = ok, "id" = world.time)
@@ -344,11 +488,18 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	shown_version = GLOB.babylon_tutorial_version
 	var/obj/babylon_tutorial/focused = focus?.resolve()
 	var/list/related = focused ? focused.references() : list()
+	var/obj/babylon_tutorial/moved = moving_object()
 	var/list/colors = babylon_tutorial_category_colors()
+	var/view_key = babylon_tutorial_view_key(viewer)
 	var/list/per_tile = list()
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		var/turf/tile = get_turf(object)
 		if(!tile)
+			continue
+		// Hidden in this builder's view; the object being repositioned or configured still shows,
+		// marked hidden, so it never seems to vanish.
+		var/hidden = babylon_tutorial_is_hidden(view_key, object)
+		if(hidden && object != moved && object != focused)
 			continue
 		var/index = per_tile[tile] || 0
 		per_tile[tile] = index + 1
@@ -362,8 +513,15 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		picture.maptext_width = 96
 		picture.maptext_x = -32
 		picture.maptext_y = -10
-		picture.maptext = "<span style='font-family: \"Grand9K Pixel\"; font-size: 6pt; text-align: center; color: [colors[object.tutorial_category]]; -dm-text-outline: 1px black'>[html_encode(object.tutorial_id)]</span>"
-		if(object == focused)
+		var/label = html_encode(object.tutorial_id)
+		if(object == moved)
+			label += " (moving)"
+		if(hidden)
+			label += " (hidden)"
+		picture.maptext = "<span style='font-family: \"Grand9K Pixel\"; font-size: 6pt; text-align: center; color: [colors[object.tutorial_category]]; -dm-text-outline: 1px black'>[label]</span>"
+		if(object == moved)
+			picture.filters = filter(type = "outline", size = 1, color = "#4dd2ff")
+		else if(object == focused)
 			picture.filters = filter(type = "outline", size = 1, color = "#ffffff")
 		else if(related[object.tutorial_id])
 			picture.filters = filter(type = "outline", size = 1, color = "#ffd34d")
@@ -423,10 +581,15 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 	for(var/id in all_presets)
 		var/list/preset = all_presets[id]
 		presets += list(list("id" = id, "name" = preset["name"], "desc" = preset["desc"], "icon" = preset["icon"]))
-	return list("palette" = groups, "presets" = presets, "colors" = babylon_tutorial_category_colors())
+	var/list/view_groups = list()
+	var/list/group_names = babylon_tutorial_view_groups()
+	for(var/id in group_names)
+		view_groups += list(list("id" = id, "name" = group_names[id]))
+	return list("palette" = groups, "presets" = presets, "colors" = babylon_tutorial_category_colors(), "view_groups" = view_groups)
 
 /obj/item/babylon_tutorial_wand/ui_data(mob/user)
 	var/list/objects = list()
+	var/view_key = babylon_tutorial_view_key(user)
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		var/turf/tile = get_turf(object)
 		var/list/issues = object.issues()
@@ -454,14 +617,19 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
 			"after" = object.tutorial_category == "trigger" && object.setting("starts") == "after" ? object.setting("after") : null,
 			"follow_ups" = istype(object, /obj/babylon_tutorial/action) ? babylon_tutorial_follow_ups(object) : null,
+			"group" = babylon_tutorial_view_group(object),
+			"hidden" = babylon_tutorial_is_hidden(view_key, object),
 		))
 	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
 	var/list/zone_pick
 	if(picking)
 		var/obj/babylon_tutorial/object = picking_object()
 		zone_pick = list("id" = object?.tutorial_id, "corner" = picking[3] ? 2 : 1, "tile" = object && babylon_tutorial_schema_field(object.type, picking[2])?["type"] == "tile")
+	var/obj/babylon_tutorial/moved = moving_object()
 	return list(
 		"creative" = babylon_creative_enabled(),
+		"moving" = moved ? list("id" = moved.tutorial_id, "ref" = REF(moved), "hidden" = babylon_tutorial_is_hidden(view_key, moved)) : null,
+		"hidden_count" = babylon_tutorial_hidden_count(view_key),
 		"mode" = mode,
 		"selected_kind" = selected_kind,
 		"selected_preset" = selected_preset,
@@ -520,6 +688,30 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			picking = null
 			report(user, "Zone picking cancelled.", TRUE)
 			return TRUE
+		if("reposition")
+			var/obj/babylon_tutorial/object = locate(params["ref"]) in GLOB.babylon_tutorial_objects
+			if(object)
+				toggle_moving(user, object)
+			return TRUE
+		if("cancel_move")
+			if(moving_object())
+				stop_moving(user, "Reposition cancelled.")
+			return TRUE
+		if("visibility")
+			var/obj/babylon_tutorial/object = locate(params["ref"]) in GLOB.babylon_tutorial_objects
+			if(object)
+				babylon_tutorial_set_hidden(babylon_tutorial_view_key(user), list(object), !!params["hidden"])
+			return TRUE
+		if("group_visibility")
+			var/group = "[params["group"]]"
+			if(!babylon_tutorial_view_groups()[group])
+				return FALSE
+			babylon_tutorial_set_hidden(babylon_tutorial_view_key(user), babylon_tutorial_view_group_members(group), !!params["hidden"])
+			return TRUE
+		if("show_all")
+			babylon_tutorial_set_hidden(babylon_tutorial_view_key(user), GLOB.babylon_tutorial_objects.Copy(), FALSE)
+			report(user, "Every tutorial object shows in your view again.", TRUE)
+			return TRUE
 		if("test_start")
 			var/from_start = params["from"] == "start"
 			if(from_start && !babylon_tutorial_marker_turf("start"))
@@ -528,7 +720,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			var/reset = !!params["reset_npcs"]
 			var/restart = !!babylon_tutorial_current_run()
 			var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(from_start, TRUE, reset, list(user))
-			report(user, "Test run [restart ? "restarted" : "started"] for everyone in this world[from_start ? " at the start marker" : ""][reset ? ", NPCs reset" : ""]. The triggers are live now.", TRUE)
+			// Hiding is the builder's view only: say so, so a hidden object never seems missing.
+			var/hidden_count = babylon_tutorial_hidden_count(babylon_tutorial_view_key(user))
+			report(user, "Test run [restart ? "restarted" : "started"] for everyone in this world[from_start ? " at the start marker" : ""][reset ? ", NPCs reset" : ""]. The triggers are live now.[hidden_count ? " [hidden_count] object\s hidden in your view still work as usual (Overview: Show all)." : ""]", TRUE)
 			babylon_tutorial_tell_players(run, user, "[user.real_name] [restart ? "restarted" : "started"] a tutorial test run for everyone in this world.")
 			log_game("BABYLON TUTORIAL: [key_name(user)] [restart ? "restarted" : "started"] the test run.")
 			return TRUE
@@ -659,6 +853,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		"search" = search,
 		"notice" = notice,
 		"picking" = !!wand && wand.picking_object() == object,
+		"moving" = !!wand && wand.moving_object() == object,
+		"hidden" = babylon_tutorial_is_hidden(babylon_tutorial_view_key(user), object),
 	)
 	if(babylon_tutorial_has_field_type(object.type, list("area_clip", "zone")))
 		// The builder's world-edit selection, for "Store selection" and "Use my selection".
@@ -770,6 +966,12 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 				return FALSE
 			wand.focus = WEAKREF(object)
 			wand.start_picking(user, object, key)
+			return TRUE
+		if("reposition")
+			wand.toggle_moving(user, object)
+			return TRUE
+		if("visibility")
+			babylon_tutorial_set_hidden(babylon_tutorial_view_key(user), list(object), !!params["hidden"])
 			return TRUE
 		if("clear_zone")
 			var/key = "[params["key"]]"

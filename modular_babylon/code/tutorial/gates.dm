@@ -10,8 +10,9 @@
 //   LATCHED: true once it fired in this run. A gate input counts with its own current state.
 // - Number gate: a number per run, starting at its start value. Each input has an operation that
 //   runs every time that input fires (count up, set, add ... by a constant or by another number
-//   gate's number); a level input "fires" each time its condition becomes true. The gate is true while its condition holds (equals, at least ...). Its On
-//   change actions run whenever the number changes.
+//   gate's number); a level input "fires" each time its condition becomes true. The gate is true
+//   while its condition holds (equals, at least ...). Its On change actions run whenever the
+//   number changes.
 //
 // Gates update at once, in one evaluation wave: a trigger fires, the gates it feeds update, the
 // gates THEY feed update, and so on. Every wave keeps the path of gates it is updating; a gate
@@ -217,18 +218,20 @@
 		if(!isnull(was) && was != state)
 			notify_gates(input, state)
 
-/// Gates that started listening since the last check are evaluated once, in placing order, each
-/// as its own wave: one that holds becomes true (On true, it fires, the gates it feeds see it),
-/// one that does not runs On false. On change does not run for this first evaluation.
+/// Gates that started listening since the last check are evaluated once, each as its own wave:
+/// one that holds becomes true (On true, it fires, the gates it feeds see it), one that does not
+/// runs On false. On change does not run for this first evaluation. They settle in dependency
+/// order (a pending gate's pending input gates first), so a gate never reads an input gate that
+/// is about to settle; gates in a loop fall back to placing order.
 /datum/babylon_tutorial_run/proc/settle_pending_gates()
 	if(preview || !length(gate_pending))
 		return
 	var/list/pending = gate_pending
 	gate_pending = list()
-	for(var/obj/babylon_tutorial/trigger/gate/gate in GLOB.babylon_tutorial_objects)
+	for(var/obj/babylon_tutorial/trigger/gate/gate as anything in babylon_tutorial_gate_settle_order(pending))
 		if(completed)
 			return
-		if(!pending[gate] || !is_enabled(gate))
+		if(QDELETED(gate) || !is_enabled(gate))
 			continue
 		start_gate_wave()
 		gate_wave += gate
@@ -242,6 +245,28 @@
 		else
 			run_actions(gate, gate.setting("actions_false"))
 		gate_wave.Cut()
+
+/// The pending gates (gate => TRUE) in settle order: placing order, but every pending gate a
+/// gate takes as an input comes before it (depth first). A gate already being visited (a loop)
+/// is not waited for.
+/proc/babylon_tutorial_gate_settle_order(list/pending)
+	var/list/order = list()
+	var/list/visiting = list()
+	for(var/obj/babylon_tutorial/trigger/gate/gate in GLOB.babylon_tutorial_objects)
+		if(pending[gate])
+			babylon_tutorial_gate_settle_visit(gate, pending, order, visiting)
+	return order
+
+/proc/babylon_tutorial_gate_settle_visit(obj/babylon_tutorial/trigger/gate/gate, list/pending, list/order, list/visiting)
+	if((gate in order) || visiting[gate])
+		return
+	visiting[gate] = TRUE
+	for(var/id in gate.input_ids())
+		var/obj/babylon_tutorial/trigger/gate/input = babylon_tutorial_find(id)
+		if(istype(input) && pending[input])
+			babylon_tutorial_gate_settle_visit(input, pending, order, visiting)
+	visiting -= gate
+	order += gate
 
 /// A gate started listening: it is false until the next check evaluates it.
 /datum/babylon_tutorial_run/proc/gate_started(obj/babylon_tutorial/trigger/gate/gate)

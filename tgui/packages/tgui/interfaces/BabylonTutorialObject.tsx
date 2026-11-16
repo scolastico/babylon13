@@ -172,6 +172,10 @@ export type ObjectData = {
   } | null;
   notice: { text: string; ok: boolean; id: number; key?: string } | null;
   picking: boolean;
+  /** The wand is armed to move this object: its next click on a tile moves it there. */
+  moving?: boolean;
+  /** Hidden in this builder's wand view (only their view; it still works). */
+  hidden?: boolean;
   /** The builder's world-edit selection (objects with a zone or a stored area). */
   area_selection?: AreaSelection | null;
   gate?: GateLive;
@@ -229,6 +233,33 @@ export const BabylonTutorialObject = () => {
             </Box>
           )}
         </Section>
+        {data.moving && (
+          <NoticeBox info>
+            <Icon name="up-down-left-right" mr={1} />
+            Reposition: click the new tile of <b>{data.id}</b> with the wand.
+            Press Reposition again (or right-click the wand in hand) to cancel.
+            {data.hidden &&
+              ' It is hidden in your view: it shows until it is moved.'}
+          </NoticeBox>
+        )}
+        {data.hidden && !data.moving && (
+          <NoticeBox>
+            <Stack align="center">
+              <Stack.Item grow>
+                <Icon name="eye-slash" mr={1} />
+                Hidden in your wand view. It still works; only you don't see it.
+              </Stack.Item>
+              <Stack.Item>
+                <Button
+                  icon="eye"
+                  onClick={() => act('visibility', { hidden: false })}
+                >
+                  Show
+                </Button>
+              </Stack.Item>
+            </Stack>
+          </NoticeBox>
+        )}
         {data.notice && !data.notice.key && !data.notice.ok && (
           <NoticeBox danger>{data.notice.text}</NoticeBox>
         )}
@@ -291,6 +322,20 @@ export const BabylonTutorialObject = () => {
             <Stack.Item>
               <Button icon="location-arrow" onClick={() => act('jump')}>
                 Go there
+              </Button>
+            </Stack.Item>
+            <Stack.Item>
+              <Button
+                icon="up-down-left-right"
+                selected={!!data.moving}
+                tooltip={
+                  data.moving
+                    ? 'Waiting for a click on the new tile. Press again to cancel.'
+                    : 'Move it: the next click with the wand on a tile puts it there. Settings and links stay.'
+                }
+                onClick={() => act('reposition')}
+              >
+                {data.moving ? 'Cancel reposition' : 'Reposition'}
               </Button>
             </Stack.Item>
             <Stack.Item grow />

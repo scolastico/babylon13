@@ -165,7 +165,9 @@
 	arrow.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
 	animate(arrow, pixel_y = 28, time = 5, loop = -1, easing = SINE_EASING)
 	animate(pixel_y = 20, time = 5, easing = SINE_EASING)
-	run.show_image(arrow, duration, target, clear_on)
+	// One arrow per target: performed again (a repeating trigger, another Point action at the
+	// same target), the new arrow replaces the old one.
+	run.show_image(arrow, duration, target, clear_on, babylon_tutorial_image_key("arrow", target))
 	if(setting("from") == "speaker")
 		var/atom/movable/speaker = babylon_tutorial_speaker(setting("speaker"))
 		if(speaker)
@@ -176,6 +178,16 @@
 
 /// A speaker points at a target for the run's players: an arrow flies from the speaker to the
 /// target (an image only they see) and players nearby read "<speaker> points at <target>.".
+/// The flying arrow fades out as it arrives: the Point action's own arrow already bounces over
+/// the target, and a second one resting next to it was the two-arrows bug (spec 12 #14).
+/// How long a speaker's arrow flies to its target, and how long it then takes to fade out.
+#define BABYLON_TUTORIAL_POINT_FLIGHT 1.7
+#define BABYLON_TUTORIAL_POINT_FADE 0.3
+
+/// The key of a run image (show_image()): what it shows, and on which atom.
+/proc/babylon_tutorial_image_key(what, atom/on)
+	return "[what]:[REF(on)]"
+
 /proc/babylon_tutorial_point(datum/babylon_tutorial_run/run, atom/movable/speaker, atom/target)
 	if(isliving(speaker) && !babylon_tutorial_awake(speaker))
 		return
@@ -186,8 +198,9 @@
 	var/image/flying = image('icons/hud/screen_gen.dmi', origin, "arrow", ABOVE_ALL_MOB_LAYER)
 	SET_PLANE_EXPLICIT(flying, POINT_PLANE, origin)
 	flying.appearance_flags = RESET_COLOR | RESET_ALPHA | KEEP_APART
-	animate(flying, pixel_x = (destination.x - origin.x) * ICON_SIZE_X + target.pixel_x, pixel_y = (destination.y - origin.y) * ICON_SIZE_Y + target.pixel_y, time = 1.7, easing = EASE_OUT)
-	run.show_image(flying, 2.5 SECONDS)
+	animate(flying, pixel_x = (destination.x - origin.x) * ICON_SIZE_X + target.pixel_x, pixel_y = (destination.y - origin.y) * ICON_SIZE_Y + target.pixel_y, time = BABYLON_TUTORIAL_POINT_FLIGHT, easing = EASE_OUT)
+	animate(alpha = 0, time = BABYLON_TUTORIAL_POINT_FADE)
+	run.show_image(flying, BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE, null, null, babylon_tutorial_image_key("pointing", speaker))
 	for(var/mob/player as anything in run.audience())
 		if(get_dist(origin, player) <= 7)
 			to_chat(player, span_emote("<b>[html_encode(speaker.name)]</b> points at [html_encode(target.name)]."))
@@ -214,7 +227,14 @@
 	var/atom/target = babylon_tutorial_resolve(setting("target"))
 	if(!target)
 		return
+	var/color = setting("color") || "#ffd34d"
 	var/image/glow = image(loc = target)
+	babylon_tutorial_dress_outline(glow, target, color)
+	// One outline per target, and it follows the target's look (an NPC that turns or lies down).
+	run.show_image(glow, show_duration(), target, run.clear_triggers_for(src), babylon_tutorial_image_key("outline", target), color)
+
+/// Makes an image an outlined copy of an atom's current look, attached to it.
+/proc/babylon_tutorial_dress_outline(image/glow, atom/target, color)
 	glow.appearance = target.appearance
 	glow.loc = target
 	glow.pixel_x = 0
@@ -226,10 +246,9 @@
 	glow.layer = target.layer + 0.01
 	glow.mouse_opacity = MOUSE_OPACITY_TRANSPARENT
 	glow.appearance_flags |= KEEP_APART | RESET_TRANSFORM
-	glow.filters = filter(type = "outline", size = 2, color = setting("color") || "#ffd34d")
+	glow.filters = filter(type = "outline", size = 2, color = color)
 	animate(glow.filters[1], size = 1, time = 6, loop = -1)
 	animate(size = 2, time = 6)
-	run.show_image(glow, show_duration(), target, run.clear_triggers_for(src))
 
 /obj/babylon_tutorial/action/highlight/summary()
 	return "[setting("target") || "?"][setting("until") == "seconds" ? " for [setting("duration")] s" : ""]"

@@ -277,6 +277,73 @@
 		wand.use_on(base, builder)
 		wand.use_on(locate(base.x + 3, base.y + 2, base.z), builder)
 		result["wand_picks_zone"] = (zone.zone() ~= list(base.x, base.y, base.x + 3, base.y + 2, base.z)) && !wand.picking
+
+		// #15 Reposition: armed by the button, cancelled by pressing it again or by right-clicking
+		// the wand in hand; the next click moves the object (no placing in the wand's mode),
+		// settings and links kept; an NPC spawner takes its NPC along.
+		var/obj/babylon_tutorial/action/message/moved = babylon_tutorial_test_place(/obj/babylon_tutorial/action/message, base, "obj_moved", list("text" = "Moved"), made)
+		var/obj/babylon_tutorial/trigger/start/linking = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/start, base, "obj_linking", list("actions" = list("obj_moved")), made)
+		wand.toggle_moving(builder, moved)
+		var/list/wand_data = wand.ui_data(builder)
+		var/list/moving_data = wand_data["moving"]
+		result["reposition_armed"] = wand.moving_object() == moved && moving_data?["id"] == "obj_moved"
+		wand.toggle_moving(builder, moved)
+		result["reposition_cancel_pressing_again"] = !wand.moving_object()
+		var/mode_before = wand.mode
+		wand.toggle_moving(builder, moved)
+		wand.attack_self_secondary(builder)
+		result["reposition_cancel_right_click"] = !wand.moving_object() && wand.mode == mode_before
+		var/turf/new_tile = locate(base.x + 5, base.y + 1, base.z)
+		var/count_before = length(GLOB.babylon_tutorial_objects)
+		wand.toggle_moving(builder, moved)
+		wand.use_on(new_tile, builder)
+		result["reposition_moves"] = get_turf(moved) == new_tile && !wand.moving_object() && length(GLOB.babylon_tutorial_objects) == count_before
+		result["reposition_keeps_settings_and_links"] = moved.tutorial_id == "obj_moved" && moved.setting("text") == "Moved" && (linking.setting("actions") ~= list("obj_moved")) && babylon_tutorial_find("obj_moved") == moved
+		var/turf/guide_tile = locate(base.x + 6, base.y + 1, base.z)
+		wand.toggle_moving(builder, guide)
+		wand.use_on(guide_tile, builder)
+		result["reposition_npc_follows"] = get_turf(guide) == guide_tile && get_turf(guide.current_npc()) == guide_tile
+
+		// #17 Visibility: the builder's view only. Hiding one object drops its image; Reposition
+		// shows it again marked hidden; groups hide every member; a deleted object leaves the list.
+		var/view_key = babylon_tutorial_view_key(builder)
+		wand.focus = null
+		wand.viewer = builder
+		wand.build_images()
+		var/shown_all = length(wand.images)
+		babylon_tutorial_set_hidden(view_key, list(moved), TRUE)
+		wand.viewer = builder
+		wand.build_images()
+		result["visibility_hides_one"] = length(wand.images) == shown_all - 1 && babylon_tutorial_is_hidden(view_key, moved)
+		var/list/listed_hidden = list()
+		wand_data = wand.ui_data(builder)
+		for(var/list/entry in wand_data["objects"])
+			if(entry["hidden"])
+				listed_hidden += entry["id"]
+		result["visibility_listed_hidden"] = (listed_hidden ~= list("obj_moved")) && wand_data["hidden_count"] == 1
+		result["visibility_view_only"] = babylon_tutorial_find("obj_moved") == moved && !babylon_tutorial_is_hidden(babylon_tutorial_view_key(guide.current_npc()), moved)
+		wand.toggle_moving(builder, moved)
+		wand.viewer = builder
+		wand.build_images()
+		var/labelled_hidden = FALSE
+		for(var/image/picture as anything in wand.images)
+			if(findtext(picture.maptext, "obj_moved (moving) (hidden)"))
+				labelled_hidden = TRUE
+		result["reposition_shows_hidden"] = length(wand.images) == shown_all && labelled_hidden
+		wand.moving = null
+		wand.focus = null
+		var/list/actions_group = babylon_tutorial_view_group_members("action")
+		babylon_tutorial_set_hidden(view_key, actions_group, TRUE)
+		var/all_actions_hidden = length(actions_group) >= 1
+		for(var/obj/babylon_tutorial/member as anything in actions_group)
+			if(member.tutorial_category != "action" || !babylon_tutorial_is_hidden(view_key, member))
+				all_actions_hidden = FALSE
+		result["visibility_group_hides_all"] = all_actions_hidden && !babylon_tutorial_is_hidden(view_key, linking)
+		babylon_tutorial_set_hidden(view_key, babylon_tutorial_view_group_members("action"), FALSE)
+		result["visibility_group_shows_all"] = !babylon_tutorial_hidden_count(view_key)
+		babylon_tutorial_set_hidden(view_key, list(moved), TRUE)
+		qdel(moved)
+		result["visibility_forgets_deleted"] = !babylon_tutorial_hidden_count(view_key) && !GLOB.babylon_tutorial_hidden[view_key]
 		GLOB.babylon_world.creative = was_creative
 	catch(var/exception/error)
 		result["no_error"] = FALSE
@@ -452,6 +519,56 @@
 		run.last_state[after_say] = TRUE
 		qdel(after_say)
 		result["deleted_trigger_forgotten"] = !(after_say in run.enabled) && !(after_say in run.hits) && !(after_say in run.last_state) && !(after_say in run.fired)
+
+		// #14 One arrow per target. A Point action with a speaker: the bouncing arrow over the
+		// target, and the speaker's arrow, which fades out as it arrives (it never rests next to
+		// the first). Performed again, both are replaced, never doubled.
+		var/mob/living/carbon/human/pointer = spawner.current_npc()
+		pointer.revive(HEAL_ALL | HEAL_ADMIN)
+		pointer.forceMove(locate(base.x + 1, base.y + 3, base.z))
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(base.x + 4, base.y + 3, base.z), "rev_spot", list(), made)
+		var/obj/babylon_tutorial/action/point/spoken = babylon_tutorial_test_place(/obj/babylon_tutorial/action/point, base, "rev_spoken", list("target" = "rev_spot", "from" = "speaker", "speaker" = "rev_npc", "until" = "seconds", "duration" = 30), made)
+		var/atom/spot_target = babylon_tutorial_resolve("rev_spot")
+		run.clear_images()
+		run.pointing.Cut()
+		run.perform(null, spoken)
+		var/arrow_key = babylon_tutorial_image_key("arrow", spot_target)
+		var/image/flying = run.image_with_key(babylon_tutorial_image_key("pointing", pointer))
+		var/list/flying_info = flying ? run.images[flying] : null
+		result["point_speaker_one_arrow"] = length(run.images) == 2 && !!run.image_with_key(arrow_key) && length(run.pointing) == 1
+		result["point_speaker_arrow_fades_on_arrival"] = flying_info && flying_info["until"] <= world.time + BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE
+		run.perform(null, spoken)
+		var/obj/babylon_tutorial/action/point/second_point = babylon_tutorial_test_place(/obj/babylon_tutorial/action/point, base, "rev_spoken2", list("target" = "rev_spot", "until" = "seconds", "duration" = 30), made)
+		run.perform(null, second_point)
+		var/arrows = 0
+		for(var/image/picture as anything in run.images)
+			var/list/picture_info = run.images[picture]
+			if(picture_info["key"] == arrow_key)
+				arrows++
+		result["point_again_replaces"] = arrows == 1 && length(run.images) == 2 && length(run.pointing) == 1
+		// A preview never adds a second arrow next to the world run's.
+		var/datum/babylon_tutorial_run/point_preview = new(TRUE, player)
+		point_preview.perform(null, second_point)
+		result["preview_adds_no_second_arrow"] = !point_preview.image_with_key(arrow_key)
+		qdel(point_preview)
+		// Highlight: one outline per target, and it follows the NPC's look (a stale copy would
+		// show a second body).
+		var/obj/babylon_tutorial/action/highlight/outline = babylon_tutorial_test_place(/obj/babylon_tutorial/action/highlight, base, "rev_outline", list("target" = "rev_npc", "until" = "seconds", "duration" = 30), made)
+		run.perform(null, outline)
+		run.perform(null, outline)
+		var/outline_key = babylon_tutorial_image_key("outline", pointer)
+		var/image/glow = run.image_with_key(outline_key)
+		var/outlines = 0
+		for(var/image/picture as anything in run.images)
+			var/list/picture_info = run.images[picture]
+			if(picture_info["key"] == outline_key)
+				outlines++
+		result["highlight_again_replaces"] = outlines == 1
+		pointer.setDir(pointer.dir == NORTH ? SOUTH : NORTH)
+		run.refresh_copies()
+		result["highlight_follows_look"] = glow && glow.dir == pointer.dir
+		run.clear_images()
+		run.pointing.Cut()
 
 		// Speech: private, and a Guide box when the player cannot hear the speaker.
 		result["speech_heard_nearby"] = babylon_tutorial_speak(run, spawner.current_npc(), "Hello there")
@@ -692,6 +809,16 @@
 		second.equip_to_slot_or_del(scrubs, ITEM_SLOT_ICLOTHING)
 		var/obj/item/clothing/shoes/sneakers/white/shoes = new(second)
 		second.equip_to_slot_or_del(shoes, ITEM_SLOT_FEET)
+		// A full backpack falls off with its contents inside: they stay inside when it comes back.
+		var/obj/item/storage/backpack/full_pack = new(second)
+		second.equip_to_slot_or_del(full_pack, ITEM_SLOT_BACK)
+		var/list/pack_contents = list()
+		for(var/count in 1 to 30)
+			var/obj/item/wrench/roll = new(second.loc)
+			if(!full_pack.atom_storage.attempt_insert(roll, second, override = TRUE, messages = FALSE))
+				qdel(roll)
+				break
+			pack_contents += roll
 		result["test_body_dressed"] = second.w_uniform == scrubs && second.shoes == shoes
 		var/turf/death_tile = locate(base.x + 2, base.y + 3, base.z)
 		second.forceMove(death_tile)
@@ -700,6 +827,9 @@
 		made += second_ghost
 		second.dropItemToGround(scrubs, TRUE)
 		made += scrubs
+		second.dropItemToGround(full_pack, TRUE)
+		made += full_pack
+		made += pack_contents
 		qdel(shoes)
 		qdel(second)
 		result["destroyed_body_counts_dead"] = !!dead_check.evaluate(run) && !run.body_of(second_key)
@@ -712,6 +842,11 @@
 		for(var/obj/item/clothing/under/rank/medical/doctor/loose in death_tile)
 			scrubs_on_floor++
 		result["rebuilt_wears_the_originals"] = rebuilt?.w_uniform == scrubs && !scrubs_on_floor
+		var/contents_inside = 0
+		for(var/obj/item/wrench/roll as anything in pack_contents)
+			if(roll.loc == full_pack)
+				contents_inside++
+		result["rebuilt_full_pack_keeps_contents"] = rebuilt?.back == full_pack && length(pack_contents) > 1 && contents_inside == length(pack_contents) && !(locate(/obj/item/wrench) in death_tile)
 		result["rebuilt_gets_gone_items_again"] = istype(rebuilt?.shoes, /obj/item/clothing/shoes/sneakers/white) && rebuilt?.shoes != shoes
 		result["rebuilt_gets_player"] = rebuilt?.ckey == second_key && (QDELETED(second_ghost) || second_ghost.ckey != second_key)
 		result["nobody_dead_after_revive"] = !dead_check.evaluate(run)
@@ -765,7 +900,7 @@
 	try
 		// Inputs: say triggers that wait for an Enable action, fired by hand.
 		var/list/inputs = list()
-		for(var/id in list("g_in_a", "g_in_b", "g_in_c", "g_in_up", "g_in_down", "g_in_set", "g_in_add", "g_in_sub", "g_in_mul", "g_in_reset", "g_in_by", "g_in_deep", "g_in_m", "g_in_w"))
+		for(var/id in list("g_in_a", "g_in_b", "g_in_c", "g_in_up", "g_in_down", "g_in_set", "g_in_add", "g_in_sub", "g_in_mul", "g_in_reset", "g_in_by", "g_in_deep", "g_in_m", "g_in_w", "g_in_o"))
 			inputs[id] = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/say, base, id, list("phrase" = id, "starts" = "manual", "once" = 0), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/sound, base, "g_true", list("sound" = "ding"), made)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/action/sound, base, "g_false", list("sound" = "ding"), made)
@@ -853,6 +988,16 @@
 		// Disabling: g_down = NOT g_or.
 		var/obj/babylon_tutorial/trigger/gate/logic/down = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_down", list("mode" = "not", "inputs" = list("g_or")), made)
 
+		// Settle order: g_o_first = NOT g_o_x is placed BEFORE g_o_x = NOT g_in_o (which holds at
+		// the start). g_o_x must settle first, so g_o_first never fires on a stale false input.
+		var/obj/babylon_tutorial/trigger/gate/logic/order_first = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_o_first", list("mode" = "not", "inputs" = list("g_o_x")), made)
+		var/obj/babylon_tutorial/trigger/gate/logic/order_x = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/gate/logic, base, "g_o_x", list("mode" = "not", "inputs" = list("g_in_o")), made)
+		var/list/order_pending = list()
+		order_pending[order_first] = TRUE
+		order_pending[order_x] = TRUE
+		var/list/order = babylon_tutorial_gate_settle_order(order_pending)
+		result["settle_order_inputs_first"] = length(order) == 2 && order[1] == order_x && order[2] == order_first
+
 		var/mob/living/carbon/human/player = new(base)
 		made += player
 		var/mob/living/carbon/human/second = new(base)
@@ -865,6 +1010,7 @@
 		// The start is symmetric: a gate that does not hold runs On false once; On change does
 		// not run at the start; only gates that hold fire.
 		result["start_runs_on_false"] = babylon_tutorial_test_count(run.history, "g_and>g_false") == 1 && babylon_tutorial_test_count(run.history, "g_ops>g_false") == 1 && !run.fired[gate_and]
+		result["settle_dependency_order"] = run.gate_states[order_x] && run.fired[order_x] == 1 && !run.gate_states[order_first] && !run.fired[order_first]
 		result["number_start_true_fires"] = run.gate_states[by_gate] && run.fired[by_gate] == 1
 		result["start_no_on_change"] = !babylon_tutorial_test_count(run.history, "g_not>g_change") && !babylon_tutorial_test_count(run.history, "g_and>g_change") && !babylon_tutorial_test_count(run.history, "g_ops>g_change")
 		var/history_size = length(run.history)

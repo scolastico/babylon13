@@ -111,6 +111,32 @@ const show = (override: Partial<ObjectData> = {}) => {
 };
 
 describe('BabylonTutorialObject', () => {
+  it('offers Reposition and shows the armed and hidden states', () => {
+    show();
+    expect(screen.getByText('Reposition')).toBeDefined();
+    expect(screen.queryByText('Cancel reposition')).toBeNull();
+    expect(
+      screen.queryByText('Hidden in your wand view', { exact: false }),
+    ).toBeNull();
+    cleanup();
+    show({ moving: true, hidden: true });
+    expect(screen.getByText('Cancel reposition')).toBeDefined();
+    expect(
+      screen.getByText(
+        'It is hidden in your view: it shows until it is moved.',
+        {
+          exact: false,
+        },
+      ),
+    ).toBeDefined();
+    cleanup();
+    show({ hidden: true });
+    expect(
+      screen.getByText('Hidden in your wand view', { exact: false }),
+    ).toBeDefined();
+    expect(screen.getByText('Show')).toBeDefined();
+  });
+
   it('builds the form from the schema and hides inactive fields', () => {
     show();
     expect(screen.getByText('Message')).toBeDefined();

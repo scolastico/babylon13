@@ -266,6 +266,10 @@
 			item = new path(tile)
 		if(entry["packed"])
 			backpack = backpack || body.get_item_by_slot(ITEM_SLOT_BACK)
+			// Still inside the restored original backpack: it stays where it is (inserting it again
+			// would fail on a full pack and drop it to the floor).
+			if(backpack && item.loc == backpack.atom_storage?.real_location)
+				continue
 			if(!backpack?.atom_storage?.attempt_insert(item, body, override = TRUE, force = STORAGE_FULLY_LOCKED, messages = FALSE))
 				item.forceMove(tile)
 		else if(entry["hand"])

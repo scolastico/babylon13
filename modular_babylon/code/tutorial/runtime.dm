@@ -455,17 +455,75 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	return found
 
 /// Shows an image to every player, for a while. anchor: the atom it is attached to; when that is
-/// deleted, the image goes. clear_on: triggers whose firing removes it early.
-/datum/babylon_tutorial_run/proc/show_image(image/picture, duration, atom/anchor, list/clear_on)
-	images[picture] = list("until" = world.time + duration, "anchor" = anchor ? WEAKREF(anchor) : null, "clear_on" = clear_on ? clear_on.Copy() : list())
+/// deleted, the image goes. clear_on: triggers whose firing removes it early. key: what the image
+/// shows ("arrow" plus its target ...): one image per key, a new one replaces the one before, so a
+/// target never shows two arrows or two outlines (spec 12 #14). A preview does not add a second
+/// one next to the world's run's image with the same key. copy_color: the image is an outlined
+/// copy of the anchor's look (a Highlight); it follows the anchor's look as it changes.
+/datum/babylon_tutorial_run/proc/show_image(image/picture, duration, atom/anchor, list/clear_on, key, copy_color)
+	if(key)
+		if(preview)
+			var/datum/babylon_tutorial_run/world_run = babylon_tutorial_current_run()
+			if(world_run && world_run != src && world_run.image_with_key(key))
+				return FALSE
+		var/image/before = image_with_key(key)
+		if(before)
+			remove_image(before)
+	images[picture] = list("until" = world.time + duration, "anchor" = anchor ? WEAKREF(anchor) : null, "clear_on" = clear_on ? clear_on.Copy() : list(), "key" = key, "copy_color" = copy_color, "copied" = copy_color ? anchor?.appearance : null)
 	if(anchor)
 		RegisterSignal(anchor, COMSIG_QDELETING, PROC_REF(on_qdeleting), override = TRUE)
+		if(copy_color)
+			RegisterSignals(anchor, babylon_tutorial_look_signals(), PROC_REF(copied_anchor_changed), override = TRUE)
 	for(var/client/viewer as anything in image_viewers())
 		viewer.images += picture
 	timers += addtimer(CALLBACK(src, PROC_REF(expire_images)), duration + 1, TIMER_STOPPABLE)
+	return TRUE
+
+/// The image the run shows for a key, if any.
+/datum/babylon_tutorial_run/proc/image_with_key(key)
+	for(var/image/picture as anything in images)
+		var/list/info = images[picture]
+		if(info["key"] == key)
+			return picture
+	return null
+
+/// Signals after which an atom may look different (an NPC turns, lies down, takes something).
+/proc/babylon_tutorial_look_signals()
+	return list(COMSIG_ATOM_POST_DIR_CHANGE, COMSIG_LIVING_POST_UPDATE_TRANSFORM, COMSIG_ATOM_UPDATED_ICON, COMSIG_MOB_UPDATE_HELD_ITEMS, COMSIG_LIVING_SET_BODY_POSITION)
+
+/datum/babylon_tutorial_run/proc/copied_anchor_changed(atom/source)
+	SIGNAL_HANDLER
+	// The look is complete only after the proc that sent the signal: refresh on the next tick.
+	addtimer(CALLBACK(src, PROC_REF(refresh_copies)), 0, TIMER_UNIQUE)
+
+/// Outlined copies of an atom's look (Highlight) take its look again when it changed, so a
+/// highlighted NPC that turned, lay down or picked something up never shows a stale second body.
+/datum/babylon_tutorial_run/proc/refresh_copies()
+	for(var/image/picture as anything in images)
+		var/list/info = images[picture]
+		if(!info["copy_color"])
+			continue
+		var/datum/weakref/anchor_ref = info["anchor"]
+		var/atom/anchor = anchor_ref?.resolve()
+		if(!anchor || anchor.appearance == info["copied"])
+			continue
+		info["copied"] = anchor.appearance
+		babylon_tutorial_dress_outline(picture, anchor, info["copy_color"])
 
 /datum/babylon_tutorial_run/proc/remove_image(image/picture)
+	var/list/info = images[picture]
 	images -= picture
+	var/datum/weakref/anchor_ref = info ? info["anchor"] : null
+	var/atom/anchor = anchor_ref?.resolve()
+	if(anchor && info["copy_color"])
+		var/still_copied = FALSE
+		for(var/image/other as anything in images)
+			var/list/other_info = images[other]
+			if(other_info["copy_color"] && other_info["anchor"] == anchor_ref)
+				still_copied = TRUE
+				break
+		if(!still_copied)
+			UnregisterSignal(anchor, babylon_tutorial_look_signals())
 	// Every client: a player who left the run (or the world's players changed) loses it too.
 	for(var/client/viewer as anything in GLOB.clients)
 		viewer.images -= picture
@@ -473,6 +531,7 @@ SUBSYSTEM_DEF(babylon_tutorial)
 
 /// Expired images go; players who joined or reconnected since see the ones still running.
 /datum/babylon_tutorial_run/proc/expire_images()
+	refresh_copies()
 	var/list/clients = image_viewers()
 	for(var/image/picture as anything in images.Copy())
 		var/list/info = images[picture]
@@ -498,7 +557,14 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		if(trigger in clear_on)
 			pointing -= list(entry)
 
+/// A speaker points at a target again and again. One entry per speaker and target: a point
+/// action performed again replaces its earlier entry (the speaker never points twice at once).
 /datum/babylon_tutorial_run/proc/repeat_point(atom/movable/speaker, atom/target, until, list/clear_on)
+	for(var/list/entry as anything in pointing.Copy())
+		var/datum/weakref/speaker_ref = entry[1]
+		var/datum/weakref/target_ref = entry[2]
+		if(speaker_ref.resolve() == speaker && target_ref.resolve() == target)
+			pointing -= list(entry)
 	pointing += list(list(WEAKREF(speaker), WEAKREF(target), until, 0, clear_on ? clear_on.Copy() : list()))
 	continue_pointing()
 

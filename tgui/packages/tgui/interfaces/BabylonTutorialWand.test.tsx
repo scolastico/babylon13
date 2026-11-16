@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, mock } from 'bun:test';
 import {
   act,
   cleanup,
@@ -13,6 +13,7 @@ import {
   BabylonTutorialWand,
   buildFlow,
   gateStateText,
+  groupMembers,
   type TutorialObject,
   type WandData,
   WORLD_EDIT_HINT,
@@ -402,5 +403,167 @@ describe('tutorial wand helpers', () => {
     expect(gateStateText({ ...base, listening: false })).toBe(
       '3 (true), not listening',
     );
+  });
+});
+
+// Reposition (spec 12 #15) and visibility (#17): the actions the Overview sends.
+describe('BabylonTutorialWand view and reposition', () => {
+  const sent: { action: string; params: any }[] = [];
+  mock.module('../events/act', () => ({
+    sendAct: (action: string, params: any = {}) => {
+      sent.push({ action, params });
+    },
+  }));
+  const marker: TutorialObject = {
+    ref: '[0x2]',
+    id: 'start',
+    kind: 'marker',
+    kind_name: 'Marker',
+    category: 'marker',
+    icon: 'location-dot',
+    summary: 'this tile',
+    x: 5,
+    y: 5,
+    z: 2,
+    refs: [],
+    issues: [],
+    group: 'marker',
+    hidden: true,
+  };
+  const viewData: Partial<WandData> = {
+    objects: [{ ...data.objects[0], group: 'trigger' }, marker],
+    view_groups: [
+      { id: 'marker', name: 'Markers' },
+      { id: 'trigger', name: 'Triggers' },
+      { id: 'gate', name: 'Gates' },
+      { id: 'action', name: 'Actions' },
+      { id: 'npc', name: 'NPC spawners' },
+    ],
+    hidden_count: 1,
+  };
+  // An Overview row: the id in bold next to the row's Settings button.
+  const rowOf = (id: string) =>
+    screen
+      .getAllByText(id)
+      .filter((node) => node.tagName === 'B')
+      .map((node) => node.parentElement?.parentElement?.parentElement)
+      .find((row) => row?.querySelector('.Button .fa-sliders')) as HTMLElement;
+  const iconButton = (row: HTMLElement, icon: string) =>
+    row.querySelector(`.Button .fa-${icon}`)?.closest('.Button') as HTMLElement;
+  const last = () => sent[sent.length - 1];
+
+  it('labels hidden objects and toggles one object', () => {
+    show(viewData);
+    openTab('Overview');
+    const row = rowOf('start');
+    expect(row.textContent).toContain('hidden');
+    expect(rowOf('enter_lab').textContent).not.toContain('hidden');
+    act(() => {
+      fireEvent.click(iconButton(row, 'eye-slash'));
+    });
+    expect(last()).toEqual({
+      action: 'visibility',
+      params: { ref: '[0x2]', hidden: false },
+    });
+    act(() => {
+      fireEvent.click(iconButton(rowOf('enter_lab'), 'eye'));
+    });
+    expect(last()).toEqual({
+      action: 'visibility',
+      params: { ref: '[0x1]', hidden: true },
+    });
+  });
+
+  it('has group buttons that hide or show a whole group', () => {
+    show(viewData);
+    openTab('Overview');
+    // Only groups with members get a button; counts show what is hidden.
+    const markers = screen.getByText('Markers (1 of 1 hidden)', {
+      exact: false,
+    });
+    const triggers = screen.getByText('Triggers (1)', { exact: false });
+    expect(screen.queryByText('Gates', { exact: false })).toBeNull();
+    act(() => {
+      fireEvent.click(markers);
+    });
+    expect(last()).toEqual({
+      action: 'group_visibility',
+      params: { group: 'marker', hidden: false },
+    });
+    act(() => {
+      fireEvent.click(triggers);
+    });
+    expect(last()).toEqual({
+      action: 'group_visibility',
+      params: { group: 'trigger', hidden: true },
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Show all (1 hidden)'));
+    });
+    expect(last().action).toBe('show_all');
+    expect(groupMembers(viewData.objects || [], 'marker')).toEqual([marker]);
+  });
+
+  it('arms a reposition and shows the armed state clearly', () => {
+    show(viewData);
+    openTab('Overview');
+    act(() => {
+      fireEvent.click(iconButton(rowOf('enter_lab'), 'up-down-left-right'));
+    });
+    expect(last()).toEqual({
+      action: 'reposition',
+      params: { ref: '[0x1]' },
+    });
+    cleanup();
+    show({
+      ...viewData,
+      moving: { id: 'start', ref: '[0x2]', hidden: true },
+    });
+    openTab('Overview');
+    // Banner over every tab, the row marked, the hidden object said to show until moved.
+    expect(
+      screen.getByText(': click its new tile with the wand.', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getByText('Hidden in your view: shown until it is moved.', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    expect(rowOf('start').textContent).toContain('click its new tile');
+    const armed = iconButton(rowOf('start'), 'up-down-left-right');
+    expect(armed.className).toContain('selected');
+    // Pressing it again cancels (the server toggles); so do Cancel and Escape.
+    act(() => {
+      fireEvent.click(armed);
+    });
+    expect(last()).toEqual({
+      action: 'reposition',
+      params: { ref: '[0x2]' },
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Cancel'));
+    });
+    expect(last().action).toBe('cancel_move');
+    sent.length = 0;
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+    expect(last()?.action).toBe('cancel_move');
+  });
+
+  it('says on the test run tab that hidden objects still work', () => {
+    show(viewData);
+    openTab('Test run');
+    expect(
+      screen.getByText('1 object(s) are hidden in your wand view', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    act(() => {
+      fireEvent.click(screen.getByText('Show all'));
+    });
+    expect(last().action).toBe('show_all');
   });
 });

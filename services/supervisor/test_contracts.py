@@ -239,15 +239,23 @@ class WorldPolicy(unittest.TestCase):
 class RestoreGuards(unittest.TestCase):
     def test_every_after_restore_call_is_guarded(self):
         # One object's reconcile step (babylon_after_restore) must never fail a whole world's
-        # restore or a whole paste: every call runs inside its own try.
+        # restore or a whole paste: every call runs inside its own try, or, in the modules that
+        # allow no try (tools/babylon/test_no_try.py), alone in a proc of its own that returns
+        # TRUE at its end (a runtime ends only that proc; the caller sees the missing TRUE).
         calls = 0
+        no_try = [DM / "tutorial", DM / "creative"]
         for path, text in dm_sources().items():
             lines = text.splitlines()
             for index, line in enumerate(lines):
                 if ".babylon_after_restore(" not in line:
                     continue
                 calls += 1
-                self.assertEqual(lines[index - 1].strip(), "try", "%s:%d" % (path.name, index + 1))
+                where = "%s:%d" % (path.name, index + 1)
+                if lines[index - 1].strip() == "try":
+                    continue
+                self.assertTrue(any(folder in path.parents for folder in no_try), where)
+                self.assertTrue(lines[index - 1].startswith("/proc/"), where)
+                self.assertEqual(lines[index + 1].strip(), "return TRUE", where)
         self.assertGreaterEqual(calls, 2)
 
     def test_every_character_capture_is_guarded(self):
@@ -268,6 +276,7 @@ REPO = DM.parents[1]
 # and clear it in different branches, or inside a try whose catch clears it.
 FLAG_PAIRS_ALLOWED = {
     ("creative/powers.dm", "user.babylon_creative_noclip"),  # on and off in separate branches
+    ("creative/powers.dm", "user.babylon_creative_sight_hooked"),  # on and off in separate branches
     ("persistence.dm", "can_rotate"),  # reflector Initialize: a plain field toggle around ..()
     ("station_characters.dm", "menu.spawning"),  # inside a try; the catch clears it
 }
@@ -361,6 +370,16 @@ class SmokeDeterminism(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             used += ["%s: %s" % (path.name, kind) for kind in sorted(types) if re.search(re.escape(kind) + r"(?!\w)", text)]
         self.assertEqual(used, [])
+
+    def test_smoke_scripts_read_dm_results_through_the_length_check(self):
+        # A DM result is cut off past the debug bridge's limit; only dm_entries() notices.
+        here = Path(__file__).resolve().parent
+        raw = []
+        for name in ("smoke_native.py", "smoke_station.py"):
+            for number, line in enumerate((here / name).read_text(encoding="utf-8").splitlines(), 1):
+                if re.search(r'\w\["entries"\]', line) and "def dm_entries" not in line and 'packed["entries"]' not in line and '["contents"]["entries"]' not in line:
+                    raw.append("%s:%d: %s" % (name, number, line.strip()))
+        self.assertEqual(raw, [])
 
     def test_saved_objects_never_delete_themselves_at_random_on_load(self):
         # A restored object runs its Initialize again: one that deletes itself at random would

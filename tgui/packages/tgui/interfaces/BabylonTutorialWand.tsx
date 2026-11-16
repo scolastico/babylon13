@@ -58,7 +58,17 @@ export type TutorialObject = {
   after?: string | null;
   /** Actions an action runs itself later (a Move NPC action's On arrival). */
   follow_ups?: string[] | null;
+  /** View group: marker, trigger, gate, action or npc. */
+  group?: string;
+  /** Hidden in this builder's wand view (their view only; it still works). */
+  hidden?: boolean;
 };
+
+/** A group of objects the Overview hides or shows at once. */
+export type ViewGroup = { id: string; name: string };
+
+/** The object a Reposition armed the wand for. */
+export type Moving = { id: string; ref: string; hidden?: boolean };
 
 export type Warning = { text: string; ref: string | null };
 
@@ -84,6 +94,11 @@ export type WandData = {
   warnings: Warning[];
   /** A zone (two corners) or a tile (one click) being picked for an object's setting. */
   picking: { id: string; corner: number; tile?: boolean } | null;
+  /** Reposition: the next click on a tile moves this object there. */
+  moving?: Moving | null;
+  /** How many objects this builder has hidden in their view. */
+  hidden_count?: number;
+  view_groups?: ViewGroup[];
   has_start: boolean;
   test: {
     running: boolean;
@@ -183,6 +198,11 @@ export const BabylonTutorialWand = () => {
               <PickingBanner />
             </Stack.Item>
           )}
+          {data.moving && (
+            <Stack.Item>
+              <MovingBanner />
+            </Stack.Item>
+          )}
           <Stack.Item grow basis={0} style={{ minHeight: 0 }}>
             <Box height="100%" style={{ overflowY: 'auto' }}>
               {tab === 'build' && <BuildTab />}
@@ -225,6 +245,43 @@ const PickingBanner = () => {
         </Stack.Item>
         <Stack.Item>
           <Button icon="xmark" onClick={() => act('cancel_pick')}>
+            Cancel
+          </Button>
+        </Stack.Item>
+      </Stack>
+    </NoticeBox>
+  );
+};
+
+/** Reposition is armed: says so, cancels with the button or Escape. */
+export const MovingBanner = () => {
+  const { act, data } = useBackend<WandData>();
+  const moving = data.moving;
+  useEffect(() => {
+    if (!moving) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        act('cancel_move');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [moving?.ref]);
+  if (!moving) {
+    return null;
+  }
+  return (
+    <NoticeBox info mb={0}>
+      <Stack align="center">
+        <Stack.Item grow>
+          <Icon name="up-down-left-right" mr={1} />
+          Reposition <b>{moving.id}</b>: click its new tile with the wand.
+          {moving.hidden && ' (Hidden in your view: shown until it is moved.)'}
+        </Stack.Item>
+        <Stack.Item>
+          <Button icon="xmark" onClick={() => act('cancel_move')}>
             Cancel
           </Button>
         </Stack.Item>
@@ -513,6 +570,7 @@ const OverviewTab = () => {
           </Box>
         )}
       </Section>
+      <ViewSection />
       <Section
         title="Flow"
         buttons={
@@ -608,16 +666,78 @@ const OverviewTab = () => {
   );
 };
 
+/** The members of a view group. */
+export const groupMembers = (objects: TutorialObject[], group: string) =>
+  objects.filter((object) => object.group === group);
+
+/** Group buttons: hide or show every marker, trigger, gate, action or NPC spawner in this
+ * builder's view at once. Only their view: nothing changes for players or what objects do. */
+const ViewSection = () => {
+  const { act, data } = useBackend<WandData>();
+  const groups = data.view_groups || [];
+  const hiddenCount = data.hidden_count || 0;
+  if (!data.objects.length) {
+    return null;
+  }
+  return (
+    <Section
+      title="Your view"
+      buttons={
+        hiddenCount > 0 && (
+          <Button icon="eye" onClick={() => act('show_all')}>
+            Show all ({hiddenCount} hidden)
+          </Button>
+        )
+      }
+    >
+      <Box color="label" mb={0.5} fontSize="0.9em">
+        Hide what you don't need to see while building. Only your wand view
+        changes: players and test runs are not affected.
+      </Box>
+      {groups.map((group) => {
+        const members = groupMembers(data.objects, group.id);
+        if (!members.length) {
+          return null;
+        }
+        const hidden = members.filter((object) => object.hidden).length;
+        const allHidden = hidden === members.length;
+        return (
+          <Button
+            key={group.id}
+            icon={allHidden ? 'eye-slash' : 'eye'}
+            selected={!allHidden}
+            tooltip={
+              allHidden ? `Show all ${group.name}` : `Hide all ${group.name}`
+            }
+            onClick={() =>
+              act('group_visibility', { group: group.id, hidden: !allHidden })
+            }
+          >
+            {group.name}{' '}
+            {hidden
+              ? `(${hidden} of ${members.length} hidden)`
+              : `(${members.length})`}
+          </Button>
+        );
+      })}
+    </Section>
+  );
+};
+
 const ObjectRow = (props: { object: TutorialObject; note?: string }) => {
   const { act, data } = useBackend<WandData>();
   const { object } = props;
+  const moving = data.moving?.ref === object.ref;
   return (
     <Box
       mb={0.5}
       p={0.5}
       style={{
         borderLeft: `3px solid ${data.colors[object.category]}`,
-        background: 'rgba(255, 255, 255, 0.03)',
+        background: moving
+          ? 'rgba(77, 210, 255, 0.12)'
+          : 'rgba(255, 255, 255, 0.03)',
+        opacity: object.hidden && !moving ? 0.6 : 1,
       }}
     >
       <Stack align="center">
@@ -631,6 +751,18 @@ const ObjectRow = (props: { object: TutorialObject; note?: string }) => {
               {object.kind_name}
               {object.x !== null && ` at ${object.x}, ${object.y}, ${object.z}`}
             </Box>
+            {object.hidden && (
+              <Box inline ml={1} color="average" fontSize="0.9em">
+                <Icon name="eye-slash" mr={0.5} />
+                hidden
+              </Box>
+            )}
+            {moving && (
+              <Box inline ml={1} color="#4dd2ff" fontSize="0.9em">
+                <Icon name="up-down-left-right" mr={0.5} />
+                click its new tile
+              </Box>
+            )}
           </Box>
           <Box fontSize="0.9em" opacity={0.8}>
             {object.summary}
@@ -653,6 +785,24 @@ const ObjectRow = (props: { object: TutorialObject; note?: string }) => {
             icon="location-arrow"
             tooltip="Go there"
             onClick={() => act('jump', { ref: object.ref })}
+          />
+          <Button
+            icon="up-down-left-right"
+            selected={moving}
+            tooltip={
+              moving
+                ? 'Cancel reposition'
+                : 'Reposition: the next click with the wand moves it there'
+            }
+            onClick={() => act('reposition', { ref: object.ref })}
+          />
+          <Button
+            icon={object.hidden ? 'eye-slash' : 'eye'}
+            color={object.hidden ? 'average' : undefined}
+            tooltip={object.hidden ? 'Show in your view' : 'Hide in your view'}
+            onClick={() =>
+              act('visibility', { ref: object.ref, hidden: !object.hidden })
+            }
           />
           <Button.Confirm
             icon="trash"
@@ -691,6 +841,22 @@ const TestTab = () => {
       >
         Reset NPCs when starting
       </Button.Checkbox>
+      {!!data.hidden_count && (
+        <NoticeBox mt={1}>
+          <Stack align="center">
+            <Stack.Item grow>
+              <Icon name="eye-slash" mr={1} />
+              {data.hidden_count} object(s) are hidden in your wand view. They
+              still work in the test run.
+            </Stack.Item>
+            <Stack.Item>
+              <Button icon="eye" onClick={() => act('show_all')}>
+                Show all
+              </Button>
+            </Stack.Item>
+          </Stack>
+        </NoticeBox>
+      )}
       {test.running ? (
         <>
           <NoticeBox success mt={1}>

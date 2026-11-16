@@ -234,9 +234,9 @@ def main():
         query = dict(action="redeem", actor="testadmin", ticket=ticket)
         # Test-only helper runs the same HTTP request procedure as client.New.
         exported = call(run, "session", "test_supervisor_export", [json.dumps(query)])
-        assert any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), exported
+        assert dm_entries(exported).get("ok"), exported
         exported = call(run, "session", "test_supervisor_export", [json.dumps(query)])
-        assert not any(e["entry"] == "ok" and e["value"] for e in exported["entries"]), "Ticket replay accepted"
+        assert not dm_entries(exported).get("ok"), "Ticket replay accepted"
         # Lights, cameras and alarms whose state the restored map's Initialize would decide anew.
         saved_state = call(run, "session", "test_saved_state_setup")
         saved_state = dm_entries(saved_state)
@@ -254,7 +254,7 @@ def main():
         assert restored_state and all(restored_state.values()), restored_state
         roster = debug(run, "inspect", dict(target="session", vars=["player_sessions"]))["vars"]["player_sessions"]
         assert roster["length"] == 2, roster
-        restored_friend = next(e["value"]["ref"] for e in roster["entries"] if e["entry"] == "smokefriend")
+        restored_friend = dm_entries(roster)["smokefriend"]["ref"]
         fields = debug(run, "inspect", dict(target=restored_friend, vars=["builder", "respawn_pending", "respawn_ready_at"]))["vars"]
         assert fields["builder"]["name"] == "Second persistent drone", fields
         assert fields["respawn_pending"], fields

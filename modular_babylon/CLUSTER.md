@@ -575,7 +575,8 @@ to open its window and choose what a click does:
   unconscious patient, broken leg) and click a tile; the NPC appears at once.
 - **Delete**: click an object (or an NPC) to remove it.
 
-Right-clicking the wand while holding it switches to the next mode.
+Right-clicking the wand while holding it switches to the next mode; while the wand waits
+for a click (a Reposition, or picking a zone or tile) it cancels that instead.
 
 ### The world-edit wand: area tools
 
@@ -634,6 +635,20 @@ its problems and warns about a missing start marker, triggers that can never fir
 unused actions and a tutorial without a Complete action; **Go there** jumps to an
 object.
 
+**Reposition** (Overview row or the object's settings) moves a placed object: the wand
+waits (a banner says so, the object is outlined in blue) and the next click with it on
+a tile moves the object there, with its settings and every link to it unchanged. An NPC
+spawner takes its NPC along; zones and picked tiles are settings and stay where they
+are. Press Reposition again, Cancel, Escape in the wand's window or right-click the
+wand in hand to cancel.
+
+**Your view** (Overview): hide single objects (the eye button) or whole groups
+(markers, triggers, gates, actions, NPC spawners) from your own wand view to declutter
+it. Only your view changes, for this session (it is not saved): players, test runs and
+what the objects do are not affected. Hidden objects are marked "hidden" in the
+Overview; an object you reposition or configure shows (marked hidden) while you work on
+it; the Test run tab says how many objects you hid, with **Show all**.
+
 A world runs **one tutorial run** for everyone in it: the tutorial is running or not.
 **Triggers** wait for the players and then run their **actions** in order. A trigger
 that waits for a player fires when *any* player does it, and actions for "the player"
@@ -671,8 +686,7 @@ false without running its own actions; the gates it feeds see it become false.
 | Gate | True when |
 | --- | --- |
 | Logic gate | AND: all inputs, OR: any input, XOR: exactly one input, NOT: its one input is not true. Zone, holding and condition inputs are **live**: true while their condition holds (checked every second, also when that trigger itself no longer listens). Button, say, used on, timer and start inputs are **latched**: true once they fired in this run. A gate input counts with its own state. The input pickers mark each input live, latched or gate. |
-| Number gate | a condition on its number holds (equals, at least, at most, between). The number starts at a **Start value** for every run; each input has an operation that runs every time that input fires: count up, count down, set to, add, subtract, multiply by (a constant or another number gate's number at that moment) or reset to the start value. A
-live input "fires" each time its condition becomes true (each entry into a zone). **On change** runs whenever the number changes. "N of M" is a number gate that counts up. |
+| Number gate | a condition on its number holds (equals, at least, at most, between). The number starts at a **Start value** for every run; each input has an operation that runs every time that input fires: count up, count down, set to, add, subtract, multiply by (a constant or another number gate's number at that moment) or reset to the start value. A live input "fires" each time its condition becomes true (each entry into a zone). **On change** runs whenever the number changes. "N of M" is a number gate that counts up. |
 
 Gates update at once, in one wave: a trigger fires, the gates it feeds update, the gates
 those feed update, and so on. A gate that is already updating in the same wave (a loop,
@@ -685,8 +699,8 @@ state and number.
 | Action | Does |
 | --- | --- |
 | Message | a green "Guide" box in every player's chat, or a speaker (NPC or marked object) says it to the players (a Guide box with the speaker's name for a player too far away, or when the speaker is out cold); `[player]` becomes each player's own name; optional **objective** that stays on every player's screen until the next one |
-| Point | a bouncing arrow over the target for the players; optionally a speaker points at it again and again |
-| Highlight | outlines the target (only the tutorial's players see it) |
+| Point | a bouncing arrow over the target for the players; optionally a speaker points at it again and again (its arrow flies to the target and fades there, so the target always shows one arrow). One arrow per target: a Point performed again replaces the earlier arrow |
+| Highlight | outlines the target (only the tutorial's players see it); one outline per target, and it follows an NPC as it turns, lies down or picks something up |
 | Make NPC vulnerable | an NPC that was unhurtable can be hurt from now on |
 | Teleport | moves every living player to a marker |
 | Spawn NPC | (re)creates an NPC spawner's NPC |

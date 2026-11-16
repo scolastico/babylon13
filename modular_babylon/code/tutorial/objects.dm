@@ -81,6 +81,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	// No run may keep a reference to a removed object (runtime.dm).
 	for(var/datum/babylon_tutorial_run/run as anything in GLOB.babylon_tutorial_runs)
 		run.forget(src)
+	// Nor a builder's hidden list (wand.dm).
+	babylon_tutorial_forget_hidden(src)
 	babylon_tutorial_changed()
 	return ..()
 
