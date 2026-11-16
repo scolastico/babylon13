@@ -282,3 +282,38 @@ MetaStation world, each stopped the moment the supervisor saw it running, all sa
 Not exercised (needs a real client): joining a world, the lobby page itself, the Creative
 panel and tutorial wand UI, playing a tutorial to its end, rejoining a saved character,
 AFK return, the restart screen hand-off with players connected, Discord.
+
+## Final review fixes (H2, 2026-11-16)
+
+The fix round after the final whole-branch review. The full suite ran on `8b8527e1a77`:
+- all five builds through `tools/babylon/build_dme.py`, which now fails a build that shows the
+  BYOND 516.1686 slot quirk: 0 errors, 0 warnings each;
+- `smoke_native.py`: passed, including the Babylon stability step (6017 records on every save);
+- `smoke_station.py`, full matrix: passed. MetaStation, the Creative Planes S/M/L (including a
+  tutorial instance started from the submitted snapshot), the tutorial world with every
+  tutorial test, characters, the tramstation restore, IceBox multi-z and MetaStation
+  stability. Stability is now identical from the first restore on (84389 records, no
+  differences). The first-restore loss of 6 reinforced glass sheets and a lavaland puzzle
+  piece is gone: stacks no longer merge while a save loads;
+- supervisor (281, 16 skipped without discord.py), tools (59), node lobby and container tests,
+  tgui (106 tests, tsc, biome, tgui:build).
+
+Newly covered:
+- a tutorial started from a snapshot taken in a running round starts its tutorial;
+- a character on CentCom (a level that is not saved) is kept and arrives at arrivals;
+- a restored character can't be put into cryo by someone else before its player returned;
+- research (a node, its designs, the point bank) and the cargo budget survive a restart;
+- Reboot World saves a running round;
+- Preview is refused for world-changing actions;
+- a pAI card (station) or a box with a mouse (Babylon) is never deleted with an inventory;
+- Give item shares the run's object cap;
+- no snapshot during a test run, and none that reuses an old level;
+- the supervisor's snapshot pruning, hung-instance stop, shutdown order, damaged pointer,
+  audit index and copy journal.
+
+Known limitation: cyborgs and the station AI are not saved (their player late-joins after a
+restart).
+
+Not exercised (needs a real client): the Preview button's disabled state in game, the cryo
+refusal with real players, Reboot World from the admin verb, a tutorial player actually
+spawning at the start marker from a snapshot instance.
