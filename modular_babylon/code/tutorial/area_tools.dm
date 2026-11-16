@@ -150,7 +150,18 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /proc/babylon_area_free(turf/tile)
 	return tile && !isclosedturf(tile) && !babylon_area_locked(tile) && !tile.is_blocked_turf(TRUE)
 
-/// Moves a player to the nearest free tile outside a rectangle. Returns the tile, or null.
+/// What a moved player is told. The running operation may set another text (a tutorial's Paste
+/// area says the room was reset); one area operation runs at a time, and it puts null back.
+GLOBAL_VAR(babylon_area_move_message)
+
+/// A mob the area tools move out of the way instead of deleting or walling in: a player, or a
+/// tutorial NPC (kept by a tutorial's Paste area). all_mobs: any living mob (Fill, Border and an
+/// undo putting back a wall or a dense structure would otherwise wall it in).
+/proc/babylon_area_movable_body(mob/living/body, all_mobs = FALSE)
+	return all_mobs || babylon_area_is_player(body) || body.babylon_tutorial_npc
+
+/// Moves a player (or another mob) to the nearest free tile outside a rectangle. Returns the
+/// tile, or null.
 /proc/babylon_area_move_out(mob/living/player, list/rect)
 	var/turf/from = get_turf(player)
 	if(!from)
@@ -173,17 +184,18 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				var/obj/vehicle/sealed/vehicle = player.loc
 				vehicle.mob_exit(player, TRUE)
 			player.forceMove(best)
-			to_chat(player, span_notice("A builder changed the area you were in: you were moved aside."))
+			to_chat(player, span_notice(GLOB.babylon_area_move_message || "A builder changed the area you were in: you were moved aside."))
 			return best
 	return null
 
 /// Moves every player on these tiles (or inside something on them) out of the rectangle.
 /// may_pause: FALSE when the caller needs the tiles to stay as they are (it clears them next).
-/proc/babylon_area_evict(list/tiles, list/rect, may_pause = TRUE)
+/// all_mobs: every living mob, not only players (the tile is about to become solid).
+/proc/babylon_area_evict(list/tiles, list/rect, may_pause = TRUE, all_mobs = FALSE)
 	. = 0
 	for(var/turf/tile as anything in tiles)
 		for(var/mob/living/body in tile.get_all_contents())
-			if(babylon_area_is_player(body))
+			if(all_mobs ? !QDELETED(body) : babylon_area_is_player(body))
 				if(babylon_area_move_out(body, rect))
 					.++
 		if(may_pause)
@@ -299,7 +311,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 
 /// After a map load: players who walked into the footprint while it loaded, or could not be moved
 /// out before it, and now stand in a wall or a dense object are moved out. Where no free tile is
-/// found, a wall with a player in it becomes plating.
+/// found, a wall with a player in it becomes plating. Other mobs (a tutorial NPC a Paste area
+/// kept, an animal that walked in) are moved out of walls only: an NPC lying on a table or bed
+/// stays there; without a free tile it stays, logged (no wall is opened for it).
 /// away: the rectangle they are moved out of (the footprint; tests pass one with no free tile).
 /proc/babylon_area_rescue(list/rect, list/away = rect)
 	. = 0
@@ -307,8 +321,15 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		if(!isclosedturf(tile) && !tile.is_blocked_turf(TRUE))
 			continue
 		for(var/mob/living/body in tile.get_all_contents())
-			if(babylon_area_is_player(body) && babylon_area_move_out(body, away))
+			if(QDELETED(body))
+				continue
+			var/player = babylon_area_is_player(body)
+			if(!player && !isclosedturf(tile))
+				continue
+			if(babylon_area_move_out(body, away))
 				.++
+			else if(!player)
+				log_world("BABYLON AREA: no free tile for [body] in a pasted wall at [tile.x],[tile.y],[tile.z]; it stays.")
 		if(isclosedturf(tile) && !babylon_area_locked(tile) && babylon_area_player_on(tile))
 			log_world("BABYLON AREA: no free tile for a player in a pasted wall at [tile.x],[tile.y],[tile.z]; it becomes plating.")
 			babylon_area_change_turf(tile, /turf/open/floor/plating, babylon_area_air_flags(tile))
@@ -523,6 +544,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/skipped_protected = 0
 	var/skipped_locked = 0
 	var/replaced_turfs = 0
+	/// Made from stored data (babylon_area_clip_from_data): settings are applied only for the
+	/// fields the save engine keeps for the object's type.
+	var/from_storage = FALSE
 
 /// The tile entry at an offset from the south-west corner.
 /datum/babylon_area_clip/proc/entry(dx, dy)
@@ -537,8 +561,21 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 #define BABYLON_AREA_CLIP_VERSION 1
 
 /// The clip as JSON-safe data. Tutorial objects are left out: a stored room never carries them
-/// (the room's own tutorial objects stay where they are when it is pasted).
+/// (the room's own tutorial objects stay where they are when it is pasted). Tiles are stored as a
+/// palette of distinct tile entries plus one palette index per tile (like a map's keys), so a
+/// room of plain floors costs one entry. "bytes" is the JSON's size (the snapshot cap).
 /datum/babylon_area_clip/proc/to_data()
+	var/list/palette = list()
+	var/list/grid = list()
+	var/list/index_of = list()
+	for(var/list/entry as anything in tiles)
+		var/key = json_encode(entry)
+		var/index = index_of[key]
+		if(!index)
+			palette += list(entry)
+			index = length(palette)
+			index_of[key] = index
+		grid += index
 	var/list/stored_extras = list()
 	for(var/tag in extras)
 		var/list/extra = extras[tag]
@@ -556,12 +593,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		if(!isnull(extra["contents"]))
 			stored["contents"] = extra["contents"]
 		stored_extras["[tag]"] = stored
-	return list(
+	. = list(
 		"version" = BABYLON_AREA_CLIP_VERSION,
 		"width" = width,
 		"height" = height,
 		"origin" = origin.Copy(),
-		"tiles" = tiles.Copy(),
+		"palette" = palette,
+		"grid" = grid,
 		"extras" = stored_extras,
 		"objects" = object_count,
 		"nested" = nested_count,
@@ -571,6 +609,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		"replaced_turfs" = replaced_turfs,
 		"skipped_tutorial" = length(tutorial),
 	)
+	.["bytes"] = length(json_encode(.))
 
 /// A setting value JSON can carry (with babylon_area_store_value): null, a number, a text, a
 /// type path, or a list of those (two levels deep). References to atoms are not.
@@ -629,8 +668,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/width = data["width"]
 	var/height = data["height"]
 	var/list/origin = data["origin"]
-	var/list/tiles = data["tiles"]
-	if(!isnum(width) || !isnum(height) || width < 1 || height < 1 || width * height > BABYLON_AREA_MAX_TILES || !islist(origin) || length(origin) != 3 || !islist(tiles) || length(tiles) != width * height)
+	var/list/palette = data["palette"]
+	var/list/grid = data["grid"]
+	if(!isnum(width) || !isnum(height) || width < 1 || height < 1 || width * height > BABYLON_AREA_MAX_TILES || !islist(origin) || length(origin) != 3 || !islist(palette) || !length(palette) || !islist(grid) || length(grid) != width * height)
 		return "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again."
 	return null
 
@@ -646,25 +686,34 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	clip.height = round(data["height"])
 	var/list/origin = data["origin"]
 	clip.origin = list(round(text2num("[origin[1]]") || 1), round(text2num("[origin[2]]") || 1), round(text2num("[origin[3]]") || 1))
+	clip.from_storage = TRUE
 	var/list/missing = list()
-	for(var/list/stored in data["tiles"])
+	// Each palette entry is checked once: its texts must be plain map entries of known, harmless
+	// types (a stored room is data, never a way past the spawn blocklist).
+	var/list/entries = list()
+	for(var/list/stored in data["palette"])
 		if(!islist(stored) || !istext(stored["turf"]))
 			return list("error" = "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again.")
 		var/list/entry = list("turf" = stored["turf"], "objects" = list(), "space" = !!stored["space"])
 		if(stored["keep"])
 			entry["keep"] = TRUE
-		else if(!babylon_area_entry_type(stored["turf"], /turf))
+			entry["turf"] = "/turf/template_noop"
+		else if(!babylon_area_entry_valid(stored["turf"], /turf))
 			missing |= babylon_area_entry_path_text(stored["turf"])
 			entry["turf"] = "[/turf/open/floor/plating]"
 		for(var/object_text in stored["objects"])
 			if(!istext(object_text))
 				continue
-			if(!babylon_area_entry_type(object_text, /obj))
+			if(!babylon_area_entry_valid(object_text, /obj))
 				missing |= babylon_area_entry_path_text(object_text)
 				continue
 			entry["objects"] += object_text
-		clip.tiles += list(entry)
+		entries += list(entry)
 		BABYLON_AREA_TICK
+	for(var/index in data["grid"])
+		if(!isnum(index) || index < 1 || index > length(entries))
+			return list("error" = "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again.")
+		clip.tiles += list(entries[index])
 	var/list/stored_extras = data["extras"]
 	if(islist(stored_extras))
 		for(var/tag in stored_extras)
@@ -681,7 +730,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			if(islist(stored["reagents"]))
 				extra["reagents"] = stored["reagents"]
 			if(islist(stored["contents"]))
-				extra["contents"] = stored["contents"]
+				extra["contents"] = babylon_area_clean_stored_contents(stored["contents"], 1)
 			clip.extras["[tag]"] = extra
 	clip.object_count = round(text2num("[data["objects"]]") || 0)
 	clip.nested_count = round(text2num("[data["nested"]]") || 0)
@@ -696,6 +745,52 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /proc/babylon_area_entry_type(text, base)
 	var/path = text2path(babylon_area_entry_path_text(text))
 	return ispath(path, base) ? path : null
+
+/// A stored map entry is one plain entry as babylon_area_metadata() writes it ("/path", or
+/// "/path{" plus lines that each start with a tab, then "}"): nothing can start a second entry.
+/// Its type must exist under base, and an object's must not be harmful (the spawn blocklist).
+/proc/babylon_area_entry_valid(text, base)
+	var/static/regex/path_shape = regex(@"^/[A-Za-z0-9_/]+$")
+	var/brace = findtext(text, "{")
+	if(!path_shape.Find(brace ? copytext(text, 1, brace) : text))
+		return FALSE
+	if(brace)
+		// "{", then lines that each start with a tab, then "}" as the very last character; no
+		// other brace (tgm_encode strips them from texts).
+		if(copytext(text, -1) != "}")
+			return FALSE
+		var/body = copytext(text, brace + 1, -1)
+		if(findtext(body, "{") || findtext(body, "}"))
+			return FALSE
+		var/list/lines = splittext(body, "\n")
+		if(length(lines) < 2 || length(lines[1]))
+			return FALSE
+		for(var/index in 2 to length(lines))
+			if(copytext(lines[index], 1, 2) != "\t")
+				return FALSE
+	var/path = babylon_area_entry_type(text, base)
+	if(!path)
+		return FALSE
+	return ispath(path, /turf) || !babylon_creative_type_harmful(path)
+
+/// Stored container contents with only existing, harmless item types (depth as in a capture).
+/proc/babylon_area_clean_stored_contents(list/entries, depth)
+	var/list/kept = list()
+	for(var/list/entry in entries)
+		var/path = text2path("[entry["type"]]")
+		if(!ispath(path, /obj/item) || babylon_creative_type_harmful(path))
+			continue
+		var/list/clean = list("type" = "[path]")
+		if(istext(entry["name"]))
+			clean["name"] = strip_html("[entry["name"]]", 64)
+		if(isnum(entry["amount"]))
+			clean["amount"] = entry["amount"]
+		if(islist(entry["reagents"]))
+			clean["reagents"] = entry["reagents"]
+		if(islist(entry["contents"]) && depth < 4)
+			clean["contents"] = babylon_area_clean_stored_contents(entry["contents"], depth + 1)
+		kept += list(clean)
+	return kept
 
 /// Copies a rectangle (south-west and north-east corners). Protected (indestructible) tiles are
 /// left out: a paste leaves the target there as it is, so the Creative Plane's edge can't be
@@ -723,9 +818,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 					continue
 				if(!babylon_area_copyable(thing, tile))
 					continue
-				var/tag = "[++GLOB.babylon_area_next_tag]"
-				objects += "[thing.type][babylon_area_metadata(thing, tag, faithful)]"
+				// Only objects with settings, reagents or contents get a tag (the paste finds them
+				// by it): untagged entries of the same kind are alike, so stored rooms deduplicate.
 				var/list/extra = babylon_area_capture_extra(thing, clip)
+				var/tag = extra ? "[++GLOB.babylon_area_next_tag]" : null
+				objects += "[thing.type][babylon_area_metadata(thing, tag, faithful)]"
 				if(extra)
 					clip.extras[tag] = extra
 				clip.object_count++
@@ -862,6 +959,19 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /proc/babylon_area_reconcile(obj/thing, list/settings)
 	thing.babylon_after_restore(settings)
 	return TRUE
+
+/// A stored extra limited to the setting fields the save engine keeps for this object's type
+/// (plus keys that are no variable, for babylon_after_restore), like a loadout's settings.
+/proc/babylon_area_stored_extra_for(obj/thing, list/extra)
+	var/list/allowed = GLOB.babylon_save.setting_fields(thing)
+	var/list/fields = list()
+	var/list/given = extra["fields"]
+	for(var/field in given)
+		if((field in allowed) || !(field in thing.vars))
+			fields[field] = given[field]
+	var/list/limited = extra.Copy()
+	limited["fields"] = fields
+	return limited
 
 /// A pasted object's settings, reagents and contents. TRUE when it got to the end.
 /proc/babylon_area_restore_extra(obj/thing, list/extra)
@@ -1217,6 +1327,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			thing.babylon_clip_tag = null
 			if(!extra)
 				continue
+			if(clip.from_storage && extra["fields"])
+				extra = babylon_area_stored_extra_for(thing, extra)
 			if(!babylon_area_restore_extra(thing, extra))
 				log_world("BABYLON AREA: restoring the settings and contents of [thing.type] was cut short.")
 	babylon_area_resmooth(rect)
@@ -1289,7 +1401,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			continue
 		if(blocks)
 			// In the same tick as the change: nobody steps back in between.
-			babylon_area_evict(list(tile), rect, FALSE)
+			babylon_area_evict(list(tile), rect, FALSE, TRUE)
 			// No free tile for a player still here (also inside something): nothing solid on them.
 			if(babylon_area_player_on(tile))
 				counts["occupied"]++
@@ -1781,7 +1893,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			// Players who walked in since must not end up inside a wall again (moved out in the
 			// same tick as the change; one who can't be moved keeps the open tile).
 			if(ispath(path, /turf/closed) && step["rect"])
-				babylon_area_evict(list(tile), step["rect"], FALSE)
+				babylon_area_evict(list(tile), step["rect"], FALSE, TRUE)
 				if(babylon_area_player_on(tile))
 					out["occupied"]++
 					continue

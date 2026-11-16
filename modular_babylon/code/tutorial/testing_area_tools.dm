@@ -710,7 +710,7 @@
 		result["empty_action_asks_for_area"] = !!action.find_issues()["snapshot"]
 		var/list/stored = babylon_tutorial_store_area(builder, action, "snapshot")
 		var/list/data = action.snapshot_data()
-		result["snapshot_stored"] = stored["ok"] && data?["version"] == BABYLON_AREA_CLIP_VERSION && data["width"] == 4 && data["height"] == 3 && length(data["tiles"]) == 12
+		result["snapshot_stored"] = stored["ok"] && data?["version"] == BABYLON_AREA_CLIP_VERSION && data["width"] == 4 && data["height"] == 3 && length(data["grid"]) == 12 && length(data["palette"]) <= 12 && data["bytes"] > 0
 		result["snapshot_leaves_tutorial_objects_out"] = data?["skipped_tutorial"] == 2 && !findtext(action.settings_json, "/obj/babylon_tutorial")
 		result["snapshot_action_valid"] = !length(action.find_issues())
 		// Persisted: the settings are one JSON text (the save's extra_fields "settings_json").
@@ -728,7 +728,7 @@
 		var/list/window = editor.ui_data(builder)
 		var/list/view = window["values"]["snapshot"]
 		var/list/selection_view = window["area_selection"]
-		result["window_summary_only"] = view?["width"] == 4 && view["x"] == x1 && !("tiles" in view) && !view["problem"] && selection_view?["tiles"] == 12
+		result["window_summary_only"] = view?["width"] == 4 && view["x"] == x1 && !("palette" in view) && !("grid" in view) && view["tiles"] == 12 && view["bytes"] == data["bytes"] && view["limit"] > view["bytes"] && !view["problem"] && selection_view?["tiles"] == 12
 		qdel(editor)
 
 		// The room changes: the table and medkit go, a grille and a wrench come, the wall opens.
@@ -744,9 +744,16 @@
 		var/mob/living/carbon/human/player = new(locate(x1, y1 + 2, z))
 		made += player
 		player.key = "RoomResetPlayer"
+		// A tutorial NPC that walked into the opened wall: the reset moves it out, never walls it in.
+		var/obj/babylon_tutorial/npc_spawner/walker_spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(x1 + 21, y1 + 7, z), "rr_walker", list("npc_name" = "Walker", "spawn_at_start" = 0), made)
+		var/mob/living/carbon/human/walker = walker_spawner.spawn_npc()
+		made += walker
+		walker.forceMove(locate(x1 + 3, y1 + 2, z))
 		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list())
 		babylon_tutorial_paste_area(action, run)
 		result["reset_no_note"] = !run.action_notes[action]
+		if(run.action_notes[action])
+			log_world("test_tutorial_room_reset: reset note: [run.action_notes[action]]")
 		result["reset_puts_table_back"] = !!(locate(/obj/structure/table) in locate(x1, y1, z))
 		var/obj/item/storage/medkit/regular/new_kit = locate() in locate(x1 + 1, y1, z)
 		result["reset_puts_full_kit_back"] = !!new_kit && length(new_kit.contents) == kit_items
@@ -755,6 +762,8 @@
 		result["reset_keeps_tutorial_objects"] = !QDELETED(marker) && get_turf(marker) == locate(x1 + 2, y1 + 1, z) && !QDELETED(spawner)
 		result["reset_keeps_tutorial_npc"] = !QDELETED(npc) && spawner.current_npc() == npc
 		result["reset_keeps_builder_tools"] = !QDELETED(dropped_wand)
+		var/turf/walker_at = get_turf(walker)
+		result["reset_moves_npc_out_of_wall"] = !QDELETED(walker) && walker_spawner.current_npc() == walker && !!walker_at && !isclosedturf(walker_at) && walker_at != locate(x1 + 3, y1 + 2, z)
 		// The world-edit wand is a builder tool for Set inventory and Remove objects too (I3's flag).
 		var/list/wand_loadout = babylon_tutorial_clean_loadout(list(list("type" = "[/obj/item/babylon_world_edit_wand]", "hand" = 1)))
 		result["world_edit_wand_kept_by_actions"] = babylon_tutorial_inventory_kept(dropped_wand) && !babylon_tutorial_removable(dropped_wand) && !!wand_loadout["error"]
@@ -783,6 +792,7 @@
 		var/obj/structure/table/source_table = locate() in locate(x1, y1, z)
 		result["source_protected_while_running"] = babylon_tutorial_build_protected(source_tile) && babylon_tutorial_blocks_building(builder, source_tile, tool) \
 			&& !babylon_tutorial_blocks_building(builder, source_tile, edit_wand) && !babylon_tutorial_build_protected(locate(x1 + 9, y1 + 1, z))
+		result["protection_spares_mobs"] = !babylon_tutorial_blocks_building(builder, npc, tool)
 		result["protected_table_untouched"] = !!source_table && !tool.melee_attack_chain(builder, source_table) && !QDELETED(source_table)
 		live.set_setting("protect", 0)
 		result["unprotected_source_open"] = !babylon_tutorial_build_protected(source_tile)
@@ -816,7 +826,30 @@
 		var/obj/babylon_tutorial/action/paste_area/copied = locate() in locate(x1 + 23, y1 + 7, z)
 		made += copied
 		var/list/copied_data = copied?.snapshot_data()
-		result["area_copy_carries_snapshot"] = pasted_result["ok"] && copied_data?["version"] == BABYLON_AREA_CLIP_VERSION && length(copied_data["tiles"]) == 12 && copied_data["origin"] ~= list(x1, y1, z)
+		// The stored form: identical tiles once; damaged, injected or harmful entries never pasted.
+		var/datum/babylon_area_clip/plain = new
+		plain.width = 3
+		plain.height = 2
+		plain.origin = list(x1, y1, z)
+		for(var/i in 1 to 6)
+			plain.tiles += list(list("turf" = "[/turf/open/floor/iron]", "objects" = list("[/obj/structure/table]"), "space" = FALSE))
+		var/list/plain_data = plain.to_data()
+		var/list/plain_back = babylon_area_clip_from_data(json_decode(json_encode(plain_data)))
+		var/datum/babylon_area_clip/plain_clip = plain_back["clip"]
+		result["identical_tiles_stored_once"] = length(plain_data["palette"]) == 1 && length(plain_data["grid"]) == 6 && length(plain_clip?.tiles) == 6
+		var/list/bad_data = plain_data.Copy()
+		bad_data["palette"] = list(list("turf" = "[/turf/open/floor/iron]", "objects" = list("[/obj/structure/table]{\n\tname = \"x\"\n\t},\n/obj/singularity", "[/obj/singularity]", "[/obj/item/toy/plush]"), "space" = FALSE))
+		var/list/bad_back = babylon_area_clip_from_data(bad_data)
+		var/datum/babylon_area_clip/bad_clip = bad_back["clip"]
+		var/list/bad_entry = bad_clip?.entry(0, 0)
+		result["injected_entries_dropped"] = !!bad_entry && length(bad_entry["objects"]) == 1 && bad_entry["objects"][1] == "[/obj/item/toy/plush]" && length(bad_back["missing"]) == 2
+		result["map_entry_with_vars_valid"] = babylon_area_entry_valid("[/obj/structure/table]{\n\tdir = 4;\n\tname = \"desk\"\n\t}", /obj) && babylon_area_entry_valid("[/turf/open/floor/iron]{\n\tinitial_gas_mix = \"o2=22;n2=82;TEMP=293.15\"\n\t}", /turf)
+		var/list/broken_data = plain_data.Copy()
+		broken_data["grid"] = list(1, 1, 1, 1, 1, 9)
+		var/list/broken_back = babylon_area_clip_from_data(broken_data)
+		result["damaged_grid_refused"] = findtext(broken_back["error"], "damaged") != 0
+		result["snapshot_byte_cap"] = !!babylon_tutorial_snapshot_size_problem(600 * 1024, action) && !babylon_tutorial_snapshot_size_problem(10 * 1024, action)
+		result["area_copy_carries_snapshot"] = pasted_result["ok"] && copied_data?["version"] == BABYLON_AREA_CLIP_VERSION && length(copied_data["grid"]) == 12 && copied_data["origin"] ~= list(x1, y1, z)
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_tutorial_room_reset failed: [error] ([error.file]:[error.line])")

@@ -197,6 +197,15 @@ atmosian armor added their items to `GLOB.security_vest_allowed`, so to every ar
 to `GLOB.mining_suit_allowed`). `tools/babylon/test_shared_list_aliases.py` fails when the
 pattern comes back; the cases it allows are listed there with their reason.
 
+Core-proc overrides of the tutorial module (modular, no upstream edit; merge upstream signature
+changes into them): `modular_babylon/code/tutorial/room_reset.dm` re-declares
+`/obj/item/melee_attack_chain` and `/atom/base_ranged_item_interaction` (every item use on an
+atom, near and at range) to refuse item use inside a live Paste area's protected source while a
+tutorial runs (`babylon_tutorial_blocks_building`; builder wands, mobs and carried items are
+exempt). `tutorial/npc.dm` overrides `/mob/living/CanAllowThrough`,
+`/mob/living/carbon/attach_rot` and `/obj/item/organ/on_death` for anchored and spawn-dead
+tutorial NPCs.
+
 ## BYOND 516.1686 slot quirk
 
 DreamMaker 516.1686 (`.tgs.yml`) sometimes mishandles whichever variable lands on one

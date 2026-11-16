@@ -75,6 +75,12 @@ export type AreaClipView = {
   y: number | null;
   z: number | null;
   objects: number;
+  /** Tiles stored, and how many of them are different (identical tiles are stored once). */
+  tiles?: number;
+  distinct?: number;
+  /** Its stored size, and the most one snapshot may take. */
+  bytes?: number;
+  limit?: number;
   skipped_tutorial?: number;
   /** Why it can't be pasted (stored in another format ...), or null. */
   problem: string | null;
@@ -310,8 +316,8 @@ export const liveCopyWarning = (data: ObjectData) => {
     return null;
   }
   return data.values.protect
-    ? 'Live copy: the source area is copied as it is when the action runs. While the tutorial runs, nobody can build in it or take it apart, but anything that reaches it otherwise (fire, explosions, gas) still changes it.'
-    : 'Live copy: players can change or damage the source area before the action runs, and the copy takes it as it is then. Turn on "Protect the source", or use a stored snapshot.';
+    ? 'Live copy: the source area is copied as it is when the action runs. While the tutorial runs (test runs and previews too), nobody can use tools or items on anything there, builders included (only the builder wands still work): stop the run before editing it. Bare hands (taking items off a table, moving things), explosions, fire and gas still change it. Prefer a stored snapshot unless you need the source to change.'
+    : 'Live copy: players can change or damage the source area before the action runs, and the copy takes it as it is then. Turn on "Protect the source", or prefer a stored snapshot unless you need the source to change.';
 };
 
 /** Problems that belong to no field (an action's "Test run: ..." note); a gate shows its own. */
@@ -968,6 +974,19 @@ const TileInput = (props: { field: Field; value: number[] | null }) => {
   );
 };
 
+/** "412 tiles, 38 KB of the 512 KB limit" */
+export const storedSizeText = (stored: AreaClipView) => {
+  const kb = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  const parts: string[] = [];
+  if (stored.tiles !== undefined) {
+    parts.push(`${stored.tiles} tile${stored.tiles === 1 ? '' : 's'}`);
+  }
+  if (stored.bytes !== undefined && stored.limit !== undefined) {
+    parts.push(`${kb(stored.bytes)} of the ${kb(stored.limit)} limit`);
+  }
+  return parts.join(', ');
+};
+
 /** Why "Store selection" can't run, or null. */
 export const storeBlocked = (selection?: AreaSelection | null) => {
   if (!selection) {
@@ -993,6 +1012,11 @@ const AreaClipInput = (props: { field: Field; value: AreaClipView | null }) => {
               {' '}
               — {stored.objects} object{stored.objects === 1 ? '' : 's'}
             </Box>
+            {storedSizeText(stored) && (
+              <Box color="label" fontSize="0.9em">
+                Stored: {storedSizeText(stored)}.
+              </Box>
+            )}
           </>
         ) : (
           <Box inline color="label">

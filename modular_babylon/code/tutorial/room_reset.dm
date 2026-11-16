@@ -16,6 +16,11 @@
 
 /// How long a Paste area waits for another area operation to finish.
 #define BABYLON_TUTORIAL_PASTE_WAIT (30 SECONDS)
+/// The most one stored snapshot may take (its JSON, in the world's save): a furnished room of a few
+/// hundred tiles takes tens of KB once identical tiles are shared.
+#define BABYLON_TUTORIAL_SNAPSHOT_BYTES (512 * 1024)
+/// The most all stored snapshots of a world may take together.
+#define BABYLON_TUTORIAL_SNAPSHOTS_TOTAL_BYTES (4 * 1024 * 1024)
 
 /obj/babylon_tutorial/action/paste_area
 	tutorial_kind = "paste_area"
@@ -28,10 +33,10 @@
 
 /obj/babylon_tutorial/action/paste_area/own_schema()
 	return list(
-		babylon_tutorial_field("mode", "Copy from", "choice", "snapshot", "A stored snapshot: the area as it was when you stored it, saved with the tutorial. A live area: another area (a template room) copied when the action runs.", options = babylon_tutorial_options(list("snapshot" = "A stored snapshot (recommended)", "live" = "A live area, copied when it runs"))),
-		babylon_tutorial_field("snapshot", "Stored area", "area_clip", null, "Select the room with the world-edit wand, then store it here. Tutorial objects are not stored: the room's own tutorial objects stay where they are.", when = list("mode" = list("snapshot")), required = TRUE),
+		babylon_tutorial_field("mode", "Copy from", "choice", "snapshot", "A stored snapshot: the area as it was when you stored it, saved with the tutorial. A live area: another area (a template room) copied when the action runs. Switching keeps a stored snapshot (it stays saved with the action).", options = babylon_tutorial_options(list("snapshot" = "A stored snapshot (recommended)", "live" = "A live area, copied when it runs"))),
+		babylon_tutorial_field("snapshot", "Stored area", "area_clip", null, "Select the room with the world-edit wand, then store it here (at most [BABYLON_TUTORIAL_SNAPSHOT_BYTES / 1024] KB; identical tiles are stored once). Tutorial objects are not stored: the room's own tutorial objects stay where they are.", when = list("mode" = list("snapshot")), required = TRUE),
 		babylon_tutorial_field("source", "Source area", "zone", null, "The area copied each time the action runs. Players can change or damage it while the tutorial runs: protect it below, or keep it where players can't go.", when = list("mode" = list("live")), max_tiles = BABYLON_AREA_MAX_TILES),
-		babylon_tutorial_field("protect", "Protect the source", "bool", 1, "While the tutorial runs, nobody can build in the source area or take it apart (no tools, items or RCD on anything there). Builder wands still work.", when = list("mode" = list("live"))),
+		babylon_tutorial_field("protect", "Protect the source", "bool", 1, "While the tutorial runs (a test run or a preview too), nobody can use tools or items on anything in the source area (no RCD, no deconstruction), builders included: stop the run before editing it. Only the builder wands still work there. Bare hands, explosions, fire and gas still change it. Prefer a stored snapshot unless you need the source to change.", when = list("mode" = list("live"))),
 		babylon_tutorial_field("target", "Paste at", "tile", null, "The tile that becomes the copy's bottom-left (south-west) corner. A snapshot without one pastes back where it was stored."),
 	)
 
@@ -162,6 +167,9 @@
 			outcome["error"] = "the source area can't be copied: [error]"
 			return
 		clip = babylon_area_capture(zone[1], zone[2], zone[3], zone[4], zone[5])
+		if(!clip)
+			outcome["error"] = "the source area could not be copied."
+			return
 		// The source's own tutorial objects stay out of the copy.
 		clip.tutorial = list()
 	else
@@ -193,7 +201,10 @@
 				outcome["error"] = "the copy would cover a protected tile at [tile.x], [tile.y]."
 				return
 	var/list/counts = list()
+	// Players (and kept NPCs) moved aside are told it was the tutorial (one area operation at a time).
+	GLOB.babylon_area_move_message = "The room was reset: you were moved aside."
 	error = babylon_area_place(clip, origin, "keep", null, FALSE, "[world.port]-tutorial-[ckey(action.tutorial_id)]", counts, TRUE)
+	GLOB.babylon_area_move_message = null
 	if(error)
 		outcome["error"] = error
 		return
@@ -226,7 +237,11 @@
 		return list("text" = error, "ok" = FALSE)
 	if(QDELETED(object))
 		return list("text" = "The action is gone.", "ok" = FALSE)
-	error = object.set_setting(key, clip.to_data())
+	var/list/data = clip.to_data()
+	error = babylon_tutorial_snapshot_size_problem(data["bytes"], object)
+	if(error)
+		return list("text" = error, "ok" = FALSE)
+	error = object.set_setting(key, data)
 	if(error)
 		return list("text" = error, "ok" = FALSE)
 	log_game("BABYLON TUTORIAL: [key_name(user)] stored [babylon_area_size_text(width, height)] at [rect[1]],[rect[2]],[rect[5]] in [object.tutorial_id].")
@@ -234,7 +249,27 @@
 	if(length(clip.tutorial))
 		notes += "[length(clip.tutorial)] tutorial object\s (they stay where they are)"
 	var/not_copied = babylon_area_not_copied(clip)
-	return list("text" = "Stored [babylon_area_size_text(width, height)] from [rect[1]], [rect[2]]: [clip.object_count] object\s.[length(notes) ? " Not stored: [english_list(notes)]." : ""] [not_copied]", "ok" = TRUE)
+	return list("text" = "Stored [babylon_area_size_text(width, height)] from [rect[1]], [rect[2]]: [clip.object_count] object\s, [babylon_tutorial_kb(data["bytes"])] of the [babylon_tutorial_kb(BABYLON_TUTORIAL_SNAPSHOT_BYTES)] limit.[length(notes) ? " Not stored: [english_list(notes)]." : ""] [not_copied]", "ok" = TRUE)
+
+/// Why a snapshot of this many bytes can't be stored in this action, or null: the per-snapshot cap
+/// and the world's total over every Paste area (this action's old snapshot excepted).
+/proc/babylon_tutorial_snapshot_size_problem(bytes, obj/babylon_tutorial/object)
+	if(bytes > BABYLON_TUTORIAL_SNAPSHOT_BYTES)
+		return "That area takes [babylon_tutorial_kb(bytes)] stored; a snapshot may take at most [babylon_tutorial_kb(BABYLON_TUTORIAL_SNAPSHOT_BYTES)]. Select a smaller area (or one with fewer different tiles and objects)."
+	var/total = bytes
+	for(var/obj/babylon_tutorial/action/paste_area/other in GLOB.babylon_tutorial_objects)
+		if(other == object)
+			continue
+		var/list/data = other.snapshot_data()
+		if(data)
+			total += isnum(data["bytes"]) ? data["bytes"] : length(other.settings_json)
+	if(total > BABYLON_TUTORIAL_SNAPSHOTS_TOTAL_BYTES)
+		return "Together with the other Paste area snapshots this world would store [babylon_tutorial_kb(total)]; all snapshots together may take at most [babylon_tutorial_kb(BABYLON_TUTORIAL_SNAPSHOTS_TOTAL_BYTES)]. Select a smaller area, or clear another snapshot."
+	return null
+
+/// "38 KB"
+/proc/babylon_tutorial_kb(bytes)
+	return "[max(1, round(bytes / 1024))] KB"
 
 /// A stored area for the window: its size, origin and object count (never the clip itself).
 /proc/babylon_area_clip_view(list/data)
@@ -248,6 +283,10 @@
 		"y" = length(origin) == 3 ? origin[2] : null,
 		"z" = length(origin) == 3 ? origin[3] : null,
 		"objects" = data["objects"],
+		"tiles" = length(data["grid"]),
+		"distinct" = length(data["palette"]),
+		"bytes" = data["bytes"],
+		"limit" = BABYLON_TUTORIAL_SNAPSHOT_BYTES,
 		"skipped_tutorial" = data["skipped_tutorial"],
 		"problem" = babylon_area_clip_data_problem(data),
 	)
@@ -299,6 +338,10 @@
 /proc/babylon_tutorial_blocks_building(mob/user, atom/target, obj/item/tool)
 	if(tool?.babylon_builder_tool || !target)
 		return FALSE
+	// Mobs and what they carry are no part of the room: healing someone, or putting something in
+	// a bag, stays possible in the source.
+	if(ismob(target) || (ismovable(target) && get(target.loc, /mob)))
+		return FALSE
 	if(!babylon_tutorial_build_protected(get_turf(target)))
 		return FALSE
 	user?.balloon_alert(user, "protected while the tutorial runs")
@@ -316,3 +359,5 @@
 	return ..()
 
 #undef BABYLON_TUTORIAL_PASTE_WAIT
+#undef BABYLON_TUTORIAL_SNAPSHOT_BYTES
+#undef BABYLON_TUTORIAL_SNAPSHOTS_TOTAL_BYTES

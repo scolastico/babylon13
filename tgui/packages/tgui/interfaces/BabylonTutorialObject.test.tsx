@@ -584,6 +584,10 @@ describe('world action editors', () => {
             y: 20,
             z: 2,
             objects: 7,
+            tiles: 12,
+            distinct: 3,
+            bytes: 38 * 1024,
+            limit: 512 * 1024,
             problem: null,
           },
           target: [30, 40, 2],
@@ -597,6 +601,9 @@ describe('world action editors', () => {
         screen.getByText('(30, 40) on level 2', { exact: false }),
       ).toBeDefined();
       expect(screen.getByText('Pick tile')).toBeDefined();
+      expect(
+        screen.getByText('Stored: 12 tiles, 38 KB of the 512 KB limit.'),
+      ).toBeDefined();
     });
 
     it('needs a selection to store, and shows an old format as an error', () => {
@@ -647,7 +654,7 @@ describe('world action editors', () => {
           ...live,
           values: { mode: 'live', protect: 1 },
         } as ObjectData),
-      ).toContain('nobody can build');
+      ).toContain('nobody can use tools or items');
       expect(liveCopyWarning({ ...base, ...paste } as ObjectData)).toBeNull();
     });
   });
