@@ -710,7 +710,7 @@
 		result["empty_action_asks_for_area"] = !!action.find_issues()["snapshot"]
 		var/list/stored = babylon_tutorial_store_area(builder, action, "snapshot")
 		var/list/data = action.snapshot_data()
-		result["snapshot_stored"] = stored["ok"] && data?["version"] == BABYLON_AREA_CLIP_VERSION && data["width"] == 4 && data["height"] == 3 && length(data["grid"]) == 12 && length(data["palette"]) <= 12 && data["bytes"] > 0
+		result["snapshot_stored"] = stored["ok"] && data?["version"] == BABYLON_AREA_CLIP_VERSION && data["width"] == 4 && data["height"] == 3 && length(data["grid"]) == 12 && length(data["palette"]) <= 12 && action.snapshot_bytes() == length(json_encode(data))
 		result["snapshot_leaves_tutorial_objects_out"] = data?["skipped_tutorial"] == 2 && !findtext(action.settings_json, "/obj/babylon_tutorial")
 		result["snapshot_action_valid"] = !length(action.find_issues())
 		// Persisted: the settings are one JSON text (the save's extra_fields "settings_json").
@@ -728,7 +728,7 @@
 		var/list/window = editor.ui_data(builder)
 		var/list/view = window["values"]["snapshot"]
 		var/list/selection_view = window["area_selection"]
-		result["window_summary_only"] = view?["width"] == 4 && view["x"] == x1 && !("palette" in view) && !("grid" in view) && view["tiles"] == 12 && view["bytes"] == data["bytes"] && view["limit"] > view["bytes"] && !view["problem"] && selection_view?["tiles"] == 12
+		result["window_summary_only"] = view?["width"] == 4 && view["x"] == x1 && !("palette" in view) && !("grid" in view) && view["tiles"] == 12 && view["bytes"] == action.snapshot_bytes() && view["limit"] > view["bytes"] && !view["problem"] && selection_view?["tiles"] == 12
 		qdel(editor)
 
 		// The room changes: the table and medkit go, a grille and a wrench come, the wall opens.
@@ -825,6 +825,16 @@
 		var/list/pasted_result = copier.paste(null)
 		var/obj/babylon_tutorial/action/paste_area/copied = locate() in locate(x1 + 23, y1 + 7, z)
 		made += copied
+		// A second copy over the world's total keeps the action but leaves its stored area out.
+		var/old_total = GLOB.babylon_area_snapshots_total_bytes
+		GLOB.babylon_area_snapshots_total_bytes = action.snapshot_bytes() * 2 + 100
+		copier.arm_paste()
+		copier.click(locate(x1 + 22, y1 + 7, z))
+		var/list/over_result = copier.paste(null)
+		GLOB.babylon_area_snapshots_total_bytes = old_total
+		var/obj/babylon_tutorial/action/paste_area/over_copy = locate() in locate(x1 + 22, y1 + 7, z)
+		made += over_copy
+		result["copy_over_total_drops_snapshot"] = over_result["ok"] && !!over_copy && !over_copy.snapshot_data() && findtext(over_result["text"], "left its stored area out") && !!action.snapshot_data()
 		var/list/copied_data = copied?.snapshot_data()
 		// The stored form: identical tiles once; damaged, injected or harmful entries never pasted.
 		var/datum/babylon_area_clip/plain = new
@@ -849,6 +859,28 @@
 		var/list/broken_back = babylon_area_clip_from_data(broken_data)
 		result["damaged_grid_refused"] = findtext(broken_back["error"], "damaged") != 0
 		result["snapshot_byte_cap"] = !!babylon_tutorial_snapshot_size_problem(600 * 1024, action) && !babylon_tutorial_snapshot_size_problem(10 * 1024, action)
+		// The size is measured, never taken from the data: an oversized area that claims to be
+		// small is refused on store, as loaded data (a restored save) and at run time.
+		var/list/huge = plain_data.Copy()
+		var/list/huge_objects = list()
+		for(var/i in 1 to 700)
+			huge_objects += "[/obj/item/toy/plush]{\n\tname = \"[random_string(1000, GLOB.alphabet)]\"\n\t}"
+		huge["palette"] = list(list("turf" = "[/turf/open/floor/iron]", "objects" = huge_objects, "space" = FALSE))
+		huge["bytes"] = 10
+		var/obj/babylon_tutorial/action/paste_area/huge_action = new(locate(x1 + 23, y1 + 5, z))
+		made += huge_action
+		var/huge_refused = huge_action.set_setting("snapshot", huge)
+		huge_action.settings_json = json_encode(list("mode" = "snapshot", "snapshot" = huge))
+		var/list/huge_issues = huge_action.find_issues()
+		var/datum/babylon_tutorial_run/huge_run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list())
+		babylon_tutorial_paste_area(huge_action, huge_run)
+		result["oversized_snapshot_refused_everywhere"] = findtext(huge_refused, "at most") && findtext(huge_issues["snapshot"], "at most") && findtext(huge_run.action_notes[huge_action], "at most")
+		qdel(huge_action)
+		babylon_tutorial_end()
+		// A snapshot stored in the first format (a list of every tile) gets the version message.
+		var/list/first_format = list("version" = 1, "width" = 1, "height" = 1, "origin" = list(x1, y1, z), "tiles" = list(list("turf" = "[/turf/open/floor/iron]", "objects" = list(), "space" = 0)))
+		result["first_format_gets_version_message"] = findtext(babylon_area_clip_data_problem(first_format), "older format") != 0
+		result["palette_longer_than_grid_refused"] = findtext(babylon_area_clip_data_problem(list("version" = BABYLON_AREA_CLIP_VERSION, "width" = 1, "height" = 1, "origin" = list(x1, y1, z), "palette" = list(list("turf" = "x"), list("turf" = "y")), "grid" = list(1))), "damaged") != 0
 		result["area_copy_carries_snapshot"] = pasted_result["ok"] && copied_data?["version"] == BABYLON_AREA_CLIP_VERSION && length(copied_data["grid"]) == 12 && copied_data["origin"] ~= list(x1, y1, z)
 	catch(var/exception/error)
 		result["no_error"] = FALSE

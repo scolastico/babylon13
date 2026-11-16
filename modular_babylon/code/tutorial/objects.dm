@@ -146,6 +146,11 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	settings_changed()
 	babylon_tutorial_changed()
 
+/// Called on an object an area paste (or undo) just made from a copy: a note for the builder about
+/// what it could not keep, or null.
+/obj/babylon_tutorial/proc/after_area_paste()
+	return null
+
 /// Called after the settings changed (subtypes refresh themselves).
 /obj/babylon_tutorial/proc/settings_changed()
 	return

@@ -637,7 +637,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 			values[key] = babylon_tutorial_loadout_view(value)
 		else if(field["type"] == "area_clip")
 			// A stored area can be megabytes: the window gets its summary only.
-			values[key] = babylon_area_clip_view(value)
+			values[key] = babylon_area_clip_view(value, object)
 		else
 			values[key] = value
 	var/list/ids = list()

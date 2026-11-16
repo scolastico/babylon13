@@ -154,16 +154,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// area says the room was reset); one area operation runs at a time, and it puts null back.
 GLOBAL_VAR(babylon_area_move_message)
 
-/// A mob the area tools move out of the way instead of deleting or walling in: a player, or a
-/// tutorial NPC (kept by a tutorial's Paste area). all_mobs: any living mob (Fill, Border and an
-/// undo putting back a wall or a dense structure would otherwise wall it in).
-/proc/babylon_area_movable_body(mob/living/body, all_mobs = FALSE)
-	return all_mobs || babylon_area_is_player(body) || body.babylon_tutorial_npc
-
 /// Moves a player (or another mob) to the nearest free tile outside a rectangle. Returns the
 /// tile, or null.
-/proc/babylon_area_move_out(mob/living/player, list/rect)
-	var/turf/from = get_turf(player)
+/proc/babylon_area_move_out(mob/living/body, list/rect)
+	var/turf/from = get_turf(body)
 	if(!from)
 		return null
 	for(var/distance in 1 to 20)
@@ -178,13 +172,13 @@ GLOBAL_VAR(babylon_area_move_message)
 				best = tile
 				best_score = score
 		if(best)
-			player.buckled?.unbuckle_mob(player, TRUE)
+			body.buckled?.unbuckle_mob(body, TRUE)
 			// Out of a mech or other sealed vehicle properly, so it does not drop them back in later.
-			if(istype(player.loc, /obj/vehicle/sealed))
-				var/obj/vehicle/sealed/vehicle = player.loc
-				vehicle.mob_exit(player, TRUE)
-			player.forceMove(best)
-			to_chat(player, span_notice(GLOB.babylon_area_move_message || "A builder changed the area you were in: you were moved aside."))
+			if(istype(body.loc, /obj/vehicle/sealed))
+				var/obj/vehicle/sealed/vehicle = body.loc
+				vehicle.mob_exit(body, TRUE)
+			body.forceMove(best)
+			to_chat(body, span_notice(GLOB.babylon_area_move_message || "A builder changed the area you were in: you were moved aside."))
 			return best
 	return null
 
@@ -558,12 +552,19 @@ GLOBAL_VAR(babylon_area_move_message)
 
 /// The stored clip format. Bump it when the clip's fields change: a clip stored in another version
 /// is refused with a clear message (babylon_area_clip_from_data), never pasted half understood.
-#define BABYLON_AREA_CLIP_VERSION 1
+/// 1: the first format (a list of every tile, then a palette); 2: palette + grid, sizes measured.
+#define BABYLON_AREA_CLIP_VERSION 2
+/// The most one stored area (a Paste area's snapshot) may take, measured as its JSON. Checked
+/// wherever a snapshot is made, copied or loaded (babylon_area_clip_data_problem).
+#define BABYLON_AREA_SNAPSHOT_BYTES (512 * 1024)
+/// The most all stored areas of a world may take together (room_reset.dm). A variable so tests can
+/// lower it.
+GLOBAL_VAR_INIT(babylon_area_snapshots_total_bytes, 4 * 1024 * 1024)
 
 /// The clip as JSON-safe data. Tutorial objects are left out: a stored room never carries them
 /// (the room's own tutorial objects stay where they are when it is pasted). Tiles are stored as a
 /// palette of distinct tile entries plus one palette index per tile (like a map's keys), so a
-/// room of plain floors costs one entry. "bytes" is the JSON's size (the snapshot cap).
+/// room of plain floors costs one entry.
 /datum/babylon_area_clip/proc/to_data()
 	var/list/palette = list()
 	var/list/grid = list()
@@ -593,7 +594,7 @@ GLOBAL_VAR(babylon_area_move_message)
 		if(!isnull(extra["contents"]))
 			stored["contents"] = extra["contents"]
 		stored_extras["[tag]"] = stored
-	. = list(
+	return list(
 		"version" = BABYLON_AREA_CLIP_VERSION,
 		"width" = width,
 		"height" = height,
@@ -609,7 +610,6 @@ GLOBAL_VAR(babylon_area_move_message)
 		"replaced_turfs" = replaced_turfs,
 		"skipped_tutorial" = length(tutorial),
 	)
-	.["bytes"] = length(json_encode(.))
 
 /// A setting value JSON can carry (with babylon_area_store_value): null, a number, a text, a
 /// type path, or a list of those (two levels deep). References to atoms are not.
@@ -656,9 +656,10 @@ GLOBAL_VAR(babylon_area_move_message)
 			result[key] = babylon_area_load_value(entry[2])
 	return result
 
-/// Why stored clip data can't be pasted (a missing or other-version clip), or null. Cheap: it
-/// reads only the header (the window's summary uses it).
-/proc/babylon_area_clip_data_problem(list/data)
+/// Why stored clip data can't be pasted (missing, another version, damaged, or over the size cap),
+/// or null. size: its JSON's length when the caller knows it (a Paste area caches it); otherwise
+/// it is measured here. Never a size the data says about itself.
+/proc/babylon_area_clip_data_problem(list/data, size = null)
 	if(!islist(data) || !length(data))
 		return "No area is stored yet."
 	var/version = data["version"]
@@ -670,15 +671,23 @@ GLOBAL_VAR(babylon_area_move_message)
 	var/list/origin = data["origin"]
 	var/list/palette = data["palette"]
 	var/list/grid = data["grid"]
-	if(!isnum(width) || !isnum(height) || width < 1 || height < 1 || width * height > BABYLON_AREA_MAX_TILES || !islist(origin) || length(origin) != 3 || !islist(palette) || !length(palette) || !islist(grid) || length(grid) != width * height)
+	if(!isnum(width) || !isnum(height) || width < 1 || height < 1 || width * height > BABYLON_AREA_MAX_TILES || !islist(origin) || length(origin) != 3 || !islist(palette) || !length(palette) || length(palette) > width * height || !islist(grid) || length(grid) != width * height)
 		return "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again."
+	if(isnull(size))
+		size = length(json_encode(data))
+	if(size > BABYLON_AREA_SNAPSHOT_BYTES)
+		return "This stored area takes [babylon_area_kb(size)]; a stored area may take at most [babylon_area_kb(BABYLON_AREA_SNAPSHOT_BYTES)], so it can't be pasted. Select a smaller area with the world-edit wand and store it again."
 	return null
+
+/// "38 KB"
+/proc/babylon_area_kb(bytes)
+	return "[max(1, round(bytes / 1024))] KB"
 
 /// A clip from stored data: list("clip" = clip, "missing" = types that no longer exist) or
 /// list("error" = why not). A type this server no longer has is left out (a turf becomes plating),
 /// so a stored room never breaks the map load.
-/proc/babylon_area_clip_from_data(list/data)
-	var/problem = babylon_area_clip_data_problem(data)
+/proc/babylon_area_clip_from_data(list/data, size = null)
+	var/problem = babylon_area_clip_data_problem(data, size)
 	if(problem)
 		return list("error" = problem)
 	var/datum/babylon_area_clip/clip = new
@@ -1353,6 +1362,10 @@ GLOBAL_VAR(babylon_area_move_message)
 		var/obj/babylon_tutorial/object = new object_path(locate(origin.x + entry["dx"], origin.y + entry["dy"], origin.z))
 		object.tutorial_id = ids?[entry["id"]] || entry["id"]
 		object.store_settings(babylon_area_rewrite_settings(object_path, entry["settings"], ids, clip, origin))
+		// A copied object may bring limited data (a Paste area's stored area: the size caps).
+		var/pasted_note = object.after_area_paste()
+		if(pasted_note)
+			counts["id_note"] = counts["id_note"] ? "[counts["id_note"]] [pasted_note]" : pasted_note
 		object.setDir(entry["dir"])
 		object.pixel_x = entry["pixel_x"]
 		object.pixel_y = entry["pixel_y"]
