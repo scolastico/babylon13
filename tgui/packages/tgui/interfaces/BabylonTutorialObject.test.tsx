@@ -146,6 +146,14 @@ describe('BabylonTutorialObject', () => {
     expect(screen.getByText('Preview')).toBeDefined();
   });
 
+  it('disables Preview with the reason for a world-changing action', () => {
+    const reason =
+      'Preview is off for this action: it would change the world for everyone, with no undo.';
+    show({ preview_refusal: reason });
+    const button = screen.getByText('Preview').closest('.Button');
+    expect(button?.className).toContain('Button--disabled');
+  });
+
   it('shows the speaker field and its problem when the style needs it', () => {
     show({
       values: { ...base.values, style: 'speaker', speaker: 'ghost' },

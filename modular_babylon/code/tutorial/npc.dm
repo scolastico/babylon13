@@ -88,6 +88,12 @@
 	var/mob/living/carbon/human/npc = current_npc()
 	npc_ref = null
 	if(npc)
+		// A player in something the NPC carries (a pAI card a player put into its pocket) is never
+		// deleted with it: that item goes to the floor first.
+		var/turf/npc_tile = get_turf(npc)
+		for(var/obj/item/carried in npc.get_equipped_items(INCLUDE_POCKETS | INCLUDE_HELD | INCLUDE_ACCESSORIES))
+			if(babylon_tutorial_rescue_players(carried, npc_tile))
+				npc.dropItemToGround(carried, TRUE)
 		qdel(npc)
 	// Outfit items someone took off the NPC go with it, unless a player is carrying them.
 	for(var/datum/weakref/item_ref as anything in outfit_items)
@@ -96,6 +102,9 @@
 			continue
 		var/mob/living/holder = get(item, /mob/living)
 		if(holder && !holder.babylon_tutorial_npc)
+			continue
+		// The same for an outfit bag lying around with a pAI card in it.
+		if(babylon_tutorial_rescue_players(item, get_turf(item)))
 			continue
 		qdel(item)
 	outfit_items.Cut()
@@ -424,6 +433,7 @@
 
 /obj/babylon_tutorial/action/npc_vulnerable
 	tutorial_kind = "npc_vulnerable"
+	preview_changes_world = TRUE
 	kind_name = "Make NPC vulnerable"
 	kind_desc = "An NPC that was unhurtable can be hurt from now on (for everyone in this world)."
 	kind_example = "e.g. the sparring partner can be hit once the lesson starts."
@@ -449,6 +459,7 @@
 
 /obj/babylon_tutorial/action/move_npc
 	tutorial_kind = "move_npc"
+	preview_changes_world = TRUE
 	kind_name = "Move NPC"
 	kind_desc = "An NPC walks to a marker (or crawls when it can't stand), finding its way around walls; actions can run when it arrives."
 	kind_example = "e.g. the guide walks to the medbay door, then says \"Follow me\"."

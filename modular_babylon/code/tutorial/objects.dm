@@ -21,6 +21,8 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 #define BABYLON_TUTORIAL_LONGTEXT_MAX 1000
 #define BABYLON_TUTORIAL_IDLIST_MAX 20
 #define BABYLON_TUTORIAL_EFFECTS_MAX 12
+/// Why Preview is off for an action that changes the shared world (preview_refusal()).
+#define BABYLON_TUTORIAL_PREVIEW_WORLD_TEXT "Preview is off for this action: it would change the world for everyone, with no undo. Try it in a test run (wand: Test run)."
 
 /datum/babylon_save/New()
 	. = ..()
@@ -871,6 +873,19 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 
 /obj/babylon_tutorial/action/proc/own_schema()
 	return list()
+
+/// Why Preview is off for this action, or null. A preview is a throwaway run for its builder only:
+/// player-targeting actions stay with the builder, but an action that changes a place or a shared
+/// NPC would change the world for everyone, with no undo (review B-I-1). Those are tried in a test
+/// run instead.
+/obj/babylon_tutorial/action/proc/preview_refusal()
+	if(preview_changes_world)
+		return BABYLON_TUTORIAL_PREVIEW_WORLD_TEXT
+	return null
+
+/obj/babylon_tutorial/action
+	/// The action changes the shared world (a place, an NPC, an event): no Preview.
+	var/preview_changes_world = FALSE
 
 /// Actions this action runs itself later (a Move NPC action's "On arrival"): they count as used,
 /// and steps they enable are reachable.

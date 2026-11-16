@@ -107,6 +107,14 @@
 		draining = TRUE
 		result["stopping_refused"] = babylon_tutorial_submit_refusal("tutorialowner") == "stopping" && babylon_tutorial_snapshot_refusal() == "stopping"
 		draining = FALSE
+		// Review B-M1: no snapshot while a test run has the world in its played state.
+		var/datum/babylon_tutorial_run/stashed_run = SSbabylon_tutorial.run
+		SSbabylon_tutorial.run = null
+		babylon_tutorial_begin(FALSE, TRUE)
+		result["test_run_refused"] = babylon_tutorial_snapshot_refusal() == "test_running" && findtext(babylon_tutorial_refusal_text("test_running"), "Stop the test run first")
+		babylon_tutorial_end()
+		SSbabylon_tutorial.run = stashed_run
+		result["refusal_gone_after_the_run"] = babylon_tutorial_snapshot_refusal() != "test_running" || !!stashed_run
 		var/obj/babylon_tutorial/start = babylon_tutorial_find("start")
 		var/turf/start_turf = get_turf(start)
 		var/turf/unsaved

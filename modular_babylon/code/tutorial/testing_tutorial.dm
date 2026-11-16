@@ -1656,3 +1656,110 @@
 	// What the actions spawned and dropped goes too.
 	babylon_area_clear_tiles(babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]), rect, /turf/open/floor/iron)
 	return result
+
+/// The final review's tutorial findings (H2): Preview never changes the shared world (B-I-1),
+/// players held in items are never deleted with them (B-I-2), and every action that makes objects
+/// shares the run's cap (B-M3).
+/datum/babylon_save/proc/test_tutorial_final_review()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(126)
+	var/datum/babylon_tutorial_run/stashed_run = SSbabylon_tutorial.run
+	SSbabylon_tutorial.run = null
+	try
+		// B-I-1: actions that change a place or a shared NPC refuse Preview; player actions don't.
+		babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, base, "fr_npc", list("npc_name" = "Patient", "spawn_at_start" = 0), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, base, "fr_spot", list("target" = "tile"), made)
+		var/list/world_kinds = list(/obj/babylon_tutorial/action/remove_objects, /obj/babylon_tutorial/action/paste_area, /obj/babylon_tutorial/action/spawn_object,
+			/obj/babylon_tutorial/action/door, /obj/babylon_tutorial/action/start_event, /obj/babylon_tutorial/action/spawn_npc,
+			/obj/babylon_tutorial/action/npc_vulnerable, /obj/babylon_tutorial/action/move_npc)
+		var/world_refused = TRUE
+		for(var/path in world_kinds)
+			var/obj/babylon_tutorial/action/action = new path(base)
+			made += action
+			if(!findtext(action.preview_refusal() || "", "change the world for everyone"))
+				world_refused = FALSE
+		result["world_actions_refuse_preview"] = world_refused
+		var/player_allowed = TRUE
+		for(var/path in list(/obj/babylon_tutorial/action/message, /obj/babylon_tutorial/action/give_item, /obj/babylon_tutorial/action/teleport,
+			/obj/babylon_tutorial/action/sound, /obj/babylon_tutorial/action/complete, /obj/babylon_tutorial/action/toggle))
+			var/obj/babylon_tutorial/action/action = new path(base)
+			made += action
+			if(action.preview_refusal())
+				player_allowed = FALSE
+		result["player_actions_preview"] = player_allowed
+		var/obj/babylon_tutorial/action/harm/hurt = babylon_tutorial_test_place(/obj/babylon_tutorial/action/harm, base, "fr_hurt", list(), made)
+		var/players_previewable = isnull(hurt.preview_refusal())
+		hurt.set_setting("apply_to", "npc")
+		hurt.set_setting("target", "fr_npc")
+		result["npc_target_refuses_preview"] = players_previewable && !!hurt.preview_refusal()
+		var/obj/babylon_tutorial/action/heal/mend = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "fr_mend", list("apply_to" = "npc", "target" = "fr_npc"), made)
+		var/obj/babylon_tutorial/action/inventory/dress = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "fr_dress", list("apply_to" = "npc", "target" = "fr_npc"), made)
+		result["npc_heal_and_inventory_refuse_preview"] = !!mend.preview_refusal() && !!dress.preview_refusal()
+		// A preview's Complete offers no "Run again": it would start the world's run for everyone.
+		var/mob/living/carbon/human/builder = new(base)
+		made += builder
+		var/obj/babylon_tutorial/action/complete/finish = babylon_tutorial_test_place(/obj/babylon_tutorial/action/complete, base, "fr_finish", list(), made)
+		var/datum/babylon_tutorial_run/preview = new(TRUE, builder)
+		made += preview
+		preview.perform(null, finish)
+		var/datum/babylon_tutorial_complete/screen = preview.complete_screen
+		result["preview_complete_marked"] = !!screen?.preview && !!screen.ui_static_data(builder)["preview"]
+		screen?.ui_act("again", list(), null, null)
+		result["preview_again_starts_no_run"] = !babylon_tutorial_current_run()
+
+		// B-I-2: Set inventory and an NPC respawn never delete a player held in an item.
+		var/turf/tile = locate(base.x + 1, base.y, base.z)
+		var/mob/living/carbon/human/body = new(tile)
+		made += body
+		var/obj/item/storage/backpack/pack = new(tile)
+		body.equip_to_slot_if_possible(pack, ITEM_SLOT_BACK, disable_warning = TRUE)
+		var/mob/living/silicon/pai/packed_pai = new(tile)
+		packed_pai.mind_initialize()
+		var/obj/item/pai_card/packed_card = packed_pai.card
+		made += packed_pai
+		made += packed_card
+		packed_card.forceMove(pack)
+		var/mob/living/silicon/pai/held_pai = new(tile)
+		held_pai.mind_initialize()
+		var/obj/item/pai_card/held_card = held_pai.card
+		made += held_pai
+		made += held_card
+		body.put_in_hands(held_card)
+		result["pai_setup"] = packed_card.loc == pack && held_card.loc == body
+		babylon_tutorial_set_inventory(body, "clear_hands", null, FALSE)
+		result["held_card_dropped_not_deleted"] = !QDELETED(held_pai) && !QDELETED(held_card) && isturf(held_card.loc)
+		babylon_tutorial_set_inventory(body, "clear_all", null, FALSE)
+		result["packed_card_on_floor"] = !QDELETED(packed_pai) && !QDELETED(packed_card) && isturf(packed_card.loc) && QDELETED(pack)
+		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_find("fr_npc")
+		var/mob/living/carbon/human/npc = spawner.spawn_npc()
+		made += npc
+		var/mob/living/silicon/pai/npc_pai = new(tile)
+		npc_pai.mind_initialize()
+		var/obj/item/pai_card/npc_card = npc_pai.card
+		made += npc_pai
+		made += npc_card
+		npc.put_in_hands(npc_card)
+		var/mob/living/carbon/human/respawned = spawner.spawn_npc()
+		made += respawned
+		result["npc_respawn_keeps_pai"] = QDELETED(npc) && respawned != npc && !QDELETED(npc_pai) && !QDELETED(npc_card) && isturf(npc_card.loc)
+
+		// B-M3: Give item counts against the run's cap like Spawn object.
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list(body))
+		var/obj/babylon_tutorial/action/give_item/gift = babylon_tutorial_test_place(/obj/babylon_tutorial/action/give_item, base, "fr_gift", list("item_type" = "[/obj/item/wrench]"), made)
+		run.spawned_count = 500
+		run.perform(null, gift)
+		result["give_item_capped"] = !(locate(/obj/item/wrench) in body.held_items) && findtext(run.action_notes[gift], "at most")
+		run.spawned_count = 0
+		run.perform(null, gift)
+		result["give_item_counted"] = run.spawned_count == 1 && !!(locate(/obj/item/wrench) in body.held_items)
+		result["cap_shared"] = !run.claim_spawns(500, gift) && run.claim_spawns(499, gift) && run.spawned_count == 500
+		for(var/obj/item/wrench/wrench in body.held_items)
+			made += wrench
+		babylon_tutorial_end()
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_final_review failed: [error] ([error.file]:[error.line])")
+	SSbabylon_tutorial.run = stashed_run
+	babylon_tutorial_test_cleanup(made)
+	return result

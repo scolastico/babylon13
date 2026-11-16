@@ -45,6 +45,7 @@
 
 /obj/babylon_tutorial/action/spawn_object
 	tutorial_kind = "spawn_object"
+	preview_changes_world = TRUE
 	kind_name = "Spawn object"
 	kind_desc = "Creates items, structures or machines on a marker's tile or in a zone, like the Creative panel's Spawn tab."
 	kind_example = "e.g. three bruise packs appear on the medbay table."
@@ -94,10 +95,8 @@
 	var/copies = ispath(path, /obj/item/stack) ? 1 : clamp(amount, 1, BABYLON_CREATIVE_MAX_COPIES)
 	if(!ispath(path, /obj/item/stack) && amount > copies)
 		run.note_action(src, "made [copies] copies, not [amount]: at most [BABYLON_CREATIVE_MAX_COPIES] copies of one object per run of the action (only a stack can be bigger).")
-	if(run.spawned_count + copies > BABYLON_TUTORIAL_SPAWN_RUN_CAP)
-		run.note_action(src, "this run already spawned [run.spawned_count] objects (at most [BABYLON_TUTORIAL_SPAWN_RUN_CAP] per run): nothing more was spawned.")
+	if(!run.claim_spawns(copies, src))
 		return
-	run.spawned_count += copies
 	for(var/copy in 1 to copies)
 		var/turf/spot = pick(free)
 		if(ispath(path, /obj/item/stack))
@@ -105,6 +104,17 @@
 			new path(spot, clamp(amount, 1, max(1, initial(stack_type.max_amount))), FALSE)
 		else
 			new path(spot)
+
+/// Counts count new objects of action against the run's cap (BABYLON_TUTORIAL_SPAWN_RUN_CAP): every
+/// action that makes objects (Spawn object, Give item, a Set inventory loadout) shares it, so a
+/// repeating trigger can't fill the world. FALSE, with a note for the builder, when they would go
+/// over it: the action then makes nothing.
+/datum/babylon_tutorial_run/proc/claim_spawns(count, obj/babylon_tutorial/action/action)
+	if(spawned_count + count > BABYLON_TUTORIAL_SPAWN_RUN_CAP)
+		note_action(action, "this run already made [spawned_count] objects (at most [BABYLON_TUTORIAL_SPAWN_RUN_CAP] per run): nothing more was made.")
+		return FALSE
+	spawned_count += count
+	return TRUE
 
 /obj/babylon_tutorial/action/spawn_object/summary()
 	var/count = setting("count") || 1
@@ -115,6 +125,7 @@
 
 /obj/babylon_tutorial/action/remove_objects
 	tutorial_kind = "remove_objects"
+	preview_changes_world = TRUE
 	kind_name = "Remove objects"
 	kind_desc = "Deletes objects of a type, or every loose item, on a marker's tile or in a zone. Never players, mobs, tutorial objects or protected objects."
 	kind_example = "e.g. clear the used gauze off the floor before the next lesson."
@@ -207,6 +218,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_event_times)
 
 /obj/babylon_tutorial/action/start_event
 	tutorial_kind = "start_event"
+	preview_changes_world = TRUE
 	kind_name = "Start event"
 	kind_desc = "Starts a round event, like the Creative panel's Events tab (the same list and the same rules)."
 	kind_example = "e.g. a meteor shower once the shields lesson starts."
@@ -271,6 +283,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_event_times)
 
 /obj/babylon_tutorial/action/door
 	tutorial_kind = "door"
+	preview_changes_world = TRUE
 	kind_name = "Door / container"
 	kind_desc = "Opens, closes, locks or unlocks airlocks, windoors, shutters and blast doors, lockers, closets and crates."
 	kind_example = "e.g. unbolt the medbay door once the players have their gear."

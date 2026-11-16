@@ -176,6 +176,8 @@ export type ObjectData = {
   moving?: boolean;
   /** Hidden in this builder's wand view (only their view; it still works). */
   hidden?: boolean;
+  /** Actions: why Preview is off (the action changes the world for everyone), or null. */
+  preview_refusal?: string | null;
   /** The builder's world-edit selection (objects with a zone or a stored area). */
   area_selection?: AreaSelection | null;
   gate?: GateLive;
@@ -312,7 +314,11 @@ export const BabylonTutorialObject = () => {
               <Stack.Item>
                 <Button
                   icon="eye"
-                  tooltip="Run this action now for you only, instead of for every player (an NPC it changes changes for everyone)."
+                  disabled={!!data.preview_refusal}
+                  tooltip={
+                    data.preview_refusal ||
+                    'Run this action now for you only, instead of for every player.'
+                  }
                   onClick={() => act('preview')}
                 >
                   Preview

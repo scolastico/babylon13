@@ -287,6 +287,7 @@
 
 /obj/babylon_tutorial/action/spawn_npc
 	tutorial_kind = "spawn_npc"
+	preview_changes_world = TRUE
 	kind_name = "Spawn NPC"
 	kind_desc = "Makes an NPC spawner create its NPC again. The new NPC replaces the old one for everyone in the world."
 	kind_example = "e.g. a second patient appears after the first one is treated."
@@ -329,7 +330,10 @@
 	var/path = text2path(setting("item_type"))
 	if(!ispath(path, /obj/item) || !babylon_tutorial_type_allowed(path, null))
 		return
-	for(var/mob/living/player as anything in run.players())
+	var/list/players = run.players()
+	if(!run.claim_spawns(length(players), src))
+		return
+	for(var/mob/living/player as anything in players)
 		var/obj/item/gift = new path(get_turf(player))
 		player.put_in_hands(gift)
 
@@ -435,11 +439,15 @@
 	var/datum/babylon_tutorial_run/run
 	var/text
 	var/test_run
+	/// A Preview's Complete: the screen only closes. "Run again" would start the world's run for
+	/// everyone, while the builder only pressed Preview (review B-I-1).
+	var/preview
 
 /datum/babylon_tutorial_complete/New(datum/babylon_tutorial_run/run, text)
 	src.run = run
 	src.text = text
 	test_run = run.test_run
+	preview = run.preview
 
 /datum/babylon_tutorial_complete/ui_state(mob/user)
 	return GLOB.always_state
@@ -454,6 +462,7 @@
 	return list(
 		"text" = babylon_tutorial_fill_text(text, user),
 		"test_run" = !!test_run,
+		"preview" = !!preview,
 		"title" = GLOB.babylon_world?.tutorial_title,
 	)
 
@@ -474,7 +483,7 @@
 				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the Babylon tab."))
 			return TRUE
 		if("again")
-			if(!test_run || !isliving(usr))
+			if(!test_run || preview || !isliving(usr))
 				return FALSE
 			ui.close()
 			babylon_tutorial_begin(TRUE, TRUE, run?.reset_npcs, list(usr))
@@ -489,6 +498,13 @@
 		babylon_tutorial_field("apply_to", "Apply to", "choice", "players", "Every player: each living player in the world (a revive brings back the dead ones). An NPC: the NPC of an NPC spawner.", options = babylon_tutorial_options(list("players" = "Every player", "npc" = "An NPC"))),
 		babylon_tutorial_field("target", "NPC spawner", "id", "", "Its NPC is [verb_text].", filter = list("npc"), when = list("apply_to" = list("npc")), required = TRUE),
 	)
+
+/// "Apply to: an NPC" changes the shared NPC for everyone: no Preview (players stay the builder's).
+/obj/babylon_tutorial/action/harm/preview_refusal()
+	return setting("apply_to") == "npc" ? BABYLON_TUTORIAL_PREVIEW_WORLD_TEXT : ..()
+
+/obj/babylon_tutorial/action/heal/preview_refusal()
+	return setting("apply_to") == "npc" ? BABYLON_TUTORIAL_PREVIEW_WORLD_TEXT : ..()
 
 /// The NPC an action with "Apply to" targets, if it exists.
 /obj/babylon_tutorial/action/proc/target_npc()

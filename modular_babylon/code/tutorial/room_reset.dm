@@ -19,6 +19,7 @@
 
 /obj/babylon_tutorial/action/paste_area
 	tutorial_kind = "paste_area"
+	preview_changes_world = TRUE
 	kind_name = "Paste area"
 	kind_desc = "Pastes a stored copy of an area (or a live copy of another area) over a room: puts a room back the way it was."
 	kind_example = "e.g. reset the medbay after the lesson, so the next player finds it as you built it."
@@ -160,19 +161,21 @@
 /proc/babylon_tutorial_paste_area(obj/babylon_tutorial/action/paste_area/action, datum/babylon_tutorial_run/run)
 	// One area operation at a time in the world: wait for another builder's to end.
 	var/deadline = world.time + BABYLON_TUTORIAL_PASTE_WAIT
-	while(babylon_area_locked_by_other())
+	// A save in progress counts the same: the paste waits for it (area session begin() refuses).
+	while(babylon_area_locked_by_other() || GLOB.babylon_save?.busy)
 		if(world.time > deadline)
 			if(!QDELETED(run) && !QDELETED(action))
-				run.note_action(action, "another area operation ran for more than [BABYLON_TUTORIAL_PASTE_WAIT / (1 SECONDS)] seconds, so nothing was pasted.")
+				run.note_action(action, "another area operation or a save ran for more than [BABYLON_TUTORIAL_PASTE_WAIT / (1 SECONDS)] seconds, so nothing was pasted.")
 			return
 		sleep(1 SECONDS)
 	if(QDELETED(run) || QDELETED(action))
 		return
 	var/datum/babylon_area_session/session = new("tutorial:[action.tutorial_id]")
 	session.rate_limited = FALSE
-	if(session.begin())
-		// Taken in the same tick by someone else: try again on the next fire.
-		run.note_action(action, "another area operation started at the same moment, so nothing was pasted.")
+	var/refusal = session.begin()
+	if(refusal)
+		// Taken in the same tick by someone else (or a save began): nothing happens this time.
+		run.note_action(action, "it could not start ([refusal]), so nothing was pasted.")
 		return
 	var/list/outcome = list()
 	babylon_tutorial_paste_area_steps(action, outcome)

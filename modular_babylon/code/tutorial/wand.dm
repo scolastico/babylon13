@@ -858,6 +858,9 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		"moving" = !!wand && wand.moving_object() == object,
 		"hidden" = babylon_tutorial_is_hidden(babylon_tutorial_view_key(user), object),
 	)
+	if(istype(object, /obj/babylon_tutorial/action))
+		var/obj/babylon_tutorial/action/action = object
+		data["preview_refusal"] = action.preview_refusal()
 	if(babylon_tutorial_has_field_type(object.type, list("area_clip", "zone")))
 		// The builder's world-edit selection, for "Store selection" and "Use my selection".
 		data["area_selection"] = babylon_area_selection_view(babylon_area_session(user?.ckey || REF(user)))
@@ -1020,6 +1023,12 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		if("preview")
 			if(istype(object, /obj/babylon_tutorial/action))
 				var/obj/babylon_tutorial/action/previewed = object
+				// An action that changes a place or a shared NPC is never previewed: the preview is
+				// for its builder only, and the change would reach everyone (review B-I-1).
+				var/refusal = previewed.preview_refusal()
+				if(refusal)
+					set_notice(refusal, FALSE)
+					return TRUE
 				// Always a throwaway run for this builder only: it never touches the world's run,
 				// and no triggers listen.
 				var/datum/babylon_tutorial_run/run = new(TRUE, user)

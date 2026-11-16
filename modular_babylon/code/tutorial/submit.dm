@@ -173,6 +173,10 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 	var/datum/babylon_save/session = GLOB.babylon_save
 	if(session?.draining || session?.round_ending)
 		return "stopping"
+	// A running test run has changed the world (doors opened, items used, rooms pasted): the
+	// snapshot would publish that state (review B-M1). Stopping a run never resets the world.
+	if(babylon_tutorial_current_run())
+		return "test_running"
 	var/turf/start = babylon_tutorial_marker_turf("start")
 	if(!start)
 		return "no_start"
@@ -190,6 +194,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 			return "Needs a start marker: place a marker with the id \"start\" (tutorial wand) where players begin."
 		if("stopping")
 			return "This world is stopping; try again once it has started again."
+		if("test_running")
+			return "Stop the test run first (wand: Test run). The world is saved as it is now, so check that it is back to its starting state."
 		if("start_unsaved")
 			return "The start marker is on a level that is not saved: move it onto the station or the map's own levels."
 		if("busy")

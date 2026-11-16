@@ -92,6 +92,31 @@
 			found += inner
 	return found
 
+/// What must come out of thing (an item) before it is deleted because it holds a player: a pAI card
+/// with its pAI, an MMI or a brain with its brainmob, a held mob. Mobs are never deleted with what
+/// holds them (babylon_tutorial_removable() has the same rule for Remove objects). From a bag (an
+/// item with storage) only the part that holds the player comes out, whole; any other item that
+/// holds one (the card, the MMI itself) is kept whole: the list then holds thing itself.
+/proc/babylon_tutorial_player_holders(atom/movable/thing)
+	var/list/found = list()
+	for(var/mob/living/inner in thing.get_all_contents())
+		if(inner == thing || !babylon_area_is_player(inner))
+			continue
+		var/atom/movable/child = inner
+		while(ismovable(child.loc) && child.loc != thing)
+			child = child.loc
+		found |= thing.atom_storage ? child : thing
+	return found
+
+/// Takes what holds a player out of item (babylon_tutorial_player_holders()) onto the floor at
+/// tile. Returns TRUE when item itself holds one and so must not be deleted.
+/proc/babylon_tutorial_rescue_players(obj/item/item, turf/tile)
+	for(var/atom/movable/holder as anything in babylon_tutorial_player_holders(item))
+		if(holder == item)
+			return TRUE
+		holder.forceMove(tile)
+	return FALSE
+
 /// A value JSON keeps as it is (null, a number, a text, or a list of those): settings that hold
 /// anything else (a path, a reference) are left out of a loadout.
 /proc/babylon_tutorial_json_safe(value, depth = 0)
@@ -348,7 +373,9 @@
 		for(var/obj/item/tool as anything in babylon_tutorial_kept_inside(item))
 			tool.forceMove(get_turf(body))
 			body.put_in_hands(tool)
-		if(drop_old)
+		// A player inside it (a pAI in its card, a brain in an MMI) is never deleted with it: what
+		// holds them goes to the floor; an item that holds one itself is dropped, not deleted.
+		if(drop_old || babylon_tutorial_rescue_players(item, get_turf(body)))
 			body.dropItemToGround(item, TRUE)
 		else
 			body.temporarilyRemoveItemFromInventory(item, TRUE)
@@ -459,10 +486,17 @@
 	var/mode = setting("inventory")
 	var/list/loadout = setting("loadout")
 	var/drop_old = setting("old_items") == "drop"
+	// A loadout's items count against the run's cap on made objects (world_actions.dm).
+	var/per_body = 0
+	if(mode == "loadout")
+		for(var/list/entry in loadout)
+			per_body += 1 + babylon_tutorial_loadout_inside(entry)
 	if(setting("apply_to") == "npc")
 		var/mob/living/npc = target_npc()
 		if(!npc)
 			run.note_action(src, "[setting("target") || "?"] has no NPC.")
+			return
+		if(!run.claim_spawns(per_body, src))
 			return
 		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_find(setting("target"))
 		for(var/obj/item/item as anything in babylon_tutorial_set_inventory(npc, mode, loadout, drop_old))
@@ -472,7 +506,10 @@
 				if(istype(spawner))
 					spawner.outfit_items += WEAKREF(part)
 		return
-	for(var/mob/living/player as anything in run.players())
+	var/list/players = run.players()
+	if(!run.claim_spawns(per_body * length(players), src))
+		return
+	for(var/mob/living/player as anything in players)
 		babylon_tutorial_set_inventory(player, mode, loadout, drop_old)
 
 /obj/babylon_tutorial/action/inventory/summary()
@@ -488,3 +525,7 @@
 
 #undef BABYLON_TUTORIAL_LOADOUT_MAX
 #undef BABYLON_TUTORIAL_LOADOUT_NESTED_MAX
+
+/// "Apply to: an NPC" changes the shared NPC for everyone: no Preview (players stay the builder's).
+/obj/babylon_tutorial/action/inventory/preview_refusal()
+	return setting("apply_to") == "npc" ? BABYLON_TUTORIAL_PREVIEW_WORLD_TEXT : ..()

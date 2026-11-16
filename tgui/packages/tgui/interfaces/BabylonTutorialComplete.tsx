@@ -7,6 +7,8 @@ import { Window } from '../layouts';
 export type CompleteData = {
   text: string;
   test_run: boolean;
+  /** A Preview's Complete: only Close (Run again would restart the world's run for everyone). */
+  preview?: boolean;
   title: string | null;
 };
 
@@ -41,12 +43,15 @@ export const BabylonTutorialComplete = () => {
               {data.test_run ? (
                 <>
                   <Box color="label" textAlign="center" mb={1}>
-                    This was a test run: players get a "Back to lobby" button
-                    here.
+                    {data.preview
+                      ? 'This was a preview, for you only: players get a "Back to lobby" button here.'
+                      : 'This was a test run: players get a "Back to lobby" button here.'}
                   </Box>
-                  <Button icon="rotate-left" onClick={() => act('again')}>
-                    Run again
-                  </Button>
+                  {!data.preview && (
+                    <Button icon="rotate-left" onClick={() => act('again')}>
+                      Run again
+                    </Button>
+                  )}
                   <Button icon="check" onClick={() => act('close')}>
                     Close
                   </Button>
