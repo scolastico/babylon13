@@ -30,6 +30,38 @@ class QuirkHint(unittest.TestCase):
         with patch("build_dme.subprocess.run", fake_run), patch("sys.stdout"):
             self.assertEqual(build_dme.main(["x.dme"]), 0)
 
+    def run_main(self, environments, output, environ=None, returncode=0):
+        from unittest.mock import patch
+        import subprocess
+        ran = []
+        def fake_run(command, **kwargs):
+            ran.append(command[-1])
+            return subprocess.CompletedProcess(command, returncode, output, "")
+        with patch("build_dme.subprocess.run", fake_run), patch("sys.stdout"):
+            return build_dme.main(environments, environ or {}), ran
+
+    QUIRK_OUTPUT = ("code/x.dm:3:warning (unused_var): plant_smudge: variable defined but not used\n"
+                    "babylon.dmb - 0 errors, 1 warning")
+
+    def test_quirk_signature_fails_the_build(self):
+        status, ran = self.run_main(["babylon.dme", "babylon-station.dme"], self.QUIRK_OUTPUT)
+        self.assertEqual(status, 1)
+        self.assertEqual(ran, ["babylon.dme"])
+
+    def test_upstream_build_only_gets_the_hint(self):
+        status, ran = self.run_main(["tgstation.dme"], self.QUIRK_OUTPUT)
+        self.assertEqual(status, 0)
+
+    def test_escape_hatch(self):
+        status, _ = self.run_main(["babylon.dme"], self.QUIRK_OUTPUT, {"BABYLON_ALLOW_SLOT_QUIRK": "1"})
+        self.assertEqual(status, 0)
+        status, _ = self.run_main(["babylon.dme"], self.QUIRK_OUTPUT, {"BABYLON_ALLOW_SLOT_QUIRK": "yes"})
+        self.assertEqual(status, 1)
+
+    def test_compiler_failure_keeps_its_code(self):
+        status, _ = self.run_main(["babylon.dme"], "x.dm:3:error: foo: undefined var", returncode=2)
+        self.assertEqual(status, 2)
+
     def test_other_errors_are_not_the_quirk(self):
         self.assertEqual(build_dme.quirk_lines("x.dm:3:error: foo: undefined var"), [])
 

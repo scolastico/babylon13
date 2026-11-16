@@ -35,7 +35,10 @@ RUN . ./dependencies.sh \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates icons \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates modular_zubbers/icons \
  && python3 tools/build_bt.py
-# build_dme.py runs DreamMaker and explains the BYOND 516.1686 slot quirk when it shows up.
+# build_dme.py runs DreamMaker and explains the BYOND 516.1686 slot quirk when it shows up; the
+# quirk fails the build (a possibly miscompiled image is never shipped; see UPSTREAM_HOOKS.md).
+# --build-arg BABYLON_ALLOW_SLOT_QUIRK=1 is the escape hatch for a checked, real unused local.
+ARG BABYLON_ALLOW_SLOT_QUIRK=
 RUN python3 tools/babylon/build_dme.py babylon.dme babylon-station.dme babylon-lobby.dme
 RUN python3 container/stage-runtime.py /src /opt/babylon
 

@@ -5,8 +5,12 @@ Usage: python3 tools/babylon/build_dme.py babylon.dme [babylon-station.dme ...]
 Runs `DreamMaker -DCBT <dme>` for each environment in turn, passes its output through and stops at
 the first one that fails. When the output has the signature of the compiler quirk documented in
 modular_babylon/UPSTREAM_HOOKS.md ("BYOND 516.1686 slot quirk"): a proc's static variable that is
-"invalid", or an "unused_var" warning, it prints the recipe for it.
+"invalid", or an "unused_var" warning, it prints the recipe for it and fails (exit 1): such a
+build may be miscompiled and must not be shipped. Upstream's own tgstation.dme only gets the hint.
+A maintainer who checked that the warning is a real unused local can set
+BABYLON_ALLOW_SLOT_QUIRK=1 to let the build pass anyway.
 """
+import os
 import re
 import subprocess
 import sys
@@ -30,7 +34,14 @@ def quirk_lines(output):
     return [line for line in output.splitlines() if QUIRK.search(line)]
 
 
-def main(environments):
+# Environments whose quirk signature is only reported: upstream's build is not shipped.
+INFORMATIONAL = {"tgstation.dme"}
+ALLOW_ENV = "BABYLON_ALLOW_SLOT_QUIRK"
+
+
+def main(environments, environ=None):
+    environ = os.environ if environ is None else environ
+    allowed = environ.get(ALLOW_ENV) == "1"
     status = 0
     for environment in environments:
         # DreamMaker output is not always UTF-8; never fail a build over how its log decodes.
@@ -38,10 +49,23 @@ def main(environments):
                                 encoding="utf-8", errors="replace")
         output = result.stdout + result.stderr
         sys.stdout.write(output)
+        if result.returncode:
+            if quirk_lines(output):
+                sys.stdout.write(RECIPE)
+            status = result.returncode
+            break
         if quirk_lines(output):
             sys.stdout.write(RECIPE)
-        if result.returncode:
-            status = result.returncode
+            if environment in INFORMATIONAL:
+                continue
+            if allowed:
+                sys.stdout.write("Babylon: %s=1 is set; %s passes despite the quirk's signature.\n"
+                                 % (ALLOW_ENV, environment))
+                continue
+            sys.stdout.write("Babylon: %s failed: the slot quirk's signature means it may be miscompiled "
+                             "(set %s=1 only after checking it is a real unused local).\n"
+                             % (environment, ALLOW_ENV))
+            status = 1
             break
     return status
 
