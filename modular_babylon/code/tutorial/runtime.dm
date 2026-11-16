@@ -32,11 +32,9 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		started_spawners = TRUE
 		babylon_tutorial_spawn_start_npcs()
 	refresh_hooks()
+	// No try: a wand whose view fails ends only its own sync_view(); the others still sync.
 	for(var/obj/item/babylon_tutorial_wand/wand as anything in GLOB.babylon_tutorial_wands)
-		try
-			wand.sync_view()
-		catch(var/exception/error)
-			babylon_loop_failed("tutorial wand view", error)
+		wand.sync_view()
 	// No try here: a deep stack_trace (an outfit, a revive) would unwind the whole step. A runtime
 	// ends only the proc it happens in; the next fire steps the run again.
 	if(run && !QDELETED(run))

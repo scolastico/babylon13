@@ -57,12 +57,12 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 
 /// Submits the world as a tutorial (after begin()). list("ok", "text") for the panel.
 /datum/babylon_tutorial_submissions/proc/submit(ckey, title, description)
-	var/list/result
-	try
-		result = submit_steps(ckey, title, description)
-	catch(var/exception/error)
-		result = list("ok" = FALSE, "text" = "Submitting failed: [error]")
-		log_world("BABYLON TUTORIAL: submitting failed: [error]")
+	// No try (a stack_trace deep in the save would unwind it half done): a step that is cut short
+	// returns null, and the lock is let go in any case.
+	var/list/result = submit_steps(ckey, title, description)
+	if(!islist(result))
+		result = list("ok" = FALSE, "text" = "Submitting failed; nothing was submitted. Try again later.")
+		log_world("BABYLON TUTORIAL: submitting was cut short.")
 	busy_ckey = null
 	return result
 
@@ -94,12 +94,11 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 
 /// Saves the edit world back to its pending tutorial (after begin()). list("ok", "text").
 /datum/babylon_tutorial_submissions/proc/save_back(ckey, is_admin)
-	var/list/result
-	try
-		result = save_back_steps(ckey, is_admin)
-	catch(var/exception/error)
-		result = list("ok" = FALSE, "text" = "Saving back failed: [error]")
-		log_world("BABYLON TUTORIAL: saving back failed: [error]")
+	// No try: see submit().
+	var/list/result = save_back_steps(ckey, is_admin)
+	if(!islist(result))
+		result = list("ok" = FALSE, "text" = "Saving back failed. Try again later.")
+		log_world("BABYLON TUTORIAL: saving back was cut short.")
 	busy_ckey = null
 	return result
 

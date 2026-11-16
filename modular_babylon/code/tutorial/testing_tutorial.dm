@@ -1376,6 +1376,83 @@
 		var/obj/babylon_tutorial/action/door/nothing = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_nothing", list("door_action" = "open", "place" = "zone"), made)
 		result["unpicked_zone_warned"] = !!nothing.issues()["zone"]
 
+		// Fix round 1, I3: a spawn-dead corpse never decays: still defibbable after a long wait,
+		// and Heal / revive brings it back. A normal corpse's organs do decay (the control).
+		for(var/i in 1 to 5)
+			for(var/obj/item/organ/organ as anything in corpse.organs)
+				organ.on_death(600)
+		corpse.timeofdeath -= 10 MINUTES
+		var/obj/item/organ/heart/corpse_heart = corpse.get_organ_by_type(/obj/item/organ/heart)
+		result["corpse_organs_never_decay"] = corpse_heart && !(corpse_heart.organ_flags & ORGAN_FAILING) && !corpse_heart.damage
+		result["corpse_stays_defibbable"] = corpse.can_defib() == DEFIB_POSSIBLE
+		var/mob/living/carbon/human/ordinary = new(locate(base.x + 6, base.y + 3, base.z))
+		made += ordinary
+		ordinary.death()
+		var/obj/item/organ/heart/ordinary_heart = ordinary.get_organ_by_type(/obj/item/organ/heart)
+		for(var/i in 1 to 3)
+			ordinary_heart?.on_death(600)
+		result["control_ordinary_corpse_decays"] = ordinary_heart?.damage > 0
+		var/obj/babylon_tutorial/action/heal/revive_corpse = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "wa_revive_corpse", list("apply_to" = "npc", "target" = "wa_corpse", "heal" = "revive"), made)
+		run.perform(null, revive_corpse)
+		result["corpse_revived"] = corpse.stat != DEAD
+
+		// Fix round 1, I1 and M1: a builder's wand inside a bag survives Set inventory, a
+		// builder tool on the floor survives Remove objects, and a wand is never in a loadout.
+		var/mob/living/carbon/human/keeper = new(locate(base.x + 7, base.y + 1, base.z))
+		made += keeper
+		var/obj/item/storage/backpack/keeper_pack = new(keeper)
+		keeper.equip_to_slot_or_del(keeper_pack, ITEM_SLOT_BACK)
+		var/obj/item/packed_wand = new /obj/item/babylon_tutorial_wand(keeper_pack)
+		made += packed_wand
+		var/list/keeper_capture = babylon_tutorial_capture_loadout(keeper)
+		var/obj/babylon_tutorial/action/inventory/keeper_dress = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "wa_keeper", list(), made)
+		keeper_dress.set_setting("loadout", keeper_capture["loadout"])
+		var/list/stored_keeper = keeper_dress.setting("loadout")
+		var/list/stored_pack = length(stored_keeper) ? stored_keeper[1] : null
+		result["wand_never_in_loadout"] = stored_pack && !length(stored_pack["contents"]) && !!keeper_dress.set_setting("loadout", list(list("type" = "[/obj/item/babylon_tutorial_wand]", "hand" = 1)))
+		run.add_player(keeper)
+		run.perform(null, strip)
+		result["packed_wand_survives_clear"] = QDELETED(keeper_pack) && !QDELETED(packed_wand) && (keeper.is_holding(packed_wand) || packed_wand.loc == get_turf(keeper))
+		var/obj/item/floor_wand = new /obj/item/babylon_tutorial_wand(clean_tile)
+		made += floor_wand
+		var/obj/item/storage/backpack/floor_pack = new(clean_tile)
+		made += floor_pack
+		var/obj/item/bagged_wand = new /obj/item/babylon_tutorial_wand(floor_pack)
+		made += bagged_wand
+		run.perform(null, remove_loose)
+		result["remove_keeps_builder_tools"] = !QDELETED(floor_wand) && !QDELETED(floor_pack) && !QDELETED(bagged_wand)
+
+		// Fix round 1, I2: the Doors option. A wall across the floor with one restricted airlock.
+		for(var/x in base.x to base.x + 7)
+			var/turf/wall_tile = locate(x, base.y + 1, base.z)
+			if(x != door_tile.x)
+				babylon_area_change_turf(wall_tile, /turf/closed/wall, NONE)
+		airlock.req_access = list(ACCESS_MEDICAL)
+		airlock.unbolt()
+		if(!airlock.density)
+			INVOKE_ASYNC(airlock, TYPE_PROC_REF(/obj/machinery/door, close))
+			sleep(2 SECONDS)
+		result["door_access_modes"] = !length(babylon_tutorial_npc_access(walker, "public")) && (ACCESS_MEDICAL in babylon_tutorial_npc_access(walker, "all")) && !length(babylon_tutorial_npc_access(walker, "id"))
+		walker.forceMove(locate(door_tile.x, base.y, base.z))
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(door_tile.x, base.y + 2, base.z), "wa_beyond", list("target" = "tile"), made)
+		var/obj/babylon_tutorial/action/move_npc/walk_public = babylon_tutorial_test_place(/obj/babylon_tutorial/action/move_npc, base, "wa_public", list("target" = "wa_walker", "destination" = "wa_beyond", "doors" = "public"), made)
+		var/obj/babylon_tutorial/action/move_npc/walk_all = babylon_tutorial_test_place(/obj/babylon_tutorial/action/move_npc, base, "wa_all", list("target" = "wa_walker", "destination" = "wa_beyond", "doors" = "all"), made)
+		run.perform(null, walk_public)
+		var/datum/babylon_tutorial_npc_move/public_walk = babylon_tutorial_test_walk(run, walker, 3)
+		result["public_walk_avoids_restricted_door"] = airlock.density && get_turf(walker) != door_tile && (!public_walk || !(door_tile in public_walk.path))
+		walker.forceMove(locate(door_tile.x, base.y, base.z))
+		run.perform(null, walk_all)
+		for(var/i in 1 to 12)
+			if(!run.movers[walker])
+				break
+			var/datum/babylon_tutorial_npc_move/all_walk = run.movers[walker]
+			all_walk.walk_step()
+			sleep(5)
+		if(airlock.hasPower())
+			result["all_doors_walk_through"] = get_turf(walker) == locate(door_tile.x, base.y + 2, base.z)
+		else
+			result["all_doors_unpowered_noted"] = findtext(run.action_notes[walk_all], "no power") != 0
+
 		// Ending the run drops its notes and its walks.
 		babylon_tutorial_end()
 		result["end_clears_notes"] = !walk_far.issues()["live"]

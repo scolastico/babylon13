@@ -294,20 +294,26 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			log_world("BABYLON AREA: no free tile for a player in a pasted wall at [tile.x],[tile.y],[tile.z]; it becomes plating.")
 			babylon_area_change_turf(tile, /turf/open/floor/plating, babylon_area_air_flags(tile))
 
-/// Deletes one thing; a runtime in its Destroy is logged and does not stop the operation.
-/proc/babylon_area_delete(datum/thing)
-	try
-		qdel(thing)
-	catch(var/exception/failure)
-		log_world("BABYLON AREA: deleting [thing.type] failed: [failure] ([failure.file]:[failure.line])")
+// No try in the area tools (and nothing that calls them): an uncaught runtime or stack_trace()
+// ends only the proc it happens in, and its caller goes on. A try would instead unwind every
+// proc between the error and the try: one stack_trace() deep in a Destroy() or a reconcile step
+// would abort the rest of that delete, turf change or paste and leave it half done. Each step
+// that may fail is a proc of its own that returns TRUE at its end; a falsy return means it was
+// cut short, and the caller logs it and goes on. Guarded by test_area_tools_no_try.
 
-/// Changes one turf; a runtime is logged and does not stop the operation.
+/// Deletes one thing.
+/proc/babylon_area_delete(datum/thing)
+	qdel(thing)
+
+/// Changes one turf. Returns the turf at that spot (also when the change was cut short).
 /proc/babylon_area_change_turf(turf/tile, path, flags)
-	try
-		return tile.ChangeTurf(path, null, flags)
-	catch(var/exception/failure)
-		log_world("BABYLON AREA: changing [tile.type] at [tile.x],[tile.y] to [path] failed: [failure] ([failure.file]:[failure.line])")
-	return tile
+	var/x = tile.x
+	var/y = tile.y
+	var/z = tile.z
+	var/turf/changed = tile.ChangeTurf(path, null, flags)
+	if(!changed)
+		log_world("BABYLON AREA: changing the turf at [x],[y],[z] to [path] was cut short.")
+	return changed || locate(x, y, z)
 
 /// A tile counts as empty for "Only empty tiles": not a wall, no mobs, nothing on it but things
 /// under the floor (pipes, cables, lattices) and hidden objects.
@@ -365,13 +371,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	for(var/obj/machinery/atmospherics/machine as anything in machines)
 		if(QDELETED(machine))
 			continue
-		try
-			machine.atmos_init()
-			if(istype(machine, /obj/machinery/atmospherics/pipe/multiz))
-				machine.pipeline_expansion()
-		catch(var/exception/init_failure)
+		if(!babylon_area_pipe_init(machine))
 			GLOB.babylon_area_link_failures++
-			log_world("BABYLON AREA: setting up [machine.type] failed: [init_failure] ([init_failure.file]:[init_failure.line])")
+			log_world("BABYLON AREA: setting up [machine.type] was cut short.")
 		rebuild |= machine
 	for(var/obj/machinery/atmospherics/machine as anything in machines)
 		if(QDELETED(machine))
@@ -379,12 +381,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		for(var/obj/machinery/atmospherics/node in machine.nodes.Copy())
 			if(loaded[node])
 				continue
-			if(!QDELETED(node) && get_turf(node))
-				try
-					node.atmos_init()
-				catch(var/exception/failure)
-					GLOB.babylon_area_link_failures++
-					log_world("BABYLON AREA: connecting [machine.type] to [node.type] failed: [failure] ([failure.file]:[failure.line])")
+			if(!QDELETED(node) && get_turf(node) && !babylon_area_pipe_init(node, FALSE))
+				GLOB.babylon_area_link_failures++
+				log_world("BABYLON AREA: connecting [machine.type] to [node.type] was cut short.")
 			if(!QDELETED(node) && (machine in node.nodes))
 				nets |= node.return_pipenets()
 				rebuild |= node
@@ -394,20 +393,29 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 					machine.nodes[index] = null
 					machine.update_appearance()
 	for(var/datum/pipeline/net as anything in nets)
-		if(net && !QDELETED(net))
-			try
-				if(!length(net.members))
-					for(var/obj/machinery/atmospherics/components/device as anything in net.other_atmos_machines.Copy())
-						device.nullify_pipenet(net)
-						rebuild |= device
-				else
-					qdel(net)
-			catch(var/exception/drop_failure)
-				GLOB.babylon_area_link_failures++
-				log_world("BABYLON AREA: dropping a pipenet on the paste edge failed: [drop_failure] ([drop_failure.file]:[drop_failure.line])")
+		if(net && !QDELETED(net) && !babylon_area_drop_pipenet(net, rebuild))
+			GLOB.babylon_area_link_failures++
+			log_world("BABYLON AREA: dropping a pipenet on the paste edge was cut short.")
 	for(var/obj/machinery/atmospherics/machine as anything in rebuild)
 		if(!QDELETED(machine))
 			SSair.add_to_rebuild_queue(machine)
+
+/// Sets up one pipe or device (multi-z pipes also expand). TRUE when it got to the end.
+/proc/babylon_area_pipe_init(obj/machinery/atmospherics/machine, expand = TRUE)
+	machine.atmos_init()
+	if(expand && istype(machine, /obj/machinery/atmospherics/pipe/multiz))
+		machine.pipeline_expansion()
+	return TRUE
+
+/// Lets go of a pipenet on the paste edge (step 3 above). TRUE when it got to the end.
+/proc/babylon_area_drop_pipenet(datum/pipeline/net, list/rebuild)
+	if(!length(net.members))
+		for(var/obj/machinery/atmospherics/components/device as anything in net.other_atmos_machines.Copy())
+			device.nullify_pipenet(net)
+			rebuild |= device
+	else
+		qdel(net)
+	return TRUE
 
 /// Pipes in a rectangle that list a pipe which does not list them back (tests).
 /proc/babylon_area_one_way_nodes(list/rect)
@@ -652,12 +660,25 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			value = values.Copy()
 		thing.vars[field] = value
 	thing.update_appearance()
-	// As after a restore: lights, cameras, canister ports ... reconcile (persistence.dm). One
-	// object's reconcile step must not abort the rest of the paste.
-	try
-		thing.babylon_after_restore(settings)
-	catch(var/exception/error)
-		log_world("Babylon paste: [thing.type] could not be reconciled: [error] ([error?.file]:[error?.line])")
+	// As after a restore: lights, cameras, canister ports ... reconcile (persistence.dm). A step
+	// that fails ends only itself (no try: see babylon_area_delete).
+	if(!babylon_area_reconcile(thing, settings))
+		log_world("Babylon paste: reconciling [thing.type] was cut short.")
+
+/// babylon_after_restore() on a pasted object. TRUE when it got to the end.
+/proc/babylon_area_reconcile(obj/thing, list/settings)
+	thing.babylon_after_restore(settings)
+	return TRUE
+
+/// A pasted object's settings, reagents and contents. TRUE when it got to the end.
+/proc/babylon_area_restore_extra(obj/thing, list/extra)
+	if(extra["fields"])
+		babylon_area_restore_settings(thing, extra["fields"])
+	if(extra["reagents"])
+		babylon_area_restore_reagents(thing, extra["reagents"])
+	if(!isnull(extra["contents"]) && babylon_area_is_container(thing))
+		babylon_area_restore_contents(thing, extra["contents"])
+	return TRUE
 
 /// Closets and storage items: their contents are copied too.
 /proc/babylon_area_is_container(atom/thing)
@@ -962,11 +983,11 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/was_loading = GLOB.babylon_save.loading_saved_map
 	GLOB.babylon_save.loading_saved_map = TRUE
 	var/init_depth = length(SSatoms.babylon_initializing)
-	try
-		loaded = template.load(origin)
-	catch(var/exception/failure)
+	loaded = template.load(origin)
+	if(!loaded)
+		// Cut short (or refused): atoms it left half initialised must not count as initialising.
 		babylon_init_depth_restore(init_depth)
-		log_world("BABYLON AREA: loading the copy failed: [failure] ([failure.file]:[failure.line])")
+		log_world("BABYLON AREA: loading the copy at [origin.x],[origin.y],[origin.z] failed or was cut short.")
 	GLOB.babylon_save.loading_saved_map = was_loading
 	if(!loaded)
 		return "The copy could not be placed there."
@@ -979,15 +1000,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			thing.babylon_clip_tag = null
 			if(!extra)
 				continue
-			try
-				if(extra["fields"])
-					babylon_area_restore_settings(thing, extra["fields"])
-				if(extra["reagents"])
-					babylon_area_restore_reagents(thing, extra["reagents"])
-				if(!isnull(extra["contents"]) && babylon_area_is_container(thing))
-					babylon_area_restore_contents(thing, extra["contents"])
-			catch(var/exception/load_failure)
-				log_world("BABYLON AREA: restoring the contents of [thing.type] failed: [load_failure] ([load_failure.file]:[load_failure.line])")
+			if(!babylon_area_restore_extra(thing, extra))
+				log_world("BABYLON AREA: restoring the settings and contents of [thing.type] was cut short.")
 	babylon_area_resmooth(rect)
 	// Nothing pauses from here on: the ids are checked and the objects made in one go.
 	counts["moved"] += babylon_area_rescue(rect)
@@ -1279,15 +1293,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		return result(error, FALSE)
 	var/list/rect = selection.Copy()
 	var/tiles = selection_width() * selection_height()
-	try
-		error = babylon_area_too_full(rect)
-		if(!error)
-			clipboard = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5])
-			var/list/written = babylon_write_pieces(babylon_area_map_pieces(clipboard, FALSE), "data/babylon/clipboard/[world.port]-[ckey(key)].dmm")
-			if(written["error"])
-				log_world("BABYLON AREA: writing the clipboard file failed: [written["error"]]")
-	catch(var/exception/failure)
-		log_world("BABYLON AREA: copy failed: [failure] ([failure.file]:[failure.line])")
+	error = babylon_area_too_full(rect)
+	if(!error && !copy_steps(rect))
+		log_world("BABYLON AREA: copy was cut short.")
 		error = "The copy failed."
 	if(error)
 		finish()
@@ -1299,6 +1307,14 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return result("Copied [babylon_area_size_text(rect[3] - rect[1] + 1, rect[4] - rect[2] + 1)]: [clipboard.object_count] object\s[tutorial ? ", [tutorial] tutorial object\s" : ""]. [not_copied ? "[not_copied] " : ""]Press Paste, then click where it goes.", TRUE)
 
 /// "Not copied: 2 mobs (NPC spawners come along and make their NPC again), floor markings."
+/// Copy's work (no try: see babylon_area_delete). TRUE when it got to the end.
+/datum/babylon_area_session/proc/copy_steps(list/rect)
+	clipboard = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5])
+	var/list/written = babylon_write_pieces(babylon_area_map_pieces(clipboard, FALSE), "data/babylon/clipboard/[world.port]-[ckey(key)].dmm")
+	if(written["error"])
+		log_world("BABYLON AREA: writing the clipboard file failed: [written["error"]]")
+	return TRUE
+
 /proc/babylon_area_not_copied(datum/babylon_area_clip/clip)
 	var/list/parts = list()
 	if(clip.skipped_mobs)
@@ -1355,14 +1371,16 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/datum/babylon_area_clip/before
 	var/turf/origin = locate(rect[1], rect[2], rect[5])
 	var/list/counts = list()
-	try
-		error = babylon_area_too_full(rect)
-		if(!error)
-			before = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5], TRUE)
-			error = babylon_area_place(clipboard, origin, suffix_mode, custom_suffix, skip_space, "[world.port]-[ckey(key)]-paste", counts)
-	catch(var/exception/failure)
-		error = "The paste failed: [failure]"
-		log_world("BABYLON AREA: paste failed: [failure] ([failure.file]:[failure.line])")
+	var/list/steps = list()
+	error = babylon_area_too_full(rect)
+	if(!error)
+		if(paste_steps(rect, origin, suffix_mode, custom_suffix, skip_space, counts, steps))
+			error = steps["error"]
+		else
+			error = "The paste failed."
+			log_world("BABYLON AREA: paste was cut short.")
+	// The snapshot taken before it, also when the paste was cut short.
+	before = steps["before"]
 	var/tiles = clipboard.width * clipboard.height
 	if(error)
 		// Whatever was placed can still be taken back.
@@ -1387,6 +1405,17 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	return result("Pasted [size] at [rect[1]], [rect[2]][tutorial ? "; [tutorial] tutorial object\s[length(counts["suffix"]) ? " got the suffix [counts["suffix"]]" : " kept their ids"]" : ""][length(notes) ? "; [english_list(notes)]" : ""].[counts["id_note"] ? " [counts["id_note"]]" : ""] Click another tile to paste again, or press Stop pasting.", TRUE)
 
 /// Tutorial objects inside a rectangle.
+/// Paste's work (no try: see babylon_area_delete). Fills steps["before"] (the undo snapshot) as
+/// soon as it exists and steps["error"]. TRUE when it got to the end.
+/datum/babylon_area_session/proc/paste_steps(list/rect, turf/origin, suffix_mode, custom_suffix, skip_space, list/counts, list/steps)
+	steps["before"] = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5], TRUE)
+	if(!steps["before"])
+		// Without its Undo snapshot nothing is pasted.
+		steps["error"] = "The area could not be recorded for Undo, so nothing was pasted."
+		return TRUE
+	steps["error"] = babylon_area_place(clipboard, origin, suffix_mode, custom_suffix, skip_space, "[world.port]-[ckey(key)]-paste", counts)
+	return TRUE
+
 /proc/babylon_area_tutorial_in(list/rect)
 	var/list/found = list()
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
@@ -1407,11 +1436,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/list/rect = selection.Copy()
 	var/list/tiles = edge_only ? babylon_area_edge(rect[1], rect[2], rect[3], rect[4], rect[5]) : babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5])
 	var/list/journal = list("turfs" = list(), "made" = list())
-	var/list/counts
-	try
-		counts = babylon_area_put(tiles, path, only_empty, rect, journal)
-	catch(var/exception/failure)
-		log_world("BABYLON AREA: fill failed: [failure] ([failure.file]:[failure.line])")
+	// Null when it was cut short (no try: see babylon_area_delete); the journal keeps what changed.
+	var/list/counts = babylon_area_put(tiles, path, only_empty, rect, journal)
+	if(!counts)
+		log_world("BABYLON AREA: fill was cut short.")
 	var/verb_name = edge_only ? "Border" : "Fill"
 	var/size = babylon_area_size_text(rect[3] - rect[1] + 1, rect[4] - rect[2] + 1)
 	last_op = list("label" = "[verb_name] [size] with [material["name"]]", "kind" = "turfs", "turfs" = journal["turfs"], "made" = journal["made"], "rect" = rect)
@@ -1446,20 +1474,23 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/list/tiles = list()
 	var/locked = 0
 	var/list/counts
-	var/full
-	try
-		full = babylon_area_too_full(rect)
-		if(!full)
-			before = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5], TRUE)
-			for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
-				if(babylon_area_locked(tile))
-					locked++
-				else
-					tiles += tile
-			// Each tile is emptied (players moved out) and turned in one tick.
-			counts = babylon_area_clear_tiles(tiles, rect, path)
-	catch(var/exception/failure)
-		log_world("BABYLON AREA: clear failed: [failure] ([failure.file]:[failure.line])")
+	var/full = babylon_area_too_full(rect)
+	if(!full)
+		before = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5], TRUE)
+		if(!before)
+			// Without its Undo snapshot nothing is cleared.
+			full = "The area could not be recorded for Undo, so nothing was cleared."
+	if(!full)
+		for(var/turf/tile as anything in babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]))
+			if(babylon_area_locked(tile))
+				locked++
+			else
+				tiles += tile
+		// Each tile is emptied (players moved out) and turned in one tick. Null when it was cut
+		// short (no try: see babylon_area_delete).
+		counts = babylon_area_clear_tiles(tiles, rect, path)
+		if(!counts)
+			log_world("BABYLON AREA: clear was cut short.")
 	if(full)
 		finish()
 		return result(full, FALSE)
@@ -1496,48 +1527,15 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/note = ""
 	var/tiles = 0
 	var/occupied = 0
-	try
-		if(step["kind"] == "turfs")
-			for(var/datum/weakref/made_ref as anything in step["made"])
-				var/obj/made = made_ref.resolve()
-				if(made)
-					qdel(made)
-			var/list/records = step["turfs"]
-			tiles = length(records)
-			for(var/index in length(records) to 1 step -1)
-				BABYLON_AREA_TICK
-				var/list/record = records[index]
-				var/turf/tile = locate(record[1], record[2], record[3])
-				var/path = text2path(record[4])
-				if(!tile || !ispath(path, /turf))
-					continue
-				// Players who walked in since must not end up inside a wall again (moved out in the
-				// same tick as the change; one who can't be moved keeps the open tile).
-				if(ispath(path, /turf/closed) && step["rect"])
-					babylon_area_evict(list(tile), step["rect"], FALSE)
-					if(babylon_area_player_on(tile))
-						occupied++
-						continue
-				tile = babylon_area_change_turf(tile, path, CHANGETURF_INHERIT_AIR)
-				tile.setDir(record[5])
-				if(record[6] && isopenturf(tile))
-					var/turf/open/open = tile
-					open.return_air()?.copy_from(SSair.parse_gas_string(record[6]))
-					open.air_update_turf(TRUE)
-		else
-			var/datum/babylon_area_clip/before = step["clip"]
-			var/list/origin = step["origin"]
-			tiles = before.width * before.height
-			var/list/rect = list(origin[1], origin[2], origin[1] + before.width - 1, origin[2] + before.height - 1, origin[3])
-			// Ids taken since then (anywhere outside the area) would be duplicated: the restored
-			// objects get a suffix instead, applied to their links as on a paste.
-			var/list/counts = list()
-			error = babylon_area_place(before, locate(rect[1], rect[2], rect[5]), "keep", null, FALSE, "[world.port]-[ckey(key)]-undo", counts)
-			if(counts["id_note"])
-				note = " [counts["id_note"]]"
-	catch(var/exception/failure)
-		error = "Undo failed: [failure]"
-		log_world("BABYLON AREA: undo failed: [failure] ([failure.file]:[failure.line])")
+	var/list/out = list("tiles" = 0, "occupied" = 0, "note" = "")
+	if(undo_steps(step, out))
+		error = out["error"]
+	else
+		error = "Undo was cut short; part of it may be undone."
+		log_world("BABYLON AREA: undo was cut short.")
+	tiles = out["tiles"]
+	occupied = out["occupied"]
+	note = out["note"]
 	log_op(user, "undid: [step["label"]].")
 	finish(tiles)
 	if(error)
@@ -1545,6 +1543,49 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	if(occupied)
 		note += " [capitalize(babylon_area_occupied_text(occupied))] stayed open."
 	return result("Undone: [step["label"]].[note]", TRUE)
+
+/// Undo's work (no try: see babylon_area_delete). Fills out (tiles, occupied, note, error) as it
+/// goes. TRUE when it got to the end.
+/datum/babylon_area_session/proc/undo_steps(list/step, list/out)
+	if(step["kind"] == "turfs")
+		for(var/datum/weakref/made_ref as anything in step["made"])
+			var/obj/made = made_ref.resolve()
+			if(made)
+				qdel(made)
+		var/list/records = step["turfs"]
+		out["tiles"] = length(records)
+		for(var/index in length(records) to 1 step -1)
+			BABYLON_AREA_TICK
+			var/list/record = records[index]
+			var/turf/tile = locate(record[1], record[2], record[3])
+			var/path = text2path(record[4])
+			if(!tile || !ispath(path, /turf))
+				continue
+			// Players who walked in since must not end up inside a wall again (moved out in the
+			// same tick as the change; one who can't be moved keeps the open tile).
+			if(ispath(path, /turf/closed) && step["rect"])
+				babylon_area_evict(list(tile), step["rect"], FALSE)
+				if(babylon_area_player_on(tile))
+					out["occupied"]++
+					continue
+			tile = babylon_area_change_turf(tile, path, CHANGETURF_INHERIT_AIR)
+			tile.setDir(record[5])
+			if(record[6] && isopenturf(tile))
+				var/turf/open/open = tile
+				open.return_air()?.copy_from(SSair.parse_gas_string(record[6]))
+				open.air_update_turf(TRUE)
+	else
+		var/datum/babylon_area_clip/before = step["clip"]
+		var/list/origin = step["origin"]
+		out["tiles"] = before.width * before.height
+		var/list/rect = list(origin[1], origin[2], origin[1] + before.width - 1, origin[2] + before.height - 1, origin[3])
+		// Ids taken since then (anywhere outside the area) would be duplicated: the restored
+		// objects get a suffix instead, applied to their links as on a paste.
+		var/list/counts = list()
+		out["error"] = babylon_area_place(before, locate(rect[1], rect[2], rect[5]), "keep", null, FALSE, "[world.port]-[ckey(key)]-undo", counts)
+		if(counts["id_note"])
+			out["note"] = " [counts["id_note"]]"
+	return TRUE
 
 /// Sets one of the window's options. Returns an error or null.
 /datum/babylon_area_session/proc/set_option(option, value)

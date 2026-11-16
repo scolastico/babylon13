@@ -63,6 +63,9 @@
 	var/issue = place_issue()
 	if(issue)
 		.["zone"] = issue
+	var/path = text2path(setting("object_type"))
+	if(path && !ispath(path, /obj/item/stack) && setting("count") > BABYLON_CREATIVE_MAX_COPIES)
+		.["count"] = "At most [BABYLON_CREATIVE_MAX_COPIES] copies of one object are made (only a stack can be bigger)."
 
 /obj/babylon_tutorial/action/spawn_object/perform(datum/babylon_tutorial_run/run)
 	var/path = text2path(setting("object_type"))
@@ -73,20 +76,30 @@
 	if(!length(tiles))
 		run.note_action(src, "there is no place to spawn at ([place_summary()]).")
 		return
+	// Never inside a wall: free tiles first, else any open one (a table's tile).
+	var/list/open = list()
 	var/list/free = list()
 	for(var/turf/tile as anything in tiles)
-		if(!isclosedturf(tile) && !tile.is_blocked_turf(TRUE))
+		if(isclosedturf(tile))
+			continue
+		open += tile
+		if(!tile.is_blocked_turf(TRUE))
 			free += tile
+	if(!length(open))
+		run.note_action(src, "nothing spawned: [place_summary()] there is only wall.")
+		return
 	if(!length(free))
-		free = tiles
+		free = open
 	var/amount = round(setting("count") || 1)
 	var/copies = ispath(path, /obj/item/stack) ? 1 : clamp(amount, 1, BABYLON_CREATIVE_MAX_COPIES)
+	if(!ispath(path, /obj/item/stack) && amount > copies)
+		run.note_action(src, "made [copies] copies, not [amount]: at most [BABYLON_CREATIVE_MAX_COPIES] copies of one object per run of the action (only a stack can be bigger).")
 	if(run.spawned_count + copies > BABYLON_TUTORIAL_SPAWN_RUN_CAP)
 		run.note_action(src, "this run already spawned [run.spawned_count] objects (at most [BABYLON_TUTORIAL_SPAWN_RUN_CAP] per run): nothing more was spawned.")
 		return
 	run.spawned_count += copies
 	for(var/copy in 1 to copies)
-		var/turf/spot = length(tiles) == 1 ? tiles[1] : pick(free)
+		var/turf/spot = pick(free)
 		if(ispath(path, /obj/item/stack))
 			var/obj/item/stack/stack_type = path
 			new path(spot, clamp(amount, 1, max(1, initial(stack_type.max_amount))), FALSE)
@@ -150,7 +163,8 @@
 			for(var/obj/inner in thing.get_all_contents())
 				if(inner != thing && babylon_area_protected_object(inner))
 					inner.forceMove(tile)
-			babylon_area_delete(thing)
+			// No try around it (a deep stack_trace in a Destroy would unwind it half done).
+			qdel(thing)
 			removed++
 	log_game("BABYLON TUTORIAL: [tutorial_id] removed [removed] object\s [place_summary()][kept ? ", kept [kept]" : ""].")
 
@@ -165,7 +179,8 @@
  *   objects, effects other than decals, docking ports;
  * - anything with a mob inside (a player in a locker, an NPC's body in a body bag) or a mob
  *   buckled to it (a player in a chair): mobs are never removed, neither directly nor with what
- *   holds them.
+ *   holds them;
+ * - a builder's tool (the tutorial wand) or anything holding one.
  */
 /proc/babylon_tutorial_removable(obj/thing)
 	if(QDELETED(thing) || istype(thing, /obj/babylon_tutorial))
@@ -175,6 +190,9 @@
 	if(thing.has_buckled_mobs())
 		return FALSE
 	for(var/mob/living/body in thing.get_all_contents())
+		return FALSE
+	// A builder's tool on the floor, or in a bag on the floor, stays (inventory.dm).
+	if(babylon_tutorial_inventory_kept(thing) || length(babylon_tutorial_kept_inside(thing)))
 		return FALSE
 	return TRUE
 
@@ -262,7 +280,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_event_times)
 
 /obj/babylon_tutorial/action/door/own_schema()
 	return list(
-		babylon_tutorial_field("door_action", "Do", "choice", "open", "Open and close follow each thing's own rules: a bolted, welded or unpowered airlock stays as it is, a locked or welded locker stays shut (Unlock first). Lock and unlock always work: they bolt and unbolt airlocks (also without power) and lock secure lockers and crates (an open one is closed first). Windoors, shutters and blast doors only open and close.", options = babylon_tutorial_options(list("open" = "Open", "close" = "Close", "lock" = "Lock (bolt)", "unlock" = "Unlock (unbolt)"))),
+		babylon_tutorial_field("door_action", "Do", "choice", "open", "Open and close follow each thing's own rules: a bolted, welded or unpowered airlock stays as it is, a locked or welded locker stays shut (Unlock first). Lock and unlock always work: they bolt and unbolt airlocks (also without power) and lock secure lockers and crates (an open one is closed first). Windoors, shutters and blast doors only open and close. Closing or locking a locker or crate shuts in whoever stands on its tile, as it would for a player (they can climb out).", options = babylon_tutorial_options(list("open" = "Open", "close" = "Close", "lock" = "Lock (bolt)", "unlock" = "Unlock (unbolt)"))),
 		babylon_tutorial_field("place", "Where", "choice", "marker", "A marker: the doors and containers on its tile. A zone: those on every tile of it. Shutter button: every shutter and blast door with that id in this world (as its button would).", options = babylon_tutorial_options(list("marker" = "On a marker's tile", "zone" = "In a zone", "button" = "Shutters with a button id"))),
 		babylon_tutorial_field("marker", "Marker", "id", "", "The marker on the door or container.", filter = list("marker"), when = list("place" = list("marker")), required = TRUE),
 		babylon_tutorial_field("zone", "Zone", "zone", null, "Every door and container in it.", when = list("place" = list("zone")), max_tiles = BABYLON_TUTORIAL_PLACE_MAX_TILES),
@@ -290,7 +308,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_event_times)
 		if(!length(id))
 			return found
 		for(var/obj/machinery/door/poddoor/shutter as anything in SSmachines.get_machines_by_type_and_subtypes(/obj/machinery/door/poddoor))
-			if("[shutter.id]" == id && (shutter.z in babylon_area_levels()))
+			// The same rules as on a marker or in a zone (nothing protected).
+			if("[shutter.id]" == id && (shutter.z in babylon_area_levels()) && babylon_tutorial_door_target(shutter))
 				found += shutter
 		return found
 	for(var/turf/tile as anything in place_turfs())

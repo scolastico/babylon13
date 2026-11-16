@@ -25,6 +25,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 
 /obj/item/babylon_tutorial_wand
 	name = "tutorial wand"
+	babylon_builder_tool = TRUE
 	desc = "Builds tutorials: places, configures and test-runs hidden tutorial objects. Use it in your hand to open its window."
 	icon = 'icons/obj/weapons/guns/magic.dmi'
 	icon_state = "telewand"
@@ -932,7 +933,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 			var/list/captured = babylon_tutorial_capture_loadout(user)
 			loadout = captured["loadout"]
 			var/list/left_out = captured["left_out"]
-			done = "Stored your loadout: [length(loadout)] item\s[length(left_out) ? " (left out, not allowed in tutorials: [english_list(left_out)])" : ""]. The tutorial wand is never part of it."
+			done = "Stored your loadout: [length(loadout)] item\s[length(left_out) ? " (left out: [english_list(left_out)])" : ""]. Items inside bags keep their name, amount, reagents and contents, not their other settings. Builder tools (the tutorial wand) are never part of it."
 		if("loadout_remove")
 			var/index = round(text2num("[params["index"]]") || 0) + 1
 			if(index < 1 || index > length(loadout))

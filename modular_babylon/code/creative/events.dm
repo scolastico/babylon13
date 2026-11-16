@@ -132,11 +132,9 @@ GLOBAL_LIST_EMPTY(babylon_creative_events)
 		event.processing = FALSE
 		// process() calls start() when activeFor == start_when and end() when it reaches end_when,
 		// raising activeFor after each step.
+		// No try: a failing end() ends only itself, and kill() still runs.
 		if(event.activeFor > event.start_when && event.activeFor <= event.end_when)
-			try
-				event.end()
-			catch(var/exception/error)
-				babylon_loop_failed("creative event end", error)
+			event.end()
 		event.kill()
 	GLOB.babylon_creative_events.Cut()
 

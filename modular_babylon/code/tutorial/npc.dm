@@ -187,6 +187,14 @@
 	if(. && babylon_tutorial_anchored && ismob(mover) && !mover.throwing && body_position == LYING_DOWN)
 		return FALSE
 
+/// Tutorial NPCs wait for the players as long as it takes: a dead one's organs never decay, so its
+/// heart and brain never fail and it stays defibbable and revivable (spawn dead: a resuscitation
+/// lesson works however long the players take). Also for organs it gets later.
+/obj/item/organ/on_death(seconds_per_tick)
+	if(owner?.babylon_tutorial_npc)
+		return 0
+	return ..()
+
 /// Tutorial NPCs wait for the players as long as it takes: a dead one never rots (no miasma).
 /mob/living/carbon/attach_rot()
 	if(babylon_tutorial_npc)
@@ -451,7 +459,8 @@
 /obj/babylon_tutorial/action/move_npc/own_schema()
 	return list(
 		babylon_tutorial_field("target", "NPC spawner", "id", "", "Its NPC walks. A new Move NPC action for the same NPC replaces the walk it is on.", filter = list("npc"), required = TRUE),
-		babylon_tutorial_field("destination", "To marker", "id", "", "Where it goes: the marker's tile (or next to it, when something solid stands there). It opens only doors anyone may open, or those its ID card opens.", filter = list("marker"), required = TRUE),
+		babylon_tutorial_field("destination", "To marker", "id", "", "Where it goes: the marker's tile (or next to it, when something solid stands there).", filter = list("marker"), required = TRUE),
+		babylon_tutorial_field("doors", "Doors", "choice", "id", "Which doors it goes through. Its ID card: doors its ID opens (job outfits come without an ID, so usually only public doors; Set inventory can give it one). Public doors only: doors anyone may open. All doors: every door on its way opens for it, unless it is bolted, welded or has no power.", options = babylon_tutorial_options(list("id" = "Its ID card", "public" = "Public doors only", "all" = "All doors"))),
 		babylon_tutorial_field("timeout", "Give up after (seconds)", "number", 60, "When it has not arrived by then (blocked, no way through, knocked out), it stops where it is; the Test run tab and this action's checks say why.", min = 5, max = 600),
 		babylon_tutorial_field("on_arrival", "On arrival", "idlist", list(), "Actions to run, in order, once the NPC has arrived (each after its own delay).", filter = list("action")),
 	)
@@ -509,6 +518,8 @@
 	/// The trigger whose actions started the walk ("until the next step" of the follow-ups).
 	var/datum/weakref/trigger_ref
 	var/turf/destination
+	/// "id", "public" or "all": which doors it goes through (the action's Doors setting).
+	var/doors = "id"
 	var/started
 	var/deadline
 	/// The tiles still to walk (the next one first).
@@ -524,6 +535,7 @@
 	action_ref = WEAKREF(action)
 	npc_ref = WEAKREF(npc)
 	src.destination = destination
+	doors = action.setting("doors") || "id"
 	started = world.time
 	deadline = world.time + (action.setting("timeout") || 60) SECONDS
 
@@ -578,13 +590,24 @@
 		waiting_for = "it could not move: out cold, held or stuck"
 		return schedule(1 SECONDS)
 	if(!length(path) || get_dist(npc, path[1]) > 1)
-		path = get_path_to(npc, destination, 120, 0, babylon_tutorial_npc_access(npc), TRUE)
+		path = get_path_to(npc, destination, 120, 0, babylon_tutorial_npc_access(npc, doors), TRUE)
 		if(done || QDELETED(npc))
 			return
 		if(!length(path))
-			waiting_for = "no way through: walls, locked doors or someone in the way"
+			waiting_for = "no way through: walls, doors it may not open (see its Doors setting) or someone in the way"
 			return schedule(1 SECONDS)
 	var/turf/next = path[1]
+	if(doors == "all")
+		// All doors: a closed door on the way opens with its own proc (bolts, welds and power
+		// still keep it shut); the NPC steps through once it is open.
+		for(var/obj/machinery/door/door in next)
+			if(!door.density || istype(door, /obj/machinery/door/firedoor))
+				continue
+			var/why = babylon_tutorial_door_act(door, "open")
+			waiting_for = why ? "[door.name] [why]" : "waiting for [door.name] to open"
+			if(why)
+				path = null
+			return schedule(1 SECONDS)
 	if(npc.Move(next, get_dir(npc, next)) && get_turf(npc) == next)
 		path.Cut(1, 2)
 		steps++
@@ -617,8 +640,14 @@
 	if(action && !QDELETED(current))
 		current.note_action(action, "Move NPC: [text]")
 
-/// The access an NPC walks with: its ID card's (an NPC without one opens only public doors).
-/proc/babylon_tutorial_npc_access(mob/living/npc)
+/// The access an NPC's path is found with. "id": its ID card's (none without a card); "public":
+/// none, so only doors anyone may open; "all": every access (the walk opens the doors itself).
+/proc/babylon_tutorial_npc_access(mob/living/npc, doors = "id")
+	switch(doors)
+		if("public")
+			return list()
+		if("all")
+			return SSid_access.get_region_access_list(list(REGION_ALL_GLOBAL))
 	var/obj/item/card/id/card = npc.get_idcard(TRUE)
 	return card ? card.GetAccess() : list()
 

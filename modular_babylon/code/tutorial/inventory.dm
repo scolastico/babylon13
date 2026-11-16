@@ -73,10 +73,24 @@
 	options += list(list("value" = "hand:1", "label" = "Left hand"), list("value" = "hand:2", "label" = "Right hand"), list("value" = "packed", "label" = "In the backpack"))
 	return options
 
-/// Items an inventory change never takes away: the builder's tools (the tutorial wand). They stay
-/// where they are; a loadout item meant for their hand goes to the other hand or the floor.
+/obj/item
+	/// A builder's tool (the tutorial wand, the world-edit wand): tutorial actions never take it
+	/// away or delete it (Set inventory, Remove objects) and it is never part of a loadout.
+	var/babylon_builder_tool = FALSE
+
+/// Items an inventory change never takes away: the builder's tools (babylon_builder_tool). They
+/// stay where they are; one inside something that goes is taken out first (to a free hand, else
+/// the floor). A loadout item meant for their hand goes to the other hand or the floor.
 /proc/babylon_tutorial_inventory_kept(obj/item/item)
-	return istype(item, babylon_tutorial_wand_type())
+	return istype(item) && item.babylon_builder_tool
+
+/// Builder tools inside something (a wand in a backpack), at any depth.
+/proc/babylon_tutorial_kept_inside(atom/movable/thing)
+	var/list/found = list()
+	for(var/obj/item/inner in thing.get_all_contents())
+		if(inner != thing && babylon_tutorial_inventory_kept(inner))
+			found += inner
+	return found
 
 /// A value JSON keeps as it is (null, a number, a text, or a list of those): settings that hold
 /// anything else (a path, a reference) are left out of a loadout.
@@ -111,7 +125,7 @@
 			if(!istype(item) || babylon_tutorial_inventory_kept(item))
 				continue
 			if(!babylon_tutorial_type_allowed(item.type, null))
-				left_out += item.name
+				left_out += "[item.name] (not allowed in tutorials)"
 				continue
 			var/list/entry = babylon_tutorial_loadout_entry(item, clip)
 			entry["slot"] = slot
@@ -121,13 +135,37 @@
 		if(!istype(held) || babylon_tutorial_inventory_kept(held))
 			continue
 		if(!babylon_tutorial_type_allowed(held.type, null))
-			left_out += held.name
+			left_out += "[held.name] (not allowed in tutorials)"
 			continue
 		var/list/entry = babylon_tutorial_loadout_entry(held, clip)
 		entry["hand"] = hand
 		entries += list(entry)
 	qdel(clip)
+	// Over the limit for items inside bags: the last ones are left out (and named as a count).
+	var/list/budget = list(BABYLON_TUTORIAL_LOADOUT_NESTED_MAX)
+	var/dropped = 0
+	for(var/list/entry in entries)
+		dropped += babylon_tutorial_trim_contents(entry, budget)
+	if(dropped)
+		left_out += "[dropped] item\s inside bags (a loadout holds at most [BABYLON_TUTORIAL_LOADOUT_NESTED_MAX])"
 	return list("loadout" = entries, "left_out" = left_out)
+
+/// Cuts an entry's contents down to the budget left (budget[1], items inside bags). Returns how
+/// many items it cut.
+/proc/babylon_tutorial_trim_contents(list/entry, list/budget)
+	. = 0
+	var/list/inside = entry["contents"]
+	if(!islist(inside))
+		return
+	var/list/kept = list()
+	for(var/list/inner in inside)
+		if(budget[1] <= 0)
+			. += 1 + babylon_tutorial_loadout_inside(inner)
+			continue
+		budget[1]--
+		. += babylon_tutorial_trim_contents(inner, budget)
+		kept += list(inner)
+	entry["contents"] = kept
 
 /// One item as a loadout entry (its place is added by the caller).
 /proc/babylon_tutorial_loadout_entry(obj/item/item, datum/babylon_area_clip/clip)
@@ -203,6 +241,10 @@
 	// inside them only has to be harmless (what the item may carry in a world at all).
 	if(depth == 0 ? !babylon_tutorial_type_allowed(path, null) : babylon_creative_type_harmful(path))
 		return list("error" = "[babylon_tutorial_type_label("[path]")] can't be used in tutorials.")
+	var/obj/item/item_path = path
+	if(initial(item_path.babylon_builder_tool))
+		// Never in a loadout: inside a bag it is left out, as an item of its own it is refused.
+		return depth ? list("skip" = TRUE) : list("error" = "Builder tools (the tutorial wand) can't be part of a loadout.")
 	var/list/out = list("type" = "[path]")
 	if(istext(entry["name"]) && length(entry["name"]))
 		var/name = trim(strip_html("[entry["name"]]", 64))
@@ -243,6 +285,8 @@
 			var/list/cleaned_inner = babylon_tutorial_clean_loadout_item(inner, depth + 1, budget)
 			if(cleaned_inner["error"])
 				return cleaned_inner
+			if(cleaned_inner["skip"])
+				continue
 			inside += list(cleaned_inner["value"])
 		out["contents"] = inside
 	return list("value" = out)
@@ -297,6 +341,13 @@
 	for(var/obj/item/item as anything in old)
 		if(QDELETED(item) || babylon_tutorial_inventory_kept(item))
 			continue
+		// Something worn on another item (an accessory on the uniform) goes with that item.
+		if(item.loc != body)
+			continue
+		// Builder tools inside it (a wand in the backpack) come out first: a free hand, else the floor.
+		for(var/obj/item/tool as anything in babylon_tutorial_kept_inside(item))
+			tool.forceMove(get_turf(body))
+			body.put_in_hands(tool)
 		if(drop_old)
 			body.dropItemToGround(item, TRUE)
 		else
@@ -342,6 +393,10 @@
 		var/obj/item/backpack = ishuman(body) ? body.get_item_by_slot(ITEM_SLOT_BACK) : null
 		if(!backpack?.atom_storage?.attempt_insert(item, body, override = TRUE, force = STORAGE_FULLY_LOCKED, messages = FALSE))
 			item.forceMove(tile)
+	// A stack put into a hand or a bag may have merged into another one and be gone.
+	for(var/obj/item/item as anything in created.Copy())
+		if(QDELETED(item))
+			created -= item
 	return created
 
 /// Makes one loadout item on a tile, with its name, settings, reagents and contents.
