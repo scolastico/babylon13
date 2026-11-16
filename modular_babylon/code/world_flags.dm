@@ -208,6 +208,7 @@ var/global/babylon_byond_1686_slot_pad_shared
 #if defined(BABYLON_DRONE) && defined(BABYLON_TESTING)
 // babylon-test.dme
 var/global/babylon_byond_1686_slot_pad_drone_test_1
+var/global/babylon_byond_1686_slot_pad_drone_test_2
 #elif defined(BABYLON_DRONE)
 // babylon.dme
 var/global/babylon_byond_1686_slot_pad_drone_1

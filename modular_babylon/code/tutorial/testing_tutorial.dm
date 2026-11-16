@@ -1617,6 +1617,12 @@
 		if(!airlock.density)
 			INVOKE_ASYNC(airlock, TYPE_PROC_REF(/obj/machinery/door, close))
 			sleep(2 SECONDS)
+		// The walker is still knocked down from the crawl check above unless that ran longer than its
+		// 60 seconds (a loaded machine): stand it up, so the walk depends on the doors only.
+		walker.SetKnockdown(0)
+		walker.SetImmobilized(0)
+		walker.SetParalyzed(0)
+		walker.get_up(TRUE)
 		result["door_access_modes"] = !length(babylon_tutorial_npc_access(walker, "public")) && (ACCESS_MEDICAL in babylon_tutorial_npc_access(walker, "all")) && !length(babylon_tutorial_npc_access(walker, "id"))
 		walker.forceMove(locate(door_tile.x, base.y, base.z))
 		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(door_tile.x, base.y + 2, base.z), "wa_beyond", list("target" = "tile"), made)
@@ -1635,6 +1641,9 @@
 			sleep(5)
 		if(airlock.hasPower())
 			result["all_doors_walk_through"] = get_turf(walker) == locate(door_tile.x, base.y + 2, base.z)
+			if(!result["all_doors_walk_through"])
+				var/datum/babylon_tutorial_npc_move/stuck_walk = run.movers[walker]
+				log_world("test_tutorial_world_actions: All doors walk ended at [walker.x],[walker.y] (door [door_tile.x],[door_tile.y], dense [airlock.density], locked [airlock.locked], welded [airlock.welded], operating [airlock.operating]); walk [stuck_walk ? "running" : "ended"], waiting for: [stuck_walk?.waiting_for], path [length(stuck_walk?.path)], note: [run.action_notes[walk_all]], stat [walker.stat], lying [walker.body_position], pulled [walker.pulledby], buckled [walker.buckled].")
 		else
 			// An unpowered door keeps it waiting (the pathfinder never routes through it); the note
 			// comes when it gives up (its deadline) and names doors with no power.
