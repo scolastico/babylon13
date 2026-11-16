@@ -243,6 +243,7 @@ class RestoreGuards(unittest.TestCase):
         # allow no try (tools/babylon/test_no_try.py), alone in a proc of its own that returns
         # TRUE at its end (a runtime ends only that proc; the caller sees the missing TRUE).
         calls = 0
+        own_procs = set()
         no_try = [DM / "tutorial", DM / "creative"]
         for path, text in dm_sources().items():
             lines = text.splitlines()
@@ -256,7 +257,18 @@ class RestoreGuards(unittest.TestCase):
                 self.assertTrue(any(folder in path.parents for folder in no_try), where)
                 self.assertTrue(lines[index - 1].startswith("/proc/"), where)
                 self.assertEqual(lines[index + 1].strip(), "return TRUE", where)
+                own_procs.add(lines[index - 1][len("/proc/"):].split("(")[0])
         self.assertGreaterEqual(calls, 2)
+        # Such a proc's callers must look at its TRUE: a cut-short reconcile is reported, not lost.
+        for name in own_procs:
+            used = 0
+            for path, text in dm_sources().items():
+                for number, line in enumerate(text.splitlines(), 1):
+                    if name + "(" not in line or line.startswith("/proc/"):
+                        continue
+                    used += 1
+                    self.assertRegex(line, r"(if\(!|=\s*|return\s+)" + re.escape(name) + r"\(", "%s:%d" % (path.name, number))
+            self.assertGreaterEqual(used, 1, name)
 
     def test_every_character_capture_is_guarded(self):
         # One character that cannot be captured must never fail the whole world's checkpoint.
@@ -293,6 +305,97 @@ def dm_procs(text):
         if blocks:
             blocks[-1][1].append((index, line))
     return blocks
+
+
+# Initialize procs that roll something at random and make objects, without a mapload check. They
+# run again on every restart of a saved world (also inside ruins and templates saved with their
+# level), so each was reviewed for what a restore does with its roll:
+OBJ = "an object: the restore replaces the contents it made with the saved ones and writes the saved fields over its rolls; what it makes on its tile is a companion, never saved"
+VEHICLE = "an object (vehicles too): the made equipment is replaced by the saved, which is attached again (persistence.dm, mecha babylon_after_restore)"
+SPAWNER = "a spawner: it deletes or uses itself up and is never saved"
+COMPANIONS = "what it makes on its tile is a companion: made again on load, never saved"
+MOB = "a mob: its contents are not saved (type and core fields only); what it makes on its tile is a companion"
+OFF_MAP = "not on a map (a datum or subsystem)"
+RANDOM_INITIALIZE_REVIEWED = {
+    "/datum/component/anomaly_locked_module": OFF_MAP,
+    "/datum/controller/subsystem/shuttle": OFF_MAP,
+    "/datum/controller/subsystem/title": OFF_MAP,
+    "/mob/dead/new_player": MOB,
+    "/mob/living/basic/blood_worm": MOB,
+    "/mob/living/basic/cortical_borer": MOB,
+    "/mob/living/basic/fleshmind": MOB,
+    "/mob/living/basic/goose/vomit": MOB,
+    "/mob/living/basic/migo": MOB,
+    "/mob/living/basic/mining/tendril": MOB,
+    "/mob/living/basic/raptor": MOB,
+    "/mob/living/basic/wizard": MOB,
+    "/obj/effect/decal/cleanable/vomit/nebula/worms": COMPANIONS,
+    "/obj/effect/hotspot": OBJ,
+    "/obj/effect/mob_spawn/ghost_role/human/hermit": SPAWNER,
+    "/obj/effect/mob_spawn/ghost_role/human/lavaland_syndicate/comms/space": SPAWNER,
+    "/obj/effect/shark_infested_waters": OBJ,
+    "/obj/effect/spawner/ocean_curio": SPAWNER,
+    "/obj/effect/spawner/surgery_tray": SPAWNER,
+    "/obj/effect/unopened_way": OBJ,
+    "/obj/item/ammo_casing": OBJ,
+    "/obj/item/book/granter/action/spell/random": OBJ,
+    "/obj/item/bountytrap": OBJ,
+    "/obj/item/card/id": OBJ,
+    "/obj/item/clothing/shoes/cowboy": OBJ,
+    "/obj/item/disk/tech_disk": OBJ,
+    "/obj/item/fish_tank/lawyer": OBJ,
+    "/obj/item/flashlight/flare": OBJ,
+    "/obj/item/folder/coderbus": OBJ,
+    "/obj/item/food/burger/plain": OBJ,
+    "/obj/item/food/cnds/random": OBJ,
+    "/obj/item/food/cornchips/random": OBJ,
+    "/obj/item/food/grown": OBJ,
+    "/obj/item/food/peanuts/random": OBJ,
+    "/obj/item/food/shok_roks/random": OBJ,
+    "/obj/item/food/sticko/random": OBJ,
+    "/obj/item/gizmo": OBJ,
+    "/obj/item/graft": OBJ,
+    "/obj/item/grenade/clusterbuster/random": OBJ,
+    "/obj/item/grown": OBJ,
+    "/obj/item/laser_pointer": OBJ,
+    "/obj/item/lighter": OBJ,
+    "/obj/item/mail/mail_strike": OBJ,
+    "/obj/item/mail/traitor/mail_strike": OBJ,
+    "/obj/item/mmi/posibrain": OBJ,
+    "/obj/item/modular_computer/pda/heads": OBJ,
+    "/obj/item/paper/fluff/advertisement/grand_nomad_fleet": OBJ,
+    "/obj/item/paperplane": OBJ,
+    "/obj/item/piggy_bank": OBJ,
+    "/obj/item/pizzabox/bomb": OBJ,
+    "/obj/item/pizzabox/random": OBJ,
+    "/obj/item/radio": OBJ,
+    "/obj/item/raw_anomaly_core/random": OBJ,
+    "/obj/item/reagent_containers/cup/beaker/organ_jar/brain_in_a_jar": OBJ,
+    "/obj/item/reagent_containers/cup/soda_cans/random": OBJ,
+    "/obj/item/seeds": OBJ,
+    "/obj/item/storage/belt/military/snack/full": OBJ,
+    "/obj/item/storage/box/ingredients/random": OBJ,
+    "/obj/item/storage/spooky": OBJ,
+    "/obj/machinery/abductor/gland_dispenser": OBJ,
+    "/obj/machinery/computer/slot_machine": OBJ,
+    "/obj/machinery/door/firedoor": OBJ,
+    "/obj/machinery/gizmo": OBJ,
+    "/obj/machinery/griddle": OBJ,
+    "/obj/machinery/power/supermatter_crystal": OBJ,
+    "/obj/machinery/rnd/experimentor": OBJ,
+    "/obj/machinery/rnd/server": OBJ,
+    "/obj/machinery/room_controller": OBJ,
+    "/obj/machinery/smartfridge/survival_pod/preloaded": OBJ,
+    "/obj/machinery/spaceship_navigation_beacon": OBJ,
+    "/obj/machinery/telecomms/message_server": OBJ,
+    "/obj/structure/alien/egg": OBJ,
+    "/obj/structure/bookcase/random/reference": OBJ,
+    "/obj/structure/closet/emcloset": OBJ,
+    "/obj/structure/glowshroom": OBJ,
+    "/obj/structure/mannequin": OBJ,
+    "/obj/structure/moisture_trap": OBJ,
+    "/obj/vehicle/sealed/mecha/ripley/mining": VEHICLE,
+}
 
 
 class FlagGuards(unittest.TestCase):
@@ -377,7 +480,7 @@ class SmokeDeterminism(unittest.TestCase):
         raw = []
         for name in ("smoke_native.py", "smoke_station.py"):
             for number, line in enumerate((here / name).read_text(encoding="utf-8").splitlines(), 1):
-                if re.search(r'\w\["entries"\]', line) and "def dm_entries" not in line and 'packed["entries"]' not in line and '["contents"]["entries"]' not in line:
+                if re.search(r'''\[["']entries["']\]|\.get\(["']entries["']''', line) and "def dm_entries" not in line and not line.strip().startswith(("assert packed", "return {", "return packed")):
                     raw.append("%s:%d: %s" % (name, number, line.strip()))
         self.assertEqual(raw, [])
 
@@ -466,6 +569,40 @@ class MaploadDefaults(unittest.TestCase):
         self.assertIn("/datum/controller/subsystem/area_spawn/Initialize()", persistence)
         # Lights decide their breakage through allow_break_on_init.
         self.assertIn("allow_break_on_init = FALSE", persistence)
+
+
+    def test_every_random_initialize_was_reviewed_for_restores(self):
+        # A random roll in an Initialize that makes objects runs again on every restart of a saved
+        # world: a mining Ripley's random drill stayed beside the saved one on each restart. A new
+        # upstream case fails here until it is reviewed (and hooked when the restore does not cover it).
+        found = {}
+        init = re.compile(r"^(/[\w/]+)/(?:proc/)?Initialize\(")
+        rolls = re.compile(r"\b(prob|pick|rand|pick_weight|pick_n_take)\(")
+        makes = re.compile(r"\bnew[ /(]|\.attach\(")
+        guarded = re.compile(r"mapload\s*&&|&&\s*mapload|if\(\s*!?\s*mapload")
+        for folder in ("code", "modular_skyrat", "modular_zubbers", "modular_zzplurt"):
+            for path in (REPO / folder).rglob("*.dm"):
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+                for index, line in enumerate(lines):
+                    match = init.match(line)
+                    if not match:
+                        continue
+                    body = []
+                    for following in lines[index + 1:]:
+                        if following and not following[0].isspace():
+                            break
+                        body.append(following)
+                    text = "\n".join(body)
+                    if rolls.search(text) and makes.search(text) and not guarded.search(text):
+                        found[match.group(1)] = "%s:%d" % (path.relative_to(REPO).as_posix(), index + 1)
+        unreviewed = {kind: where for kind, where in found.items() if kind not in RANDOM_INITIALIZE_REVIEWED}
+        self.assertEqual(unreviewed, {})
+        self.assertIn("/obj/vehicle/sealed/mecha/ripley/mining", found)
+        persistence = (DM / "persistence.dm").read_text(encoding="utf-8")
+        self.assertIn("/obj/vehicle/sealed/mecha/babylon_after_restore(", persistence)
+        self.assertIn("if(isobj(thing) || istype(thing, /mob/living/basic/drone))", persistence)
+        # Station traits roll on a fresh map only.
+        self.assertIn("/datum/controller/subsystem/processing/station/SetupTraits()", persistence)
 
 
 class Readiness(unittest.TestCase):

@@ -330,6 +330,11 @@
 			if(findtext(picture.maptext, "obj_moved (moving) (hidden)"))
 				labelled_hidden = TRUE
 		result["reposition_shows_hidden"] = length(wand.images) == shown_all && labelled_hidden
+		// Once the Reposition ends (cancelled here), hiding wins again: nothing keeps it shown.
+		wand.toggle_moving(builder, moved)
+		wand.viewer = builder
+		wand.build_images()
+		result["hidden_again_after_reposition"] = !wand.moving_object() && !wand.focus?.resolve() && length(wand.images) == shown_all - 1
 		wand.moving = null
 		wand.focus = null
 		var/list/actions_group = babylon_tutorial_view_group_members("action")
@@ -536,7 +541,12 @@
 		var/image/flying = run.image_with_key(babylon_tutorial_image_key("pointing", pointer))
 		var/list/flying_info = flying ? run.images[flying] : null
 		result["point_speaker_one_arrow"] = length(run.images) == 2 && !!run.image_with_key(arrow_key) && length(run.pointing) == 1
-		result["point_speaker_arrow_fades_on_arrival"] = flying_info && flying_info["until"] <= world.time + BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE
+		// Its lifetime ends with the fade, and once that passed, it is gone while the target's
+		// own arrow stays (no second arrow resting on the target).
+		var/flying_lifetime_ok = flying_info && flying_info["until"] <= world.time + BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE
+		sleep(BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE + 1)
+		run.expire_images()
+		result["point_speaker_arrow_fades_on_arrival"] = flying_lifetime_ok && flying && !(flying in run.images) && !!run.image_with_key(arrow_key)
 		run.perform(null, spoken)
 		var/obj/babylon_tutorial/action/point/second_point = babylon_tutorial_test_place(/obj/babylon_tutorial/action/point, base, "rev_spoken2", list("target" = "rev_spot", "until" = "seconds", "duration" = 30), made)
 		run.perform(null, second_point)
@@ -847,6 +857,35 @@
 			if(roll.loc == full_pack)
 				contents_inside++
 		result["rebuilt_full_pack_keeps_contents"] = rebuilt?.back == full_pack && length(pack_contents) > 1 && contents_inside == length(pack_contents) && !(locate(/obj/item/wrench) in death_tile)
+		// The same when the pack can't go back on (the back is taken): it lands on the floor with its
+		// contents still inside.
+		var/turf/pack_tile = locate(base.x + 3, base.y + 3, base.z)
+		var/mob/living/carbon/human/owner = new(pack_tile)
+		made += owner
+		var/obj/item/storage/backpack/owner_pack = new(owner)
+		owner.equip_to_slot_or_del(owner_pack, ITEM_SLOT_BACK)
+		var/list/owner_contents = list()
+		for(var/count in 1 to 30)
+			var/obj/item/wrench/spanner = new(pack_tile)
+			if(!owner_pack.atom_storage.attempt_insert(spanner, owner, override = TRUE, messages = FALSE))
+				qdel(spanner)
+				break
+			owner_contents += spanner
+		var/list/owner_items = babylon_tutorial_capture_items(owner)
+		owner.dropItemToGround(owner_pack, TRUE)
+		made += owner_pack
+		made += owner_contents
+		var/mob/living/carbon/human/taken = new(pack_tile)
+		made += taken
+		var/obj/item/storage/backpack/other_pack = new(taken)
+		taken.equip_to_slot_or_del(other_pack, ITEM_SLOT_BACK)
+		made += other_pack
+		babylon_tutorial_restore_items(taken, owner_items)
+		var/still_inside = 0
+		for(var/obj/item/wrench/spanner as anything in owner_contents)
+			if(spanner.loc == owner_pack)
+				still_inside++
+		result["unequipped_pack_keeps_contents"] = taken.back == other_pack && length(owner_contents) > 1 && still_inside == length(owner_contents)
 		result["rebuilt_gets_gone_items_again"] = istype(rebuilt?.shoes, /obj/item/clothing/shoes/sneakers/white) && rebuilt?.shoes != shoes
 		result["rebuilt_gets_player"] = rebuilt?.ckey == second_key && (QDELETED(second_ghost) || second_ghost.ckey != second_key)
 		result["nobody_dead_after_revive"] = !dead_check.evaluate(run)

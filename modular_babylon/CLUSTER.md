@@ -349,7 +349,9 @@ What a save keeps and what it does not:
   gravity generator's parts, a turret's cover, a wide airlock's fillers, a shield generator's
   field) are not saved: their maker makes them again on every start. CentCom's objects are not
   saved either (its template loads on every start), and a restored world gets no new round-start
-  decay or extra area spawns (machines, pets and job start points placed at random). Older saves
+  decay, no extra area spawns (machines, pets and job start points placed at random) and no new
+  station traits (their effects are in the save). A vehicle keeps its saved equipment (a mining
+  Ripley does not roll a new drill on every start). Older saves
   that still hold such copies are cleaned up on their next start.
 - Not kept: shuttles. Their tiles are saved as the dock beneath them and every shuttle
   (cargo, mining, escape pods, the emergency shuttle) loads again at its roundstart dock,

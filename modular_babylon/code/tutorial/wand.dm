@@ -338,8 +338,9 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_hidden)
 		stop_moving(user, "Reposition cancelled.")
 		return
 	picking = null
+	// Not the focus: build_images() shows the armed object itself, and a focus set here would
+	// outlive the Reposition (only a closing settings window clears it).
 	moving = WEAKREF(object)
-	focus = WEAKREF(object)
 	sync_view(TRUE)
 	user.balloon_alert(user, "click the new tile")
 	var/hidden = babylon_tutorial_is_hidden(babylon_tutorial_view_key(user), object)
@@ -362,7 +363,8 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_hidden)
 	babylon_tutorial_reposition(object, tile)
 	log_game("BABYLON TUTORIAL: [key_name(user)] moved [object.kind_name] [object.tutorial_id] from [AREACOORD(old)] to [AREACOORD(tile)].")
 	var/zones = babylon_tutorial_has_field_type(object.type, list("zone", "tile"))
-	report(user, "Moved [object.tutorial_id] to [tile.x], [tile.y].[zones ? " Its zones and picked tiles stay where they are." : ""]", TRUE)
+	var/still_hidden = babylon_tutorial_is_hidden(babylon_tutorial_view_key(user), object)
+	report(user, "Moved [object.tutorial_id] to [tile.x], [tile.y].[zones ? " Its zones and picked tiles stay where they are." : ""][still_hidden ? " It is still hidden in your view (Overview: Show)." : ""]", TRUE)
 	user.balloon_alert(user, "moved")
 	sync_view(TRUE)
 
@@ -496,10 +498,10 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_hidden)
 		var/turf/tile = get_turf(object)
 		if(!tile)
 			continue
-		// Hidden in this builder's view; the object being repositioned or configured still shows,
-		// marked hidden, so it never seems to vanish.
+		// Hidden in this builder's view; only the object being repositioned still shows, marked
+		// hidden, so it never seems to vanish (its settings page says it is hidden).
 		var/hidden = babylon_tutorial_is_hidden(view_key, object)
-		if(hidden && object != moved && object != focused)
+		if(hidden && object != moved)
 			continue
 		var/index = per_tile[tile] || 0
 		per_tile[tile] = index + 1

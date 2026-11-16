@@ -1062,8 +1062,10 @@
 		if(!thing)
 			continue
 		// Lockers, cabinets and bookcases fill themselves on load as well: without them a
-		// world's lockers refilled on every restart.
-		if(istype(thing, /obj/item) || istype(thing, /obj/machinery) || istype(thing, /obj/structure) || istype(thing, /mob/living/basic/drone))
+		// world's lockers refilled on every restart. Every object counts, vehicles too: a mining
+		// Ripley rolls a new random drill in its Initialize, and the one it rolled stayed beside
+		// the saved one (the saved equipment is attached again in babylon_after_restore()).
+		if(isobj(thing) || istype(thing, /mob/living/basic/drone))
 			for(var/obj/item/extra in thing.contents.Copy())
 				if(!(extra in used_children))
 					qdel(extra)
@@ -1340,6 +1342,12 @@
 /proc/babylon_loading_saved_map()
 	return !!GLOB.babylon_save?.loading_saved_map
 
+/// This start resumes a saved world (the supervisor staged its state). Round-start rolls that only
+/// fit a fresh map (decay, area spawns, station traits) stand back for the whole start; atoms ask
+/// babylon_loading_saved_map(), which ends when the restore finished.
+/proc/babylon_world_resumes_save()
+	return fexists("data/babylon/resume-state.json")
+
 /datum/controller/subsystem/mapping
 	/// Map files LoadGroup() could not load in this run (upstream only announces them): a restore
 	/// refuses to run over them (restore_world()).
@@ -1487,11 +1495,32 @@
 	. = ..()
 	SSatoms.babylon_fresh_map_only--
 
+// Station traits: every start rolled new ones, also in a resumed world, and the ones that change the
+// map (a wallet in a locker, the nebula's closet swap) changed the saved world on each restart.
+// Their effects on the map are in the save; they are rolled on a fresh map only.
+/datum/controller/subsystem/processing/station/SetupTraits()
+	if(babylon_world_resumes_save())
+		log_world("Station traits skipped: this world resumes a save.")
+		return
+	return ..()
+
+/// A mech's saved equipment comes back as plain contents (the equipment its Initialize made is
+/// removed above when it was not saved): it is attached again, to a free arm for arm equipment.
+/obj/vehicle/sealed/mecha/babylon_after_restore(list/fields)
+	. = ..()
+	for(var/obj/item/mecha_parts/mecha_equipment/equipment in contents)
+		if(equipment in flat_equipment)
+			continue
+		if(equipment.can_attach(src, FALSE))
+			equipment.attach(src, FALSE)
+		else if(equipment.can_attach(src, TRUE))
+			equipment.attach(src, TRUE)
+
 // Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and
 // rat or spider nests into maintenance. A saved world keeps its own decay; decaying it again on
 // every restart piled up dirt, webs and nests.
 /datum/controller/subsystem/decay/Initialize()
-	if(fexists("data/babylon/resume-state.json"))
+	if(babylon_world_resumes_save())
 		log_world("SSDecay skipped: this world resumes a save.")
 		return SS_INIT_NO_NEED
 	return ..()
@@ -1500,7 +1529,7 @@
 // like on random free tiles. A saved world has them saved where they were; placing them again
 // put a new set elsewhere on every restart.
 /datum/controller/subsystem/area_spawn/Initialize()
-	if(fexists("data/babylon/resume-state.json"))
+	if(babylon_world_resumes_save())
 		log_world("Area spawns skipped: this world resumes a save.")
 		return SS_INIT_NO_NEED
 	return ..()

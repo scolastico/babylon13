@@ -21,6 +21,12 @@ def dm_entries(packed):
     return {entry["entry"]: entry["value"] for entry in packed["entries"]}
 
 
+def dm_list(packed):
+    """A packed DM list (no keys) as its entries, with the same cut-off check as dm_entries()."""
+    assert packed["length"] == len(packed["entries"]), ("result cut off", packed["length"], len(packed["entries"]))
+    return packed["entries"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dreamdaemon", required=True)
@@ -272,7 +278,7 @@ def main():
         replacement = debug(run, "inspect", dict(target=restored_friend, vars=["builder"]))["vars"]["builder"]["ref"]
         equipment = debug(run, "inspect", dict(target=replacement, vars=["internal_storage", "head", "contents"]))["vars"]
         assert not equipment["internal_storage"] and not equipment["head"], equipment
-        assert not any(isinstance(e["entry"], dict) and e["entry"].get("type", "").startswith("/obj/item") for e in equipment["contents"]["entries"]), equipment
+        assert not any(isinstance(e["entry"], dict) and e["entry"].get("type", "").startswith("/obj/item") for e in dm_list(equipment["contents"])), equipment
         stop(world)
         generation2 = json.loads((saved / "latest.json").read_text())["generation"]
         after = json.loads((saved / generation2 / "state.json").read_text())

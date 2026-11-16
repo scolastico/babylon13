@@ -180,9 +180,10 @@
 /// target (an image only they see) and players nearby read "<speaker> points at <target>.".
 /// The flying arrow fades out as it arrives: the Point action's own arrow already bounces over
 /// the target, and a second one resting next to it was the two-arrows bug (spec 12 #14).
-/// How long a speaker's arrow flies to its target, and how long it then takes to fade out.
+/// How long a speaker's arrow flies to its target (deciseconds, as upstream pointing), and how
+/// long it then takes to fade out over the target's own arrow.
 #define BABYLON_TUTORIAL_POINT_FLIGHT 1.7
-#define BABYLON_TUTORIAL_POINT_FADE 0.3
+#define BABYLON_TUTORIAL_POINT_FADE (0.5 SECONDS)
 
 /// The key of a run image (show_image()): what it shows, and on which atom.
 /proc/babylon_tutorial_image_key(what, atom/on)

@@ -254,6 +254,13 @@
 /proc/babylon_tutorial_restore_items(mob/living/carbon/human/body, list/items)
 	var/turf/tile = get_turf(body)
 	var/obj/item/backpack
+	// The captured backpack itself: its packed items still inside it stay with it, whether it went
+	// back on the body or could not (inserting them again would fail on a full pack and drop them).
+	var/obj/item/original_pack
+	for(var/list/entry in items)
+		if(entry["slot"] == ITEM_SLOT_BACK)
+			var/datum/weakref/pack_ref = entry["ref"]
+			original_pack = pack_ref?.resolve()
 	for(var/list/entry in items)
 		var/datum/weakref/item_ref = entry["ref"]
 		var/obj/item/item = item_ref?.resolve()
@@ -265,11 +272,9 @@
 				continue
 			item = new path(tile)
 		if(entry["packed"])
-			backpack = backpack || body.get_item_by_slot(ITEM_SLOT_BACK)
-			// Still inside the restored original backpack: it stays where it is (inserting it again
-			// would fail on a full pack and drop it to the floor).
-			if(backpack && item.loc == backpack.atom_storage?.real_location)
+			if(original_pack && item.loc == original_pack.atom_storage?.real_location)
 				continue
+			backpack = backpack || body.get_item_by_slot(ITEM_SLOT_BACK)
 			if(!backpack?.atom_storage?.attempt_insert(item, body, override = TRUE, force = STORAGE_FULLY_LOCKED, messages = FALSE))
 				item.forceMove(tile)
 		else if(entry["hand"])
