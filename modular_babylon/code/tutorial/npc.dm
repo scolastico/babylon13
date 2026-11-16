@@ -594,7 +594,9 @@
 		if(done || QDELETED(npc))
 			return
 		if(!length(path))
-			waiting_for = "no way through: walls, doors it may not open (see its Doors setting) or someone in the way"
+			// The pathfinder never routes through a door without power, bolted or welded (also with
+			// All doors), so the reason names those.
+			waiting_for = doors == "all" ? "no way through: walls, doors with no power, bolted or welded doors, or someone in the way" : "no way through: walls, doors it may not open (see its Doors setting) or someone in the way"
 			return schedule(1 SECONDS)
 	var/turf/next = path[1]
 	if(doors == "all")

@@ -1597,7 +1597,13 @@
 		if(airlock.hasPower())
 			result["all_doors_walk_through"] = get_turf(walker) == locate(door_tile.x, base.y + 2, base.z)
 		else
-			result["all_doors_unpowered_noted"] = findtext(run.action_notes[walk_all], "no power") != 0
+			// An unpowered door keeps it waiting (the pathfinder never routes through it); the note
+			// comes when it gives up (its deadline) and names doors with no power.
+			var/datum/babylon_tutorial_npc_move/blocked_walk = run.movers[walker]
+			if(blocked_walk)
+				blocked_walk.deadline = world.time - 1
+				blocked_walk.walk_step()
+			result["all_doors_unpowered_noted"] = !run.movers[walker] && findtext(run.action_notes[walk_all], "no power") != 0
 
 		// Ending the run drops its notes and its walks.
 		babylon_tutorial_end()
