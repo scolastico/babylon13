@@ -418,6 +418,14 @@
 	/// The last successful save's result (generation, objects, levels, bytes, timings).
 	var/list/last_save_report
 
+/// How long a save waits for a running area operation (tutorial/area_tools.dm) to end.
+#define BABYLON_SAVE_AREA_WAIT (30 SECONDS)
+
+/// A build's own reason not to save now, or null. The station build refuses after its round ended
+/// (persistence_levels.dm).
+/datum/babylon_save/proc/save_refusal()
+	return null
+
 /// Saves a checkpoint. Worlds that are not saved (babylon_world_saves()) refuse unless forced.
 /// for_tutorial: a tutorial snapshot (a submission or save back, tutorial/submit.dm), forced, that
 /// never becomes the world's checkpoint (no latest.json, no level reuse) and keeps no characters or
@@ -426,8 +434,21 @@
 	// After a round's end nothing is saved: the next start resumes the last save from before it.
 	if(round_ending)
 		return list("error" = "The round is over; this world is not saved again")
+	var/refusal = save_refusal()
+	if(refusal)
+		return list("error" = refusal)
+	// A stopping world saves once, in its managed stop: a late autosave would race the exit.
+	if(draining && !stop_pending)
+		return list("error" = "This world is stopping")
 	if(!force && !for_tutorial && !babylon_world_saves())
 		return list("error" = "This world is not saved")
+	// An area operation (clear, paste, room reset) yields while it changes tiles: a save in the
+	// middle would capture a half-changed room. Wait for it (bounded, like the Paste area action).
+	var/area_deadline = world.time + BABYLON_SAVE_AREA_WAIT
+	while(babylon_area_locked_by_other() && world.time < area_deadline)
+		sleep(1 SECONDS)
+	if(babylon_area_locked_by_other())
+		return list("error" = "An area operation is still running; try saving again in a moment")
 	if(!ready || busy)
 		return list("error" = "Babylon is not ready or a save is in progress")
 	busy = TRUE
@@ -525,13 +546,16 @@
 			sleep((remaining - seconds_left) SECONDS)
 		if(!allow_unoccupied && !length(GLOB.clients))
 			return
+		// The world began to stop meanwhile (its managed stop saves; a round end never does).
+		if(draining || round_ending)
+			return
 		var/message = seconds_left == 1 ? "Babylon autosave now: the world pauses for about [estimated_pause_seconds()] seconds." : "Babylon autosave in [seconds_left] seconds; the world pauses for about [estimated_pause_seconds()] seconds."
 		autosave_notices += list(list("remaining" = seconds_left, "at" = world.time, "message" = message))
 		to_chat(world, span_notice(message))
 		remaining = seconds_left
 	// Give the client a full second to receive/render "now" before freezing.
 	sleep(1 SECONDS)
-	if((allow_unoccupied || length(GLOB.clients)) && !busy)
+	if((allow_unoccupied || length(GLOB.clients)) && !busy && !draining && !round_ending)
 		save_world()
 
 // Only snapshot capture is frozen. Serialization and disk writes use detached data.
@@ -771,7 +795,9 @@
 	// z (as text) -> list(milliseconds, records) of its capture, for the save's report.
 	var/list/level_costs = list()
 	for(var/z in levels)
-		var/source = reusable_level(z)
+		// A tutorial snapshot captures every level as it is now: it is published as is, and a
+		// reused level would be the state of the last real save instead.
+		var/source = for_tutorial ? null : reusable_level(z)
 		if(source)
 			reused_levels["[z]"] = source
 			level_costs["[z]"] = list(0, "reused")
@@ -871,7 +897,7 @@
 		// from it, and the levels it captured count as changed for the next real save.
 		level_save_failed()
 		log_world("Babylon wrote tutorial snapshot [generation]: [objects] objects, [bytes] bytes; capture [checkpoint_capture_ms] ms.")
-		return list("ok" = TRUE, "generation" = generation, "objects" = objects, "bytes" = bytes, "tutorial_snapshot" = TRUE)
+		return list("ok" = TRUE, "generation" = generation, "objects" = objects, "bytes" = bytes, "tutorial_snapshot" = TRUE, "reused_levels" = length(reused_levels))
 	last_save = generation
 	saved_level_json = level_json
 	saved_level_source = list()
@@ -1540,6 +1566,15 @@
 	. = ..()
 	if(. == INITIALIZE_HINT_QDEL && (flags_1 & INITIALIZED_1) && mapload && babylon_loading_saved_map())
 		return INITIALIZE_HINT_NORMAL
+
+// Stacks: a stack merges into a same-type stack on its tile when it initializes (LateInitialize)
+// and whenever it moves (Moved). While a save loads, a saved stack is made inside its restored
+// parent or moved back onto its tile next to another saved stack; merging then would delete it,
+// and its saved amount with it. The save already holds the stacks as players left them.
+/obj/item/stack/merge_with_loc(merge_into_ourselves = FALSE)
+	if(babylon_loading_saved_map())
+		return TRUE
+	return ..()
 
 // Disposal bins: upstream hides an animal in some mapped bins; a saved bin keeps what it held.
 /obj/machinery/disposal/bin/spawn_contained_animal()

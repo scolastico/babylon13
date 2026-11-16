@@ -236,6 +236,43 @@
 	state["round"] = list("started" = started ? TRUE : FALSE, "station_time" = started ? STATION_TIME_PASSED() : 0)
 	capture_players(state, for_tutorial)
 	state["characters"] = capture_characters(for_tutorial)
+	capture_station_economy(state)
+
+/// The station's research (the science techweb's researched nodes, designs and point bank) and the
+/// department budgets (cargo's included): round state a restart would otherwise reset.
+/datum/babylon_save/proc/capture_station_economy(list/state)
+	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
+	if(research)
+		state["research"] = list("nodes" = research.researched_nodes.Copy(), "designs" = research.researched_designs.Copy(), "points" = research.research_points.Copy())
+	var/list/budgets = list()
+	for(var/datum/bank_account/department/account as anything in SSeconomy.departmental_accounts)
+		budgets[account.department_id] = account.account_balance
+	state["budgets"] = budgets
+
+/// Restores what capture_station_economy() saved. Missing parts (older saves) leave the fresh
+/// round's values.
+/datum/babylon_save/proc/restore_station_economy(list/state)
+	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
+	var/list/research_data = state["research"]
+	if(research && islist(research_data))
+		for(var/node in research_data["nodes"])
+			if(istext(node) && SSresearch.techweb_nodes[node])
+				research.research_node_id(node, TRUE, FALSE, FALSE)
+		for(var/design in research_data["designs"])
+			if(istext(design) && SSresearch.techweb_designs[design])
+				research.add_design_by_id(design)
+		var/list/points = research_data["points"]
+		if(islist(points))
+			for(var/point_type in points)
+				if((point_type in SSresearch.point_types) && isnum(points[point_type]))
+					research.research_points[point_type] = max(0, points[point_type])
+		research.recalculate_nodes()
+	var/list/budgets = state["budgets"]
+	if(islist(budgets))
+		for(var/department_id in budgets)
+			var/datum/bank_account/department/account = SSeconomy.get_dep_account(department_id)
+			if(account && isnum(budgets[department_id]))
+				account.account_balance = max(0, budgets[department_id])
 
 /// The map's tg map json as this world was first started from it (a restored world keeps the
 /// one its save had; data/next_map.json then names the saved levels instead).
@@ -274,6 +311,13 @@
 		saved_level_zs["[saved_z]"] = first_z + index - 1
 	restore_world()
 
+/// Between the round's end and round_ending (the report delay, an admin's end delay) a save would
+/// become the resume point of a finished round. Nothing is saved once the round is finished.
+/datum/babylon_save/save_refusal()
+	if(SSticker.current_state >= GAME_STATE_FINISHED)
+		return "The round is over; this world is not saved again"
+	return ..()
+
 /datum/babylon_save/restored_level_z(saved_z)
 	return saved_level_zs["[saved_z]"] || saved_z
 
@@ -301,6 +345,7 @@
 			creature.updatehealth()
 		CHECK_TICK
 	restore_players(state["players"])
+	restore_station_economy(state)
 	if(babylon_state_round_started(state))
 		var/list/round_state = state["round"]
 		if(isnum(round_state["station_time"]))

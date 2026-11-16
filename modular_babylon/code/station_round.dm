@@ -42,11 +42,14 @@
 	var/babylon_start_verb_shown = FALSE
 
 /// The round's mode for a (tutorial) world whose save does (not) contain a started round.
+/// A tutorial always starts at once: its snapshot comes from a running Creative round
+/// (state round.started is TRUE), but it has no characters to resume, and the player must be
+/// placed at the tutorial start.
 /proc/babylon_choose_round_mode(tutorial, saved_round_started)
-	if(saved_round_started)
-		return "resume"
 	if(tutorial)
 		return "auto"
+	if(saved_round_started)
+		return "resume"
 	return "hold"
 
 /// TRUE only when a save's state says its round had started (state["round"]["started"], written
@@ -499,13 +502,35 @@
 		return ..()
 	GLOB.babylon_save.end_world_without_save()
 
-/// Every other reboot (an administrator's Reboot World, a nuke) ends the world the same way:
-/// a restarted run would bypass the supervisor.
+/// Every other reboot (an administrator's Reboot World, a TGS hard reboot) ends the world too: a
+/// restarted run would bypass the supervisor. A finished round ends without a save, as designed. A
+/// running round of a world that saves is saved first (a managed stop), else everything since the
+/// last autosave would be lost.
 /world/Reboot(reason = 0, fast_track = FALSE)
 	if(!params["babylon-world"])
 		return ..()
+	var/datum/babylon_save/session = GLOB.babylon_save
+	if(babylon_reboot_saves(SSticker.current_state))
+		log_world("Babylon: a world reboot was requested; the world is saved and stops instead.")
+		to_chat(world, span_notice("This world is restarting: it is saved first, then everyone returns to the lobby."))
+		INVOKE_ASYNC(session, TYPE_PROC_REF(/datum/babylon_save, reboot_with_save))
+		return
 	log_world("Babylon: a world reboot was requested; the world stops without a save instead.")
-	GLOB.babylon_save.end_world_without_save(SSticker.current_state == GAME_STATE_FINISHED ? null : 0)
+	session.end_world_without_save(SSticker.current_state == GAME_STATE_FINISHED ? null : 0)
+
+/// A reboot's choice: TRUE (save, then stop) for a round that is not over in a world whose stop
+/// saves; FALSE (stop without a save) for a finished round or a world that never saves.
+/proc/babylon_reboot_saves(ticker_state)
+	return ticker_state != GAME_STATE_FINISHED && babylon_stop_saves()
+
+/// A reboot in a running round: the managed stop saves, sends everyone to the lobby and exits. If
+/// the save fails, the world keeps running and the admins are told (no work is thrown away).
+/datum/babylon_save/proc/reboot_with_save()
+	var/list/result = managed_stop()
+	if(!result?["ok"])
+		var/reason = result?["error"] || "unknown error"
+		log_world("Babylon: the reboot's save failed ([reason]); the world keeps running.")
+		message_admins("Babylon: Reboot World could not save this world ([html_encode(reason)]), so it keeps running. Try again, or end the round instead.")
 
 /// The round is over: tell the supervisor (the run is stopping, nobody is admitted any more),
 /// let the players read the report, send them to the lobby and exit. Never saves.

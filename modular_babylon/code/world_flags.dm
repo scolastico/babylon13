@@ -211,6 +211,7 @@ var/global/babylon_byond_1686_slot_pad_drone_test_1
 #elif defined(BABYLON_DRONE)
 // babylon.dme
 var/global/babylon_byond_1686_slot_pad_drone_1
+var/global/babylon_byond_1686_slot_pad_drone_2
 #elif defined(BABYLON_STATION) && defined(BABYLON_TESTING)
 // babylon-station-test.dme
 var/global/babylon_byond_1686_slot_pad_station_test_1
@@ -230,9 +231,11 @@ var/global/babylon_byond_1686_slot_pad_station_test_14
 var/global/babylon_byond_1686_slot_pad_station_test_15
 var/global/babylon_byond_1686_slot_pad_station_test_16
 var/global/babylon_byond_1686_slot_pad_station_test_17
+var/global/babylon_byond_1686_slot_pad_station_test_18
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 var/global/babylon_byond_1686_slot_pad_station_1
 var/global/babylon_byond_1686_slot_pad_station_2
 var/global/babylon_byond_1686_slot_pad_station_3
+var/global/babylon_byond_1686_slot_pad_station_4
 #endif

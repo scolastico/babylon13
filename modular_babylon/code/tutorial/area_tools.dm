@@ -1493,6 +1493,10 @@ GLOBAL_VAR_INIT(babylon_area_snapshots_total_bytes, 4 * 1024 * 1024)
 /datum/babylon_area_session/proc/begin(ignore_cooldown = FALSE)
 	if(babylon_area_locked_by_other())
 		return "Another builder's area operation is still running. Try again in a moment."
+	// A save captures the world while it yields: an operation must not change tiles meanwhile
+	// (save_world() in turn waits for a running operation).
+	if(GLOB.babylon_save?.busy)
+		return "The world is saving; try again in a moment."
 	if(rate_limited && !ignore_cooldown && world.time < next_op)
 		return "Wait [round((next_op - world.time) / 10, 0.1)] more second\s: bigger areas need a longer pause between operations."
 	GLOB.babylon_area_busy = world.time + BABYLON_AREA_LOCK_TIMEOUT

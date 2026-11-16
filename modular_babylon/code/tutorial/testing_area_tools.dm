@@ -155,6 +155,17 @@
 		other.finish()
 		result["owner_releases_lock"] = !babylon_area_locked_by_other() && !GLOB.babylon_area_lock_owner
 		GLOB.babylon_area_busy = 0
+		// Review B-M2: no area operation starts while the world saves.
+		var/was_busy = busy
+		busy = TRUE
+		result["refused_while_saving"] = !!findtext(session.copy(null)["text"], "world is saving")
+		busy = was_busy
+		result["runs_after_the_save"] = session.copy(null)["ok"]
+		// Review A-M1: a stopping world takes no further save outside its managed stop.
+		var/was_draining = draining
+		draining = TRUE
+		result["no_save_while_stopping"] = save_world(TRUE)["error"] == "This world is stopping"
+		draining = was_draining
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_area_tools_limits failed: [error] ([error.file]:[error.line])")

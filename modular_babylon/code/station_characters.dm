@@ -40,6 +40,24 @@
 /mob/living/carbon/human
 	/// A body a player left behind, restored without a player: saved again as one.
 	var/babylon_kept_body = FALSE
+	/// A restored character whose player has not come back in this run yet. Nobody else may put
+	/// it into cryo meanwhile: it is SSD only because the world restarted (I3).
+	var/babylon_awaiting_player = FALSE
+
+/// The player is in their restored character again: the usual cryo rules apply from now on.
+/mob/living/carbon/human/proc/babylon_player_returned()
+	SIGNAL_HANDLER
+	babylon_awaiting_player = FALSE
+	UnregisterSignal(src, COMSIG_MOB_LOGIN)
+
+/// Cryopods: a restored character waits for its player. Only the player themselves, or a pod an
+/// admin opened for overrides, puts it into cryo; anyone else gets told why not.
+/obj/machinery/cryopod/mouse_drop_receive(mob/living/target, mob/living/user, params)
+	var/mob/living/carbon/human/waiting = target
+	if(ishuman(waiting) && waiting.babylon_awaiting_player && user != target && !allow_timer_override)
+		to_chat(user, span_notice("[target] has not been back since the world restarted. Only [target.p_they()] can go into cryo until then."))
+		return
+	return ..()
 
 /// The player's human, or null.
 /datum/babylon_player/proc/character()
@@ -143,8 +161,9 @@
 
 // --- Saving ---------------------------------------------------------------------------------
 
-/// state["characters"]: every player's human on a saved level, by ckey, and the player bodies left
-/// behind ("#<save id>"). None in a tutorial snapshot (babylon_world_saves_characters()) or before
+/// state["characters"]: every player's human, by ckey, and the player bodies left behind
+/// ("#<save id>"). A body off the saved levels (a shuttle in transit, CentCom) is kept too and
+/// arrives at a late-join point, like a body on a shuttle's tile. None in a tutorial snapshot (babylon_world_saves_characters()) or before
 /// the round started. One character that cannot be captured is skipped and logged; the save goes on.
 /datum/babylon_save/proc/capture_characters(for_tutorial = FALSE)
 	var/list/characters = list()
@@ -166,15 +185,15 @@
 		if(babylon_body_owner(body) != player_key)
 			player.set_character(null)
 			continue
-		if(captured_bodies[body] || !saves_character_body(body, levels))
+		if(captured_bodies[body] || !saves_character_body(body))
 			continue
 		captured_bodies[body] = TRUE
 		try
-			characters[player_key] = capture_character(body, player, skipped_tiles)
+			characters[player_key] = capture_character(body, player, skipped_tiles, levels)
 		catch(var/exception/error)
 			log_world("Babylon save: the character of [player_key] could not be saved: [error] ([error?.file]:[error?.line])")
 	for(var/mob/living/carbon/human/body as anything in GLOB.human_list)
-		if(captured_bodies[body] || QDELETED(body) || !saves_character_body(body, levels))
+		if(captured_bodies[body] || QDELETED(body) || !saves_character_body(body))
 			continue
 		var/owner_key = babylon_body_owner(body)
 		if(!body.babylon_kept_body && !owner_key && !body.last_mind?.key)
@@ -186,26 +205,27 @@
 		if(owner && !characters[owner_key] && !owner.character())
 			owner.set_character(body)
 			try
-				characters[owner_key] = capture_character(body, owner, skipped_tiles)
+				characters[owner_key] = capture_character(body, owner, skipped_tiles, levels)
 			catch(var/exception/owner_error)
 				log_world("Babylon save: the character of [owner_key] could not be saved: [owner_error] ([owner_error?.file]:[owner_error?.line])")
 			continue
 		try
-			var/list/entry = capture_character(body, null, skipped_tiles)
+			var/list/entry = capture_character(body, null, skipped_tiles, levels)
 			characters["[BABYLON_OWNERLESS_PREFIX][entry["id"]]"] = entry
 		catch(var/exception/error)
 			log_world("Babylon save: the body of [body.real_name] could not be saved: [error] ([error?.file]:[error?.line])")
 	return characters
 
-/// A body that goes into a save: on a saved level, not a hologram or a tutorial prop.
-/datum/babylon_save/proc/saves_character_body(mob/living/carbon/human/body, list/levels)
-	var/turf/tile = get_turf(body)
-	return tile && (tile.z in levels) && !body.babylon_skip_save() && !(body.flags_1 & HOLOGRAM_1)
+/// A body that goes into a save: somewhere in the world, not a hologram or a tutorial prop. Where it
+/// arrives is capture_character()'s "on_shuttle": a body off the saved levels is kept as well.
+/datum/babylon_save/proc/saves_character_body(mob/living/carbon/human/body)
+	return get_turf(body) && !body.babylon_skip_save() && !(body.flags_1 & HOLOGRAM_1)
 
 /// One character: the human's identity, job, damage and place, and its items as save records
 /// (the worn and held ones with the character as parent, their contents below them). player is
-/// null for a body left behind. skipped_tiles: checkpoint_skipped_tiles(), the shuttles' tiles.
-/datum/babylon_save/proc/capture_character(mob/living/carbon/human/body, datum/babylon_player/player, list/skipped_tiles = checkpoint_skipped_tiles())
+/// null for a body left behind. skipped_tiles: checkpoint_skipped_tiles(), the shuttles' tiles;
+/// levels: persisted_levels().
+/datum/babylon_save/proc/capture_character(mob/living/carbon/human/body, datum/babylon_player/player, list/skipped_tiles = checkpoint_skipped_tiles(), list/levels = persisted_levels())
 	var/body_id = assign_id(body)
 	var/turf/tile = get_turf(body)
 	var/list/records = list()
@@ -224,14 +244,15 @@
 	var/datum/bank_account/account = SSeconomy.bank_accounts_by_id["[body.account_id]"]
 	// A body on a shuttle's tile, which the level saves as what lies beneath the shuttle (it loads
 	// again at its roundstart dock; players' own shuttles are saved where they are), would come back
-	// over that. The same tiles as the level writer's (checkpoint_skipped_tiles()).
+	// over that. The same tiles as the level writer's (checkpoint_skipped_tiles()). A body on a level
+	// that is not saved (a shuttle in transit, CentCom) has no place to come back to: the same.
 	var/list/entry = list(
 		"id" = body_id,
 		"type" = "[body.type]",
 		"x" = tile.x,
 		"y" = tile.y,
 		"z" = tile.z,
-		"on_shuttle" = !!skipped_tiles[tile],
+		"on_shuttle" = !(tile.z in levels) || !!skipped_tiles[tile],
 		"job" = body.mind?.assigned_role?.title,
 		"balance" = account?.account_balance,
 		"stat" = body.stat,
@@ -307,10 +328,13 @@
 	player.character_job = istext(entry["job"]) ? entry["job"] : null
 	player.character_balance = isnum(entry["balance"]) ? entry["balance"] : null
 	restored_characters |= player
-	// Asleep until their player returns, as after a Logout(): the usual cryo rules apply.
+	// Asleep until their player returns, as after a Logout(). Nobody else may put them into cryo
+	// before they were back once (babylon_awaiting_player); then the usual cryo rules apply.
 	if(entry["stat"] != DEAD && !entry["ghost"])
 		body.lastclienttime = world.time
 		body.set_ssd_indicator(TRUE)
+		body.babylon_awaiting_player = TRUE
+		body.RegisterSignal(body, COMSIG_MOB_LOGIN, TYPE_PROC_REF(/mob/living/carbon/human, babylon_player_returned))
 	return body
 
 /// Species, DNA, name, blood type and look of a saved character (the shared identity helper).
@@ -371,8 +395,9 @@
 		var/obj/item/item = restored_atoms[record["id"]]
 		if(!istype(item) || QDELETED(item))
 			continue
-		// Made inside the body, but not worn: it is equipped from the body's tile.
-		item.forceMove(body.drop_location())
+		// Made inside the body, but not worn: it is equipped from nullspace. Not from the body's
+		// tile: a stack moved onto a tile merges with a stack lying there (merge_with_loc).
+		item.moveToNullspace()
 		pending[item] = record
 	// Some slots need another item first (a belt or pockets need the jumpsuit).
 	for(var/attempt in 1 to 3)
@@ -390,6 +415,7 @@
 		if(!placed_any || !length(pending))
 			break
 	for(var/obj/item/item as anything in pending)
+		item.forceMove(body.drop_location())
 		log_world("Babylon restore: [body.real_name]'s [item.type] could not be put back on; it lies at their feet.")
 
 /// The resumed round started (persistence_levels.dm): restored characters take their jobs again,

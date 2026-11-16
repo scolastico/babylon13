@@ -120,8 +120,9 @@ def main():
             return prepared
 
         def restore_source(self, world):
-            # Tutorial snapshots come with the tutorial pipeline; the round test needs none.
-            if self.field(world, "kind", "world") != "world":
+            # The fresh-map tutorial world ("smoke_tutorial") has no snapshot; a tutorial
+            # instance of a submitted snapshot starts from it like in the real pipeline.
+            if self.field(world, "tutorial", "") == "smoke_tutorial":
                 return None
             return super().restore_source(world)
 
@@ -385,11 +386,14 @@ def main():
         facts = ("x", "y", "floor_x", "floor_y", "card_access", "floor_card_access", "chest_brute", "arm_burn")
         assert all(value for key, value in setup.items() if key not in facts), ("test_character_roundtrip", setup)
         entry["test_character_roundtrip"] = setup
+        economy = values(run, "test_station_economy_setup")
+        assert economy.get("researched") and economy.get("budget_set"), ("test_station_economy_setup", economy)
+        entry["test_station_economy_setup"] = economy
         first = topic(run["port"], run["secret"], "save", timeout=600)
         assert first.get("ok"), first
         state = saved_state(world, first["generation"])
         players = {key for key in state["characters"] if not key.startswith("#")}
-        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger", "smokelate"}, players
+        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger", "smokelate", "smoketraveller"}, players
         assert [state["characters"][key]["real_name"] for key in state["characters"] if key.startswith("#")] == ["Smoke Corpse"], \
             list(state["characters"])
         assert "smokecharacter" in state["players"], list(state["players"])
@@ -413,6 +417,7 @@ def main():
             run, "test_character_roundtrip_restored", [changed["x"], changed["y"], setup["chest_brute"], setup["arm_burn"],
                                                        setup["card_access"], setup["floor_card_access"], setup["floor_x"],
                                                        setup["floor_y"]])
+        entry["test_station_economy_restored"] = checks(run, "test_station_economy_restored", [economy["node"]])
         stop(world)
         return entry
 
@@ -517,12 +522,29 @@ def main():
             assert restored and all(restored.values()), ("test_creative_plane_restored", restored)
             entry["test_creative_plane_restored"] = restored
             stop(world)
+            entry["tutorial_from_snapshot"] = check_tutorial_from_snapshot(
+                entry["tutorial_submit"]["test_tutorial_submit_live"]["tutorial"])
         return entry
+
+    def check_tutorial_from_snapshot(tutorial_id):
+        """A tutorial instance of the submitted snapshot (taken in a running round) starts its
+        tutorial round at once: not as a resumed round, which would skip the tutorial start."""
+        instance = api("create", dict(name="Station smoke tutorial snapshot", visibility="private",
+                                      map=args.restore_plane))["id"]
+        with service.lock, service.db:
+            service.db.execute("UPDATE worlds SET kind='tutorial', tutorial=? WHERE id=?", (tutorial_id, instance))
+        run = wait_ready(instance)
+        wait_round_running(run)
+        result = checks(run, "test_tutorial_snapshot_round")
+        stop(instance)
+        assert not (data / "worlds" / instance / "data/babylon/saves/latest.json").exists(), "a tutorial instance saved"
+        return result
 
     def check_tutorial_submit(run, world):
         """A Creative world submits itself as a tutorial through the DM path and the real supervisor:
         a forced snapshot without characters, copied to pending/, never the world's checkpoint."""
-        result = dict(test_tutorial_snapshot=checks(run, "test_tutorial_snapshot"))
+        result = dict(test_tutorial_snapshot=checks(run, "test_tutorial_snapshot"),
+                      test_tutorial_snapshot_full_capture=checks(run, "test_tutorial_snapshot_full_capture"))
         live = checks(run, "test_tutorial_submit_live", ["smokeowner"])
         result["test_tutorial_submit_live"] = live
         stored = data / "tutorials" / "pending" / live["tutorial"]
@@ -587,7 +609,7 @@ def main():
             # Every test reports before any failure is raised, so one run shows all problems.
             for proc in args.only_tutorial_tests or (
                     "test_tutorial_submit_refusals", "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review",
-                    "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates", "test_tutorial_world_actions", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
+                    "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates", "test_tutorial_world_actions", "test_tutorial_final_review", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
                     "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_room_reset", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
                 tutorial[proc] = dm_entries(result)

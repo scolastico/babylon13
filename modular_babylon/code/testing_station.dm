@@ -193,7 +193,10 @@
 	flags.kind = real_kind
 	result["tutorial_starts_at_once"] = modes["tutorial"] == "auto" && modes["tutorial_edit"] == "auto"
 	result["world_kind_holds"] = modes["world"] == "hold"
-	result["saved_round_resumes"] = babylon_choose_round_mode(FALSE, TRUE) == "resume" && babylon_choose_round_mode(TRUE, TRUE) == "resume"
+	result["saved_round_resumes"] = babylon_choose_round_mode(FALSE, TRUE) == "resume"
+	// A tutorial's snapshot has a started round (submitted from a running Creative round); the
+	// tutorial still starts at once and places its players at the start.
+	result["tutorial_snapshot_round_starts_at_once"] = babylon_choose_round_mode(TRUE, TRUE) == "auto"
 	result["saved_round_flag_read_defensively"] = babylon_state_round_started(list("round" = list("started" = TRUE))) \
 		&& !babylon_state_round_started(null) && !babylon_state_round_started(list()) \
 		&& !babylon_state_round_started(list("round" = "yes")) && !babylon_state_round_started(list("round" = list("started" = FALSE))) \
@@ -219,6 +222,9 @@
 	result["no_roundstart_job_without_players"] = !length(GLOB.joined_player_list)
 	result["report_delay_capped"] = round_end_delay() > 0 && round_end_delay() <= 60 SECONDS
 	result["not_ending_yet"] = !round_ending && !draining
+	// Review A-I2: Reboot World mid-round saves first (a managed stop); after the end it does not.
+	result["reboot_mid_round_saves"] = babylon_stop_saves() && babylon_reboot_saves(GAME_STATE_PLAYING)
+	result["reboot_after_the_end_does_not_save"] = !babylon_reboot_saves(GAME_STATE_FINISHED)
 	round_ending = TRUE
 	result["no_save_after_the_end"] = !!findtext(save_world()["error"], "round is over")
 	round_ending = FALSE
@@ -246,6 +252,46 @@
 	boot_error = null
 	result["menu_says_starting"] = !!findtext(babylon_title_additions(null, "menuref"), "Starting your tutorial")
 	result["refresh_all_is_safe_in_a_running_round"] = isnull(babylon_refresh_starter_titles(TRUE))
+	result["reboot_never_saves"] = !babylon_reboot_saves(GAME_STATE_PLAYING)
+	return result
+
+/// Review A-M6: a tutorial snapshot captures every level as it is now, also a level a real save
+/// would reuse from the last checkpoint. The snapshot is deleted again.
+/datum/babylon_save/proc/test_tutorial_snapshot_full_capture()
+	var/list/result = list()
+	var/list/real_source = saved_level_source
+	var/list/real_json = saved_level_json
+	var/list/real_dirty = dirty_levels
+	saved_level_source = list()
+	saved_level_json = list()
+	dirty_levels = list()
+	var/empty_json = json_encode(list())
+	for(var/z in persisted_levels())
+		rustg_file_write("x", "data/babylon/saves/babylon-test-reuse/[level_file(z)]")
+		saved_level_source["[z]"] = "babylon-test-reuse"
+		saved_level_json["[z]"] = list(empty_json, empty_json, 0)
+	result["test_levels_reusable"] = !!reusable_level(persisted_levels()[1])
+	var/list/full = save_world(TRUE, TRUE)
+	result["snapshot_written"] = !!full["ok"]
+	result["snapshot_reuses_no_level"] = full["reused_levels"] == 0
+	if(istext(full["generation"]))
+		fdel("data/babylon/saves/[full["generation"]]/")
+	fdel("data/babylon/saves/babylon-test-reuse/")
+	saved_level_source = real_source
+	saved_level_json = real_json
+	dirty_levels = real_dirty | dirty_levels
+	return result
+
+/// A tutorial instance started from a submitted snapshot (whose round had started): the tutorial
+/// round starts at once, not as a resumed round, so players are placed at the tutorial start.
+/datum/babylon_save/proc/test_tutorial_snapshot_round()
+	var/list/result = list()
+	result["tutorial_kind"] = GLOB.babylon_world.is_tutorial()
+	result["snapshot_round_had_started"] = babylon_state_round_started(saved_state())
+	result["mode_auto"] = round_mode == "auto"
+	result["round_playing"] = SSticker.current_state == GAME_STATE_PLAYING
+	result["menu_says_starting"] = !!findtext(babylon_title_additions(null, "menuref"), "Starting your tutorial")
+	result["start_turf"] = isturf(babylon_tutorial_start_turf())
 	return result
 
 /// An open, free tile near the middle of level z for a test marker, or null. With solid_floor (the
@@ -746,6 +792,19 @@
 	result["shuttle_floor_on_a_saved_level"] = !!aboard
 	var/mob/living/carbon/human/passenger = test_character_body(aboard || tile, "Smoke Passenger", "smokepassenger")
 	ensure_station_player("smokepassenger").set_character(passenger)
+	// Review A-C2: a body on a level that is not saved (CentCom here; shuttles in transit alike) is
+	// kept with its items and arrives at a late-join point.
+	var/turf/away
+	for(var/centcom_z in SSmapping.levels_by_trait(ZTRAIT_CENTCOM))
+		away = test_marker_turf(centcom_z, list(), FALSE)
+		if(away)
+			break
+	result["off_level_floor"] = !!away && !(away.z in persisted_levels())
+	var/mob/living/carbon/human/traveller = test_character_body(away || tile, "Smoke Traveller", "smoketraveller")
+	var/obj/item/storage/backpack/traveller_pack = new(away || tile)
+	new /obj/item/wirecutters(traveller_pack)
+	result["traveller_backpack_worn"] = traveller.equip_to_slot_if_possible(traveller_pack, ITEM_SLOT_BACK, disable_warning = TRUE)
+	ensure_station_player("smoketraveller").set_character(traveller)
 	// Engine-wide (review M-1): a captain's card on the floor keeps its trim and access.
 	var/turf/floor_tile = get_step(tile, NORTH) || tile
 	var/obj/item/card/id/advanced/gold/floor_card = new(floor_tile)
@@ -784,6 +843,10 @@
 	result["swapped_entries"] = swapped_entries == 1
 	result["corpse_kept_without_player"] = corpse_kept && characters["smokeabandon"]?["real_name"] == "Smoke Newbody"
 	result["passenger_on_shuttle"] = !!characters["smokepassenger"]?["on_shuttle"]
+	var/list/traveller_types = list()
+	for(var/list/record in characters["smoketraveller"]?["records"])
+		traveller_types += record["type"]
+	result["off_level_body_kept"] = !!characters["smoketraveller"]?["on_shuttle"] && ("/obj/item/wirecutters" in traveller_types)
 	result["latejoiner_is_theirs"] = characters["smokelate"]?["real_name"] == "Smoke Latejoiner" && player_sessions["smokelate"].character() == latejoiner
 	latejoiner.ckey = null // a key on a client-less mob would take that player straight in if they joined
 	// Characters are never one of the levels' mobs.
@@ -801,9 +864,45 @@
 	result["tutorial_snapshot_empty"] = islist(tutorial_state["characters"]) && !length(tutorial_state["characters"]) && islist(tutorial_state["players"]) && !length(tutorial_state["players"])
 	var/list/world_state = list()
 	capture_session_state(world_state)
-	result["world_save_has_them"] = length(world_state["characters"]) >= 7 && islist(world_state["players"]["smokecharacter"])
+	result["world_save_has_them"] = length(world_state["characters"]) >= 8 && islist(world_state["players"]["smokecharacter"])
 	result["x"] = body.x
 	result["y"] = body.y
+	return result
+
+/// Review A-I1: research and department budgets are round state a restart keeps. Researches one
+/// node that is not researched yet and sets the cargo budget; returns both for the restored check.
+/datum/babylon_save/proc/test_station_economy_setup()
+	var/list/result = list()
+	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
+	var/node_id
+	for(var/id in research?.available_nodes)
+		if(!research.researched_nodes[id] && length(SSresearch.techweb_nodes[id]?.design_ids))
+			node_id = id
+			break
+	result["node"] = node_id
+	result["researched"] = !!node_id && research.research_node_id(node_id, TRUE, FALSE, FALSE)
+	research?.research_points[TECHWEB_POINT_TYPE_GENERIC] = 4321
+	var/datum/bank_account/department/cargo = SSeconomy.get_dep_account(ACCOUNT_CAR)
+	cargo?.account_balance = 98765
+	result["budget_set"] = cargo?.account_balance == 98765
+	return result
+
+/datum/babylon_save/proc/test_station_economy_restored(node_id)
+	var/list/result = list()
+	var/datum/techweb/science/research = locate(/datum/techweb/science) in SSresearch.techwebs
+	var/datum/techweb_node/node = SSresearch.techweb_nodes[node_id]
+	result["node_researched"] = !!node && !!research?.researched_nodes[node_id]
+	var/designs_back = !!node
+	for(var/design_id in node?.design_ids)
+		if(!research.researched_designs[design_id])
+			designs_back = FALSE
+	result["node_designs_back"] = designs_back
+	// Points go on accruing after the restore; at least the saved bank is there.
+	result["points_kept"] = research?.research_points[TECHWEB_POINT_TYPE_GENERIC] >= 4321
+	var/datum/bank_account/department/cargo = SSeconomy.get_dep_account(ACCOUNT_CAR)
+	// Paydays draw on it (the restored cargo technician's pay): near the saved 98765, far above a
+	// fresh round's 0.
+	result["cargo_budget_kept"] = cargo?.account_balance >= 90000
 	return result
 
 /// The character's level stays unchanged (nobody is connected), but the character moves a tile and
@@ -898,6 +997,24 @@
 		if(get_turf(point) == passenger_tile)
 			at_arrival_point = TRUE
 	result["passenger_at_arrivals"] = passenger_tile && !isspaceturf(passenger_tile) && at_arrival_point
+	// Review A-C2: the body saved off the saved levels came back at a late-join point with its items.
+	var/mob/living/carbon/human/traveller = player_sessions["smoketraveller"]?.character()
+	var/turf/traveller_tile = get_turf(traveller)
+	var/traveller_at_arrivals = !!traveller_tile && traveller_tile == respawn_turf
+	for(var/atom/point as anything in SSjob.latejoin_trackers)
+		if(get_turf(point) == traveller_tile)
+			traveller_at_arrivals = TRUE
+	result["off_level_body_at_arrivals"] = traveller_at_arrivals && istype(traveller?.back, /obj/item/storage/backpack) && !!(locate(/obj/item/wirecutters) in traveller.back)
+	// Review A-I3: a restored character waits for its player; nobody else puts it into cryo.
+	result["awaiting_player"] = body.babylon_awaiting_player
+	var/obj/machinery/cryopod/pod = new(get_turf(body))
+	var/mob/living/carbon/human/stranger = test_character_body(get_turf(body), "Smoke Stranger", null)
+	pod.mouse_drop_receive(body, stranger)
+	result["cryo_by_others_refused"] = pod.occupant != body && body.loc != pod
+	SEND_SIGNAL(body, COMSIG_MOB_LOGIN)
+	result["back_once_clears_it"] = !body.babylon_awaiting_player
+	qdel(stranger)
+	qdel(pod)
 	var/obj/item/card/id/advanced/gold/floor_card
 	for(var/obj/item/card/id/advanced/gold/candidate in locate(babylon_test_number(floor_x), babylon_test_number(floor_y), station_z))
 		if(candidate.registered_name == "Smoke Floor Card")
