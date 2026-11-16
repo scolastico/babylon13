@@ -7,6 +7,7 @@ import {
   defaultEffect,
   defaultGateInput,
   effectNeeds,
+  eventChoices,
   type Field,
   fieldActive,
   gateLiveText,
@@ -375,5 +376,122 @@ describe('gate editors', () => {
     });
     expect(operationTakesValue('mul')).toBe(true);
     expect(operationTakesValue('reset')).toBe(false);
+  });
+});
+
+describe('world action editors', () => {
+  const inventory: Partial<ObjectData> = {
+    kind: 'inventory',
+    kind_name: 'Set inventory',
+    category: 'action',
+    schema: [
+      {
+        key: 'loadout',
+        label: 'Loadout',
+        type: 'loadout',
+        default: [],
+        help: null,
+        base: '/obj/item',
+        search: 'creative',
+      },
+    ],
+    values: {
+      loadout: [
+        {
+          place: 'slot:1',
+          where: 'Uniform',
+          name: 'medical scrubs',
+          path: '/obj/item/clothing/under/rank/medical/scrubs',
+          inside: 0,
+        },
+        {
+          place: 'slot:8',
+          where: 'Back',
+          name: 'Field kit',
+          path: '/obj/item/storage/backpack/medic',
+          inside: 3,
+        },
+      ],
+    },
+    loadout_places: [
+      { value: 'slot:1', label: 'Uniform' },
+      { value: 'hand:1', label: 'Left hand' },
+    ],
+    search: {
+      key: 'loadout',
+      query: 'kit',
+      results: [
+        {
+          path: '/obj/item/storage/medkit/regular',
+          name: 'First-aid kit',
+          hint: 'standard',
+        },
+      ],
+    },
+  };
+
+  it('shows a stored loadout with its places, and the search like the Creative panel', () => {
+    show(inventory);
+    expect(screen.getByText('Store my current loadout')).toBeDefined();
+    // In the list, and as the place an added item goes to.
+    expect(screen.getAllByText('Uniform').length).toBe(2);
+    expect(screen.getByText('medical scrubs')).toBeDefined();
+    expect(screen.getByText('Field kit')).toBeDefined();
+    expect(screen.getByText('(+3 inside)', { exact: false })).toBeDefined();
+    expect(screen.getByText('Add an item')).toBeDefined();
+    // The Creative panel's hint for same-named types is shown with each result.
+    expect(
+      screen.getByText('First-aid kit (standard)', { exact: false }),
+    ).toBeDefined();
+  });
+
+  it('says when no loadout is stored yet', () => {
+    show({ ...inventory, values: { loadout: [] }, search: null });
+    expect(screen.getByText('Empty: nothing stored yet.')).toBeDefined();
+  });
+
+  it("offers the Creative panel's events by category, with a description", () => {
+    const events = [
+      {
+        value: '/datum/round_event_control/meteor_wave',
+        label: 'Meteor Wave: Normal',
+        category: 'Space Threat',
+        description: 'A regular meteor wave.',
+      },
+    ];
+    show({
+      kind: 'start_event',
+      kind_name: 'Start event',
+      category: 'action',
+      schema: [
+        {
+          key: 'event',
+          label: 'Event',
+          type: 'event',
+          default: '',
+          help: null,
+        },
+      ],
+      values: { event: '/datum/round_event_control/meteor_wave' },
+      events,
+    });
+    expect(screen.getByText('A regular meteor wave.')).toBeDefined();
+    expect(eventChoices(events)).toEqual([
+      {
+        value: '/datum/round_event_control/meteor_wave',
+        label: 'Space Threat: Meteor Wave: Normal',
+      },
+    ]);
+  });
+
+  it('shows test run notes that belong to no field', () => {
+    show({
+      issues: {
+        live: 'Test run: Move NPC: Guide gave up after 60 seconds.',
+      },
+    });
+    expect(
+      screen.getByText('Test run: Move NPC: Guide gave up after 60 seconds.'),
+    ).toBeDefined();
   });
 });

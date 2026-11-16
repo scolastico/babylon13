@@ -84,17 +84,36 @@
 
 /// Starts an event from the panel. Returns the round event, or an error text.
 /proc/babylon_creative_run_event(mob/user, event_path)
+	return babylon_creative_start_event(event_path, "[user.key] (creative panel)")
+
+/// The event control of an offered event (babylon_creative_events), or null when it is unknown or
+/// refused (babylon_creative_event_blocked).
+/proc/babylon_creative_event_control(event_path)
 	var/path = text2path("[event_path]")
 	if(!ispath(path, /datum/round_event_control))
-		return "Unknown event."
-	var/datum/round_event_control/control
+		return null
 	for(var/datum/round_event_control/candidate as anything in SSevents.control)
 		if(candidate.type == path)
-			control = candidate
-			break
-	if(!control || babylon_creative_event_blocked(control))
+			return babylon_creative_event_blocked(candidate) ? null : candidate
+	return null
+
+/// Whether the Events tab offers this event (also what a tutorial's Start event action may start).
+/proc/babylon_creative_event_allowed(event_path)
+	return !!babylon_creative_event_control(event_path)
+
+/**
+ * Starts an offered event, the one way every Babylon feature starts one (the Creative panel's
+ * Events tab, the tutorial's Start event action). Returns the round event, or an error text.
+ * Started events are listed in GLOB.babylon_creative_events: they are stepped where SSevents does
+ * not run (babylon_creative_step_events) and ended when Creative is switched off.
+ */
+/proc/babylon_creative_start_event(event_path, cause)
+	if(!ispath(text2path("[event_path]"), /datum/round_event_control))
+		return "Unknown event."
+	var/datum/round_event_control/control = babylon_creative_event_control(event_path)
+	if(!control)
 		return "That event cannot run here."
-	var/datum/round_event/started = control.run_event(event_cause = "[user.key] (creative panel)")
+	var/datum/round_event/started = control.run_event(event_cause = cause)
 	if(!istype(started))
 		return "The event did not start."
 	GLOB.babylon_creative_events += WEAKREF(started)

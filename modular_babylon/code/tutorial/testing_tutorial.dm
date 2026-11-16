@@ -169,7 +169,7 @@
 
 		// Every kind has a schema with known types and unique keys.
 		var/schemas_ok = length(babylon_tutorial_kinds()) >= 19
-		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "gateinputs", "zone", "effects", "target")
+		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "gateinputs", "zone", "effects", "target", "loadout", "event")
 		for(var/kind in babylon_tutorial_kinds())
 			var/list/keys = list()
 			for(var/list/field as anything in babylon_tutorial_schema(babylon_tutorial_kinds()[kind]))
@@ -1044,4 +1044,347 @@
 		log_world("test_tutorial_gates failed: [error] ([error.file]:[error.line])")
 	babylon_tutorial_end()
 	babylon_tutorial_test_cleanup(made)
+	return result
+
+/// Walks a Move NPC action's NPC step by step (no waiting for timers). Returns the walk when it
+/// is still going after max_steps, else null (arrived or gave up).
+/proc/babylon_tutorial_test_walk(datum/babylon_tutorial_run/run, mob/living/npc, max_steps = 40)
+	for(var/step_number in 1 to max_steps)
+		var/datum/babylon_tutorial_npc_move/walk = run.movers[npc]
+		if(!walk)
+			return null
+		walk.walk_step()
+	return run.movers[npc]
+
+/// The world actions of spec 12: dead (#2) and anchored (#4) NPCs, Move NPC (#3), Spawn object
+/// (#5), Remove objects (#6), Set inventory with a stored loadout (#7), Start event (#11) and
+/// Door / container (#12).
+/datum/babylon_save/proc/test_tutorial_world_actions()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(112)
+	var/list/old_event_times = GLOB.babylon_tutorial_event_times.Copy()
+	var/list/rect = list(base.x, base.y, base.x + 7, base.y + 3, base.z)
+	try
+		// A clear 8x4 floor to walk and build on.
+		babylon_area_clear_tiles(babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]), rect, /turf/open/floor/iron)
+		var/turf/row_start = locate(base.x, base.y, base.z)
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list())
+
+		// #2 Spawn dead: a corpse at once, it stays dead (no rot) and counts as dead.
+		var/obj/babylon_tutorial/npc_spawner/corpse_spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 7, base.y + 3, base.z), "wa_corpse", list("npc_name" = "Corpse", "spawn_at_start" = 0, "spawn_dead" = 1), made)
+		var/mob/living/carbon/human/corpse = corpse_spawner.spawn_npc()
+		made += corpse
+		var/obj/babylon_tutorial/trigger/condition/dead_check = babylon_tutorial_test_place(/obj/babylon_tutorial/trigger/condition, base, "wa_dead", list("condition" = "npc", "npc_check" = "dead", "target" = "wa_corpse", "starts" = "manual"), made)
+		result["spawn_dead_is_dead"] = corpse?.stat == DEAD && !!dead_check.evaluate(run)
+		result["spawn_dead_no_rot"] = !corpse?.GetComponent(/datum/component/rot)
+		result["spawn_dead_summary"] = findtext(corpse_spawner.summary(), "dead") != 0
+
+		// #4 Anchored: no pull, push, swap, buckle, walking over it.
+		var/obj/babylon_tutorial/npc_spawner/stuck_spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 1, base.y + 2, base.z), "wa_stuck", list("npc_name" = "Stuck", "spawn_at_start" = 0, "anchored" = 1), made)
+		var/mob/living/carbon/human/stuck = stuck_spawner.spawn_npc()
+		made += stuck
+		var/turf/stuck_tile = get_turf(stuck)
+		var/mob/living/carbon/human/pusher = new(locate(base.x, base.y + 2, base.z))
+		made += pusher
+		pusher.start_pulling(stuck)
+		result["anchored_not_pulled"] = pusher.pulling != stuck && !stuck.can_be_pulled(pusher, MOVE_FORCE_EXTREMELY_STRONG)
+		pusher.Move(stuck_tile, EAST)
+		result["anchored_not_pushed_or_swapped"] = get_turf(stuck) == stuck_tile && get_turf(pusher) != stuck_tile
+		var/obj/structure/chair/chair = new(stuck_tile)
+		made += chair
+		result["anchored_not_buckled"] = !chair.buckle_mob(stuck, check_loc = FALSE) && !stuck.buckled
+		stuck.Knockdown(30 SECONDS, ignore_canstun = TRUE)
+		result["anchored_blocks_while_lying"] = stuck.body_position == LYING_DOWN && !stuck.CanPass(pusher, EAST)
+		// The same checks on an NPC that is not anchored (the control).
+		var/obj/babylon_tutorial/npc_spawner/free_spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 1, base.y + 3, base.z), "wa_free", list("npc_name" = "Free", "spawn_at_start" = 0), made)
+		var/mob/living/carbon/human/free = free_spawner.spawn_npc()
+		made += free
+		free.Knockdown(30 SECONDS, ignore_canstun = TRUE)
+		result["control_free_npc_passable_and_pullable"] = free.CanPass(pusher, EAST) && free.can_be_pulled(pusher, MOVE_FORCE_EXTREMELY_STRONG)
+		result["anchored_summary"] = findtext(stuck_spawner.summary(), "anchored") != 0
+
+		// #3 Move NPC: an anchored NPC walks along the row, then its On arrival action runs.
+		var/obj/babylon_tutorial/npc_spawner/walker_spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, row_start, "wa_walker", list("npc_name" = "Walker", "spawn_at_start" = 0, "anchored" = 1), made)
+		var/mob/living/carbon/human/walker = walker_spawner.spawn_npc()
+		made += walker
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(base.x + 5, base.y, base.z), "wa_far", list("target" = "tile"), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(base.x + 2, base.y, base.z), "wa_near", list("target" = "tile"), made)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/action/message, base, "wa_arrived", list("text" = "Here."), made)
+		var/obj/babylon_tutorial/action/move_npc/walk_far = babylon_tutorial_test_place(/obj/babylon_tutorial/action/move_npc, base, "wa_walk", list("target" = "wa_walker", "destination" = "wa_far", "on_arrival" = list("wa_arrived")), made)
+		var/obj/babylon_tutorial/action/move_npc/walk_back = babylon_tutorial_test_place(/obj/babylon_tutorial/action/move_npc, base, "wa_back", list("target" = "wa_walker", "destination" = "wa_near", "timeout" = 5), made)
+		result["follow_up_counts_as_used"] = !("Action wa_arrived is not used by any trigger." in babylon_tutorial_overview_texts()) && ("Action wa_back is not used by any trigger." in babylon_tutorial_overview_texts())
+		run.perform(null, walk_far)
+		result["walk_started"] = !!run.movers[walker]
+		babylon_tutorial_test_walk(run, walker)
+		result["walked_to_marker"] = get_turf(walker) == locate(base.x + 5, base.y, base.z) && !run.movers[walker]
+		result["on_arrival_ran"] = babylon_tutorial_test_count(run.history, "preview>wa_arrived") == 1
+		// It can't stand: it crawls back.
+		walker.Knockdown(60 SECONDS, ignore_canstun = TRUE)
+		run.perform(null, walk_back)
+		babylon_tutorial_test_walk(run, walker)
+		result["crawled_to_marker"] = walker.body_position == LYING_DOWN && get_turf(walker) == locate(base.x + 2, base.y, base.z)
+		// It gives up at its deadline, with a note for the builder.
+		run.perform(null, walk_far)
+		var/datum/babylon_tutorial_npc_move/late = run.movers[walker]
+		late.deadline = world.time - 1
+		late.walk_step()
+		var/note = run.action_notes[walk_far]
+		result["gave_up_noted"] = !run.movers[walker] && findtext(note, "gave up") && findtext(walk_far.issues()["live"], "Test run:") && length(run.action_log)
+		walker.death()
+		run.perform(null, walk_far)
+		babylon_tutorial_test_walk(run, walker, 2)
+		result["dead_npc_does_not_walk"] = findtext(run.action_notes[walk_far], "dead") && get_turf(walker) == locate(base.x + 2, base.y, base.z)
+		walker.revive(HEAL_ALL | HEAL_ADMIN)
+		var/obj/babylon_tutorial/action/move_npc/loop = babylon_tutorial_test_place(/obj/babylon_tutorial/action/move_npc, base, "wa_loop", list("target" = "wa_walker", "destination" = "wa_far", "on_arrival" = list("wa_loop")), made)
+		result["self_loop_warned"] = !!loop.issues()["on_arrival"]
+
+		// #5 Spawn object: like the Creative panel, on a marker or spread over a zone.
+		var/turf/spawn_tile = locate(base.x + 6, base.y + 1, base.z)
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, spawn_tile, "wa_spawn_at", list("target" = "tile"), made)
+		var/obj/babylon_tutorial/action/spawn_object/spawn_gauze = babylon_tutorial_test_place(/obj/babylon_tutorial/action/spawn_object, base, "wa_gauze", list("object_type" = "[/obj/item/stack/medical/suture]", "count" = 3, "marker" = "wa_spawn_at"), made)
+		var/obj/babylon_tutorial/action/spawn_object/spawn_scanners = babylon_tutorial_test_place(/obj/babylon_tutorial/action/spawn_object, base, "wa_scanners", list("object_type" = "[/obj/item/healthanalyzer]", "count" = 2, "marker" = "wa_spawn_at"), made)
+		result["spawn_refuses_blocked"] = !!spawn_scanners.set_setting("object_type", "[/obj/item/grenade/clusterbuster]") && !!spawn_scanners.set_setting("object_type", "[/mob/living/basic/pet/cat]")
+		result["spawn_search_like_creative"] = length(babylon_tutorial_search_types(babylon_tutorial_schema_field(spawn_gauze.type, "object_type"), "gauze")) > 0
+		run.perform(null, spawn_gauze)
+		run.perform(null, spawn_scanners)
+		var/obj/item/stack/medical/suture/gauze = locate() in spawn_tile
+		var/scanners = 0
+		for(var/obj/item/healthanalyzer/scanner in spawn_tile)
+			scanners++
+		result["spawned_stack_and_copies"] = gauze?.amount == 3 && scanners == 2
+		var/obj/babylon_tutorial/action/spawn_object/spawn_zone = babylon_tutorial_test_place(/obj/babylon_tutorial/action/spawn_object, base, "wa_wrenches", list("object_type" = "[/obj/item/wrench]", "count" = 4, "place" = "zone", "zone" = list(base.x + 4, base.y + 3, base.x + 6, base.y + 3, base.z)), made)
+		run.perform(null, spawn_zone)
+		var/wrenches = 0
+		for(var/turf/tile as anything in babylon_tutorial_zone_turfs(spawn_zone.setting("zone")))
+			for(var/obj/item/wrench/wrench in tile)
+				wrenches++
+		result["spawned_in_zone"] = wrenches == 4
+		run.spawned_count = 499
+		run.perform(null, spawn_scanners)
+		var/scanners_after = 0
+		for(var/obj/item/healthanalyzer/scanner in spawn_tile)
+			scanners_after++
+		result["spawn_run_cap"] = scanners_after == 2 && findtext(run.action_notes[spawn_scanners], "at most")
+		run.spawned_count = 0
+
+		// #6 Remove objects: never players, mobs, tutorial objects or protected things.
+		var/turf/clean_tile = locate(base.x + 4, base.y + 2, base.z)
+		var/obj/babylon_tutorial/marker/clean_marker = babylon_tutorial_test_place(/obj/babylon_tutorial/marker, clean_tile, "wa_clean", list("target" = "tile"), made)
+		var/obj/item/wrench/loose = new(clean_tile)
+		made += loose
+		var/obj/item/screwdriver/protected = new(clean_tile)
+		made += protected
+		protected.resistance_flags |= INDESTRUCTIBLE
+		var/obj/structure/table/table = new(clean_tile)
+		made += table
+		var/obj/structure/closet/occupied = new(clean_tile)
+		made += occupied
+		var/mob/living/carbon/human/hider = new(occupied)
+		made += hider
+		var/obj/structure/closet/crate/crate = new(clean_tile)
+		made += crate
+		var/obj/item/crowbar/inside_protected = new(crate)
+		made += inside_protected
+		inside_protected.resistance_flags |= INDESTRUCTIBLE
+		var/mob/living/carbon/human/bystander = new(clean_tile)
+		made += bystander
+		var/obj/babylon_tutorial/action/remove_objects/remove_loose = babylon_tutorial_test_place(/obj/babylon_tutorial/action/remove_objects, base, "wa_rm_loose", list("marker" = "wa_clean"), made)
+		run.perform(null, remove_loose)
+		result["remove_loose_items"] = QDELETED(loose) && !QDELETED(protected) && !QDELETED(table) && !QDELETED(clean_marker)
+		var/obj/babylon_tutorial/action/remove_objects/remove_closets = babylon_tutorial_test_place(/obj/babylon_tutorial/action/remove_objects, base, "wa_rm_closets", list("marker" = "wa_clean", "what" = "type", "object_type" = "[/obj/structure/closet]"), made)
+		run.perform(null, remove_closets)
+		result["remove_type_with_subtypes"] = QDELETED(crate) && !QDELETED(inside_protected) && get_turf(inside_protected) == clean_tile
+		result["remove_never_mobs"] = !QDELETED(occupied) && !QDELETED(hider) && hider.loc == occupied && !QDELETED(bystander)
+		var/obj/babylon_tutorial/action/remove_objects/remove_all = babylon_tutorial_test_place(/obj/babylon_tutorial/action/remove_objects, base, "wa_rm_all", list("marker" = "wa_clean", "what" = "type", "object_type" = "[/obj]"), made)
+		result["remove_any_type_allowed"] = remove_all.setting("object_type") == "[/obj]"
+		run.perform(null, remove_all)
+		result["remove_all_keeps_protected"] = QDELETED(table) && !QDELETED(protected) && !QDELETED(clean_marker) && !QDELETED(occupied)
+		result["protected_rules"] = !babylon_tutorial_removable(clean_marker) && !babylon_tutorial_removable(protected) && !babylon_tutorial_removable(occupied)
+
+		// #7 Set inventory: store a builder's loadout, apply it to every player, round trip.
+		var/mob/living/carbon/human/builder = new(locate(base.x + 6, base.y + 2, base.z))
+		made += builder
+		var/obj/item/clothing/under/rank/medical/scrubs/purple/scrubs = new(builder)
+		builder.equip_to_slot_or_del(scrubs, ITEM_SLOT_ICLOTHING)
+		var/obj/item/storage/backpack/pack = new(builder)
+		builder.equip_to_slot_or_del(pack, ITEM_SLOT_BACK)
+		var/obj/item/stack/medical/suture/packed = new(pack, 5)
+		packed.forceMove(pack)
+		var/obj/item/reagent_containers/cup/beaker/beaker = new(builder)
+		beaker.reagents.add_reagent(/datum/reagent/water, 12)
+		builder.put_in_hand(beaker, 1)
+		var/obj/item/wrench/lucky = new(builder)
+		lucky.name = "lucky wrench"
+		builder.equip_to_slot_or_del(lucky, ITEM_SLOT_LPOCKET)
+		var/obj/item/wand = new /obj/item/babylon_tutorial_wand(builder)
+		made += wand
+		builder.put_in_hand(wand, 2)
+		var/list/captured = babylon_tutorial_capture_loadout(builder)
+		var/list/loadout = captured["loadout"]
+		var/list/types = list()
+		for(var/list/entry in loadout)
+			types += entry["type"]
+		result["capture_items"] = ("[/obj/item/clothing/under/rank/medical/scrubs/purple]" in types) && ("[/obj/item/storage/backpack]" in types) && ("[/obj/item/reagent_containers/cup/beaker]" in types) && ("[/obj/item/wrench]" in types)
+		result["capture_leaves_wand"] = !("[/obj/item/babylon_tutorial_wand]" in types)
+		var/obj/babylon_tutorial/action/inventory/dress = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "wa_dress", list(), made)
+		result["loadout_stored"] = isnull(dress.set_setting("loadout", loadout)) && length(dress.setting("loadout")) == length(loadout)
+		// The stored loadout survives the JSON of the save.
+		var/list/decoded_settings = json_decode(dress.settings_json)
+		var/list/decoded = decoded_settings["loadout"]
+		result["loadout_in_json"] = length(decoded) == length(loadout)
+		var/mob/living/carbon/human/student = new(locate(base.x + 7, base.y + 2, base.z))
+		made += student
+		var/obj/item/clothing/shoes/sneakers/black/old_shoes = new(student)
+		student.equip_to_slot_or_del(old_shoes, ITEM_SLOT_FEET)
+		var/obj/item/stock_parts/power_store/cell/old_cell = new(student)
+		student.put_in_hand(old_cell, 1)
+		run.add_player(student)
+		run.perform(null, dress)
+		var/obj/item/storage/backpack/student_pack = student.get_item_by_slot(ITEM_SLOT_BACK)
+		var/obj/item/stack/medical/suture/student_gauze = student_pack ? locate(/obj/item/stack/medical/suture) in student_pack : null
+		var/obj/item/reagent_containers/cup/beaker/student_beaker = student.held_items[1]
+		var/obj/item/student_pocket = student.get_item_by_slot(ITEM_SLOT_LPOCKET)
+		result["loadout_applied"] = istype(student.w_uniform, /obj/item/clothing/under/rank/medical/scrubs/purple) && istype(student_pack)
+		result["loadout_round_trip_contents"] = student_gauze?.amount == 5
+		result["loadout_round_trip_reagents"] = istype(student_beaker) && round(student_beaker.reagents.get_reagent_amount(/datum/reagent/water)) == 12
+		result["loadout_round_trip_name"] = student_pocket?.name == "lucky wrench"
+		result["loadout_replaces_old"] = QDELETED(old_shoes) && QDELETED(old_cell)
+		// Clear hands, dropping: the beaker lands on the floor; the wand never goes.
+		var/obj/babylon_tutorial/action/inventory/drop_hands = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "wa_drop", list("inventory" = "clear_hands", "old_items" = "drop"), made)
+		var/obj/item/wand_two = new /obj/item/babylon_tutorial_wand(student)
+		made += wand_two
+		student.put_in_hand(wand_two, 2)
+		run.perform(null, drop_hands)
+		result["clear_hands_drops"] = !QDELETED(student_beaker) && student_beaker.loc == get_turf(student) && !QDELETED(student_pocket) && student.w_uniform
+		result["wand_never_removed"] = student.is_holding(wand_two)
+		made += student_beaker
+		var/obj/babylon_tutorial/action/inventory/strip = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "wa_strip", list("inventory" = "clear_all"), made)
+		run.perform(null, strip)
+		result["clear_all_deletes"] = !student.w_uniform && !student.get_item_by_slot(ITEM_SLOT_BACK) && QDELETED(student_pocket) && student.is_holding(wand_two)
+		// Refusals: a blocked item, an unknown slot, two items in one place; foreign settings stay out.
+		result["loadout_refuses_blocked"] = !!dress.set_setting("loadout", list(list("type" = "[/obj/item/grenade/clusterbuster]", "slot" = ITEM_SLOT_BELT)))
+		result["loadout_refuses_bad_slot"] = !!dress.set_setting("loadout", list(list("type" = "[/obj/item/wrench]", "slot" = 3)))
+		result["loadout_refuses_doubles"] = !!dress.set_setting("loadout", list(list("type" = "[/obj/item/wrench]", "hand" = 1), list("type" = "[/obj/item/crowbar]", "hand" = 1)))
+		var/list/cleaned = babylon_tutorial_clean_loadout(list(list("type" = "[/obj/item/wrench]", "hand" = 1, "fields" = list("bad name!" = 1, "force" = list(1, list(2, list(3)))))))
+		var/list/cleaned_entry = length(cleaned["value"]) ? cleaned["value"][1] : null
+		result["loadout_drops_odd_fields"] = cleaned_entry && !cleaned_entry["fields"]
+		// The window's edits: add by type to a place (replacing what is there), remove.
+		var/datum/babylon_tutorial_editor/editor = new(dress, null)
+		dress.set_setting("loadout", list())
+		editor.loadout_act(builder, dress, "loadout", "loadout_add", list("place" = "hand:2", "path" = "[/obj/item/healthanalyzer]"))
+		editor.loadout_act(builder, dress, "loadout", "loadout_add", list("place" = "hand:2", "path" = "[/obj/item/crowbar]"))
+		editor.loadout_act(builder, dress, "loadout", "loadout_add", list("place" = "packed", "path" = "[/obj/item/stack/medical/suture]"))
+		var/list/edited = dress.setting("loadout")
+		result["editor_add_replaces"] = length(edited) == 2 && edited[1]["type"] == "[/obj/item/crowbar]" && edited[1]["hand"] == 2
+		editor.loadout_act(builder, dress, "loadout", "loadout_add", list("place" = "slot:[ITEM_SLOT_BELT]", "path" = "[/obj/item/grenade/clusterbuster]"))
+		result["editor_add_refuses_blocked"] = length(dress.setting("loadout")) == 2 && editor.notice && !editor.notice["ok"]
+		editor.loadout_act(builder, dress, "loadout", "loadout_remove", list("index" = 0))
+		result["editor_remove"] = length(dress.setting("loadout")) == 1
+		editor.loadout_act(builder, dress, "loadout", "store_loadout", list())
+		result["editor_store"] = length(dress.setting("loadout")) == length(loadout)
+		qdel(editor)
+		// On an NPC: its new items are never saved (like its outfit).
+		var/obj/babylon_tutorial/action/inventory/dress_npc = babylon_tutorial_test_place(/obj/babylon_tutorial/action/inventory, base, "wa_dress_npc", list("apply_to" = "npc", "target" = "wa_free", "loadout" = list(list("type" = "[/obj/item/healthanalyzer]", "hand" = 1))), made)
+		free.SetKnockdown(0)
+		run.perform(null, dress_npc)
+		var/obj/item/npc_scanner = free.held_items[1]
+		result["npc_loadout_not_saved"] = istype(npc_scanner, /obj/item/healthanalyzer) && npc_scanner.babylon_tutorial_npc_item
+
+		// #11 Start event: the Creative panel's list and rules, stepped where nothing else does.
+		var/obj/babylon_tutorial/action/start_event/event_action = babylon_tutorial_test_place(/obj/babylon_tutorial/action/start_event, base, "wa_event", list(), made)
+		result["event_refuses_blocked"] = !!event_action.set_setting("event", "/datum/round_event_control/immovable_rod") && !!event_action.set_setting("event", "/datum/round_event_control/antagonist/solo/traitor")
+		result["event_accepts_offered"] = isnull(event_action.set_setting("event", "/datum/round_event_control/communications_blackout"))
+		GLOB.babylon_tutorial_event_times.Cut()
+		var/events_before = length(GLOB.babylon_tutorial_events)
+		run.perform(null, event_action)
+		var/datum/weakref/started_ref = length(GLOB.babylon_tutorial_events) > events_before ? GLOB.babylon_tutorial_events[length(GLOB.babylon_tutorial_events)] : null
+		var/datum/round_event/started = started_ref?.resolve()
+		result["event_started"] = istype(started) && (started in SSevents.running)
+		if(started)
+			var/before = started.activeFor
+			for(var/i in 1 to 4)
+				babylon_tutorial_step_events()
+			result["event_stepped"] = babylon_creative_enabled() || !babylon_creative_events_need_stepping() || started.activeFor > before
+		for(var/i in 1 to 3)
+			GLOB.babylon_tutorial_event_times += world.time
+		run.perform(null, event_action)
+		result["event_rate_limited"] = findtext(run.action_notes[event_action], "not started") != 0
+		babylon_creative_end_events()
+
+		// #12 Door / container: each thing's own procs; lock and unlock are forced.
+		var/turf/door_tile = locate(base.x + 3, base.y + 1, base.z)
+		var/obj/machinery/door/airlock/airlock = new(door_tile)
+		made += airlock
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, door_tile, "wa_door", list("target" = "tile"), made)
+		var/obj/babylon_tutorial/action/door/bolt = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_bolt", list("door_action" = "lock", "marker" = "wa_door"), made)
+		var/obj/babylon_tutorial/action/door/unbolt = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_unbolt", list("door_action" = "unlock", "marker" = "wa_door"), made)
+		var/obj/babylon_tutorial/action/door/open_door = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_open", list("door_action" = "open", "marker" = "wa_door"), made)
+		var/obj/babylon_tutorial/action/door/close_door = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_close", list("door_action" = "close", "marker" = "wa_door"), made)
+		run.perform(null, bolt)
+		result["airlock_bolted"] = airlock.locked
+		run.perform(null, open_door)
+		result["bolted_airlock_stays_shut"] = airlock.density && findtext(run.action_notes[open_door], "bolted")
+		run.perform(null, unbolt)
+		result["airlock_unbolted"] = !airlock.locked
+		run.perform(null, open_door)
+		if(airlock.hasPower())
+			sleep(2 SECONDS)
+			result["airlock_opens"] = !airlock.density
+			run.perform(null, close_door)
+			sleep(2 SECONDS)
+			result["airlock_closes"] = airlock.density
+		else
+			result["unpowered_airlock_noted"] = airlock.density && findtext(run.action_notes[open_door], "no power")
+		// A secure locker: locked ones stay shut until unlocked; lock closes an open one first.
+		var/turf/locker_tile = locate(base.x + 3, base.y + 3, base.z)
+		var/obj/structure/closet/secure_closet/locker = new(locker_tile)
+		made += locker
+		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locker_tile, "wa_locker", list("target" = "tile"), made)
+		var/obj/babylon_tutorial/action/door/lock_locker = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_lock_l", list("door_action" = "lock", "marker" = "wa_locker"), made)
+		var/obj/babylon_tutorial/action/door/unlock_locker = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_unlock_l", list("door_action" = "unlock", "marker" = "wa_locker"), made)
+		var/obj/babylon_tutorial/action/door/open_locker = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_open_l", list("door_action" = "open", "marker" = "wa_locker"), made)
+		var/obj/babylon_tutorial/action/door/close_locker = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_close_l", list("door_action" = "close", "marker" = "wa_locker"), made)
+		run.perform(null, lock_locker)
+		run.perform(null, open_locker)
+		result["locked_locker_stays_shut"] = locker.locked && !locker.opened && findtext(run.action_notes[open_locker], "locked")
+		run.perform(null, unlock_locker)
+		run.perform(null, open_locker)
+		result["locker_unlocked_and_opened"] = !locker.locked && locker.opened
+		run.perform(null, lock_locker)
+		result["lock_closes_first"] = locker.locked && !locker.opened
+		run.perform(null, unlock_locker)
+		run.perform(null, open_locker)
+		run.perform(null, close_locker)
+		result["locker_closed"] = !locker.opened
+		// Shutters by their button id; they have no bolts.
+		var/obj/machinery/door/poddoor/shutters/shutter = new(locate(base.x + 5, base.y + 2, base.z))
+		made += shutter
+		shutter.id = "wa_test_shutters"
+		var/obj/babylon_tutorial/action/door/open_shutters = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_shutters", list("door_action" = "open", "place" = "button", "button_id" = "wa_test_shutters"), made)
+		var/obj/babylon_tutorial/action/door/lock_shutters = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_lock_shut", list("door_action" = "lock", "place" = "button", "button_id" = "wa_test_shutters"), made)
+		result["shutters_found_by_id"] = (shutter in open_shutters.targets())
+		var/was_closed = shutter.density
+		run.perform(null, open_shutters)
+		sleep(2 SECONDS)
+		result["shutters_open"] = was_closed && !shutter.density
+		run.perform(null, lock_shutters)
+		result["shutters_no_bolts_noted"] = findtext(run.action_notes[lock_shutters], "can't be locked") != 0
+		var/obj/machinery/door/firedoor/firelock = new(locate(base.x + 6, base.y + 3, base.z))
+		made += firelock
+		result["firelocks_left_alone"] = !babylon_tutorial_door_target(firelock)
+		var/obj/babylon_tutorial/action/door/nothing = babylon_tutorial_test_place(/obj/babylon_tutorial/action/door, base, "wa_nothing", list("door_action" = "open", "place" = "zone"), made)
+		result["unpicked_zone_warned"] = !!nothing.issues()["zone"]
+
+		// Ending the run drops its notes and its walks.
+		babylon_tutorial_end()
+		result["end_clears_notes"] = !walk_far.issues()["live"]
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_world_actions failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_end()
+	GLOB.babylon_tutorial_event_times = old_event_times
+	babylon_tutorial_test_cleanup(made)
+	// What the actions spawned and dropped goes too.
+	babylon_area_clear_tiles(babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]), rect, /turf/open/floor/iron)
 	return result

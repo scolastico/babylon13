@@ -56,6 +56,8 @@ export type TutorialObject = {
   actions_change?: string[] | null;
   starts?: string | null;
   after?: string | null;
+  /** Actions an action runs itself later (a Move NPC action's On arrival). */
+  follow_ups?: string[] | null;
 };
 
 export type Warning = { text: string; ref: string | null };
@@ -92,6 +94,8 @@ export type WandData = {
     objective?: string | null;
     gates?: GateState[];
     gate_log?: string[];
+    /** What actions could not do in this run (an NPC that gave up walking ...). */
+    action_log?: string[];
   };
   notice: { text: string; ok: boolean; id: number } | null;
   area?: AreaData;
@@ -434,6 +438,13 @@ export const buildFlow = (objects: TutorialObject[]) => {
       usedBy[id] = [...(usedBy[id] || []), trigger.id];
     }
   }
+  // Follow-ups of an action (Move NPC's On arrival) are used by that action.
+  for (const object of objects) {
+    for (const id of object.follow_ups || []) {
+      used.add(id);
+      usedBy[id] = [...(usedBy[id] || []), object.id];
+    }
+  }
   return {
     triggers,
     usedBy,
@@ -714,6 +725,19 @@ const TestTab = () => {
               {test.gate_log.map((line, index) => (
                 <Box key={`${index}-${line}`} color="bad">
                   <Icon name="circle-exclamation" mr={0.5} />
+                  {line}
+                </Box>
+              ))}
+            </Box>
+          )}
+          {!!test.action_log?.length && (
+            <Box mb={1}>
+              <Box bold mb={0.5} color="average">
+                Actions that could not finish
+              </Box>
+              {test.action_log.map((line, index) => (
+                <Box key={`${index}-${line}`} color="average">
+                  <Icon name="triangle-exclamation" mr={0.5} />
                   {line}
                 </Box>
               ))}

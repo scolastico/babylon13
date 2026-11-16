@@ -37,7 +37,9 @@ export type Field = {
     | 'gateinputs'
     | 'zone'
     | 'effects'
-    | 'target';
+    | 'target'
+    | 'loadout'
+    | 'event';
   default: unknown;
   help: string | null;
   options?: Option[];
@@ -50,7 +52,21 @@ export type Field = {
   placeholder?: string;
   /** Gate inputs: each trigger is marked live, latched or gate. */
   input_modes?: boolean;
+  /** Type search: "creative" searches like the Creative panel's Spawn tab. */
+  search?: string;
 };
+
+/** One item of a stored loadout, as the window shows it. */
+export type LoadoutEntry = {
+  place: string;
+  where: string;
+  name: string;
+  path: string;
+  inside: number;
+};
+
+/** A round event a Start event action can start. */
+export type EventOption = Option & { category?: string; description?: string };
 
 export type IdEntry = {
   id: string;
@@ -102,6 +118,10 @@ export type ObjectData = {
   diseases: Option[];
   reagents: Option[];
   new_actions?: Option[];
+  /** Start event: the events the Creative panel's Events tab offers. */
+  events?: EventOption[];
+  /** Set inventory: where an added loadout item can go. */
+  loadout_places?: Option[];
   id_help?: string;
   target_choices?: Option[];
   target_now?: string;
@@ -114,7 +134,7 @@ export type ObjectData = {
   search: {
     key: string;
     query: string;
-    results: { path: string; name: string }[];
+    results: { path: string; name: string; hint?: string }[];
   } | null;
   notice: { text: string; ok: boolean; id: number; key?: string } | null;
   picking: boolean;
@@ -211,6 +231,9 @@ export const BabylonTutorialObject = () => {
             ))}
           </LabeledList>
         </Section>
+        {otherIssues(data).map((text) => (
+          <NoticeBox key={text}>{text}</NoticeBox>
+        ))}
         {data.gate && <GateSection gate={data.gate} />}
         {data.kind === 'npc_spawner' && <NpcSection />}
         <Section>
@@ -247,6 +270,19 @@ export const BabylonTutorialObject = () => {
     </Window>
   );
 };
+
+/** Problems that belong to no field (an action's "Test run: ..." note); a gate shows its own. */
+export const otherIssues = (data: ObjectData) =>
+  Object.entries(data.issues || {})
+    .filter(
+      ([key]) =>
+        key !== 'id' &&
+        !(data.gate && key === 'live') &&
+        !data.schema.some(
+          (field) => field.key === key && fieldActive(field, data.values),
+        ),
+    )
+    .map(([, text]) => text);
 
 /** A refused value for this field, shown next to it. */
 export const fieldNotice = (data: ObjectData, key: string) =>
@@ -369,6 +405,10 @@ const FieldInput = (props: { field: Field }) => {
       return <EffectsInput value={value || []} onChange={set} />;
     case 'target':
       return <TargetInput field={field} value={String(value ?? 'object')} />;
+    case 'loadout':
+      return <LoadoutInput field={field} value={value || []} />;
+    case 'event':
+      return <EventInput value={String(value ?? '')} onSelect={set} />;
   }
   return <Box color="bad">Unknown field type.</Box>;
 };
@@ -646,14 +686,135 @@ const TypeInput = (props: { field: Field }) => {
             setQuery('');
           }}
         >
-          {result.name}{' '}
-          <Box inline color="label" fontSize="0.85em">
-            {result.path}
-          </Box>
+          <SearchResultText result={result} />
         </Button>
       ))}
       {query.length >= 2 && !results.length && (
         <Box color="label">Nothing matches.</Box>
+      )}
+    </Box>
+  );
+};
+
+/** A type search result: its name, the Creative panel's hint for same-named types, its path. */
+const SearchResultText = (props: {
+  result: { path: string; name: string; hint?: string };
+}) => (
+  <>
+    {props.result.name}
+    {props.result.hint ? ` (${props.result.hint})` : ''}{' '}
+    <Box inline color="label" fontSize="0.85em">
+      {props.result.path}
+    </Box>
+  </>
+);
+
+/** A stored loadout: its items by place, "Store my current loadout", remove and add by type. */
+const LoadoutInput = (props: { field: Field; value: LoadoutEntry[] }) => {
+  const { act, data } = useBackend<ObjectData>();
+  const { field } = props;
+  const places = data.loadout_places || [];
+  const [place, setPlace] = useState(places[0]?.value || '');
+  const [query, setQuery] = useState('');
+  const results = data.search?.key === field.key ? data.search.results : [];
+  return (
+    <Box>
+      <Button
+        icon="person-rays"
+        tooltip="Copies what you wear and hold right now, with names, settings and what is inside bags."
+        onClick={() => act('store_loadout', { key: field.key })}
+      >
+        Store my current loadout
+      </Button>
+      <Box mt={0.5}>
+        {props.value.length ? (
+          props.value.map((entry, index) => (
+            <Stack key={`${index}-${entry.place}-${entry.path}`} align="center">
+              <Stack.Item width="110px" color="label">
+                {entry.where}
+              </Stack.Item>
+              <Stack.Item grow>
+                <b>{entry.name}</b>
+                {entry.inside ? ` (+${entry.inside} inside)` : ''}{' '}
+                <Box inline color="label" fontSize="0.85em">
+                  {entry.path}
+                </Box>
+              </Stack.Item>
+              <Stack.Item>
+                <Button
+                  icon="xmark"
+                  color="transparent"
+                  tooltip="Remove from the loadout"
+                  onClick={() =>
+                    act('loadout_remove', { key: field.key, index })
+                  }
+                />
+              </Stack.Item>
+            </Stack>
+          ))
+        ) : (
+          <Box color="label">Empty: nothing stored yet.</Box>
+        )}
+      </Box>
+      <Box mt={1} bold>
+        Add an item
+      </Box>
+      <ChoiceInput options={places} value={place} onSelect={setPlace} />
+      <Input
+        fluid
+        expensive={300}
+        value={query}
+        placeholder={field.placeholder || 'Search items, e.g. gauze'}
+        onChange={(value: string) => {
+          setQuery(value);
+          act('search', { key: field.key, query: value });
+        }}
+      />
+      {results.map((result) => (
+        <Button
+          key={result.path}
+          fluid
+          color="transparent"
+          onClick={() => {
+            act('loadout_add', { key: field.key, place, path: result.path });
+            setQuery('');
+          }}
+        >
+          <SearchResultText result={result} />
+        </Button>
+      ))}
+      {query.length >= 2 && !results.length && (
+        <Box color="label">Nothing matches.</Box>
+      )}
+    </Box>
+  );
+};
+
+/** The events of the Creative panel's Events tab, as "Category: name", and what one does. */
+export const eventChoices = (events: EventOption[]) =>
+  events.map((event) => ({
+    value: event.value,
+    label: event.category ? `${event.category}: ${event.label}` : event.label,
+  }));
+
+const EventInput = (props: {
+  value: string;
+  onSelect: (value: string) => void;
+}) => {
+  const { data } = useBackend<ObjectData>();
+  const events = data.events || [];
+  const chosen = events.find((event) => event.value === props.value);
+  return (
+    <Box>
+      <ChoiceInput
+        options={eventChoices(events)}
+        value={props.value}
+        onSelect={props.onSelect}
+      />
+      {chosen?.description && (
+        <Box mt={0.5} color="label" fontSize="0.9em">
+          {chosen.description}
+        </Box>
       )}
     </Box>
   );

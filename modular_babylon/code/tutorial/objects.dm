@@ -398,10 +398,17 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 // Settings schema
 
 /// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist,
-/// gateinputs (a number gate's inputs, gates.dm), zone or effects. options: list(list("value", "label")). filter: categories an id may refer to. when:
+/// gateinputs (a number gate's inputs, gates.dm), zone, effects, loadout (a stored inventory,
+/// inventory.dm) or event (a round event the Creative panel offers, world_actions.dm). options:
+/// list(list("value", "label")). filter: categories an id may refer to. when:
 /// list(other key = list(values)) — the field applies only while that setting has one of them.
-/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null, input_modes = FALSE)
+/// search (typepath and loadout fields): "creative" searches and allows what the Creative panel's
+/// Spawn tab does (babylon_creative_search, babylon_creative_spawn_blocked); "any" allows every
+/// type under base (removing things); null: the default tutorial rules (babylon_tutorial_type_allowed).
+/proc/babylon_tutorial_field(key, label, type, default_value = null, help = "", list/options = null, min = null, max = null, list/filter = null, list/when = null, base = null, required = FALSE, placeholder = null, is_name = FALSE, max_tiles = null, input_modes = FALSE, search = null)
 	var/list/field = list("key" = key, "label" = label, "type" = type, "default" = default_value, "help" = help)
+	if(search)
+		field["search"] = search
 	if(input_modes)
 		// Gate inputs: the window marks each trigger live, latched or gate.
 		field["input_modes"] = TRUE
@@ -545,6 +552,15 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			return list("value" = list(x1, y1, x2, y2, z))
 		if("effects")
 			return babylon_tutorial_clean_effects(value)
+		if("loadout")
+			return babylon_tutorial_clean_loadout(value)
+		if("event")
+			value = "[value]"
+			if(!length(value))
+				return list("value" = "")
+			if(!babylon_creative_event_allowed(value))
+				return list("error" = "That event can't be started from a tutorial (the Creative panel's Events tab lists the ones that can).")
+			return list("value" = value)
 		if("target")
 			// A marker's target: "object" (the best thing on its tile), "tile" or a type on the tile.
 			if(value == "object" || value == "tile")
@@ -557,6 +573,12 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 
 /// Type paths a builder may pick for a typepath field.
 /proc/babylon_tutorial_type_allowed(path, list/field)
+	switch(field?["search"])
+		if("creative")
+			// Exactly what the Creative panel may spawn.
+			return !babylon_creative_spawn_blocked(path)
+		if("any")
+			return TRUE
 	if(ispath(path, /obj/item))
 		// The Creative panel's spawn blocklist plus the creative disposal unit's extras
 		// (grenades, bomb cores, transfer valves, brain holders): babylon_creative_item_allowed.
@@ -575,6 +597,15 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	var/base = text2path(field["base"])
 	query = lowertext(trim("[query]"))
 	if(!base || length(query) < 2)
+		return results
+	if(field["search"] == "creative")
+		// The Creative panel's own search (aliases, ranking, "full"/"standard" hints), limited to base.
+		var/list/answer = babylon_creative_search(query, "all")
+		for(var/list/entry as anything in answer["results"])
+			if(length(results) >= 30)
+				break
+			if(ispath(text2path(entry["path"]), base))
+				results += list(list("path" = entry["path"], "name" = entry["name"], "hint" = entry["hint"]))
 		return results
 	for(var/path in subtypesof(base))
 		if(length(results) >= 30)
@@ -627,6 +658,10 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			var/obj/babylon_tutorial/trigger/trigger = object
 			for(var/id in trigger.action_ids())
 				used_actions[id] = TRUE
+		if(object.tutorial_category == "action")
+			var/obj/babylon_tutorial/action/action = object
+			for(var/id in action.follow_up_ids())
+				used_actions[id] = TRUE
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)
 		if(object.tutorial_category == "trigger")
 			var/starts = object.setting("starts")
@@ -652,7 +687,7 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 	for(var/obj/babylon_tutorial/trigger/candidate in GLOB.babylon_tutorial_objects)
 		if(candidate.setting("starts") == "after" && candidate.setting("after") == trigger.tutorial_id)
 			next |= candidate
-	for(var/id in trigger.action_ids())
+	for(var/id in babylon_tutorial_expand_actions(trigger.action_ids()))
 		var/obj/babylon_tutorial/action/toggle/toggle = babylon_tutorial_find(id)
 		if(istype(toggle) && toggle.setting("mode") == "enable")
 			for(var/enabled_id in toggle.setting("triggers"))
@@ -808,6 +843,34 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 
 /obj/babylon_tutorial/action/proc/own_schema()
 	return list()
+
+/// Actions this action runs itself later (a Move NPC action's "On arrival"): they count as used,
+/// and steps they enable are reachable.
+/obj/babylon_tutorial/action/proc/follow_up_ids()
+	return list()
+
+/// Action ids plus every follow-up action they run, recursively, each once (in order).
+/proc/babylon_tutorial_expand_actions(list/ids)
+	var/list/found = list()
+	var/list/queue = islist(ids) ? ids.Copy() : list()
+	while(length(queue))
+		var/id = queue[1]
+		queue.Cut(1, 2)
+		if(found.Find(id))
+			continue
+		found += id
+		var/obj/babylon_tutorial/action/action = babylon_tutorial_find(id)
+		if(istype(action))
+			queue += action.follow_up_ids()
+	return found
+
+/// Something an action could not do in the running test run: "Test run: ..." (runtime.dm note_action()).
+/obj/babylon_tutorial/action/find_issues()
+	. = ..()
+	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
+	var/note = run?.action_notes[src]
+	if(note)
+		.["live"] = "Test run: [note]"
 
 // ---------------------------------------------------------------------------------------------
 // Markers

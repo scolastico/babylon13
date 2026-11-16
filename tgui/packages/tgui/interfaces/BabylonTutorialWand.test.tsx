@@ -291,6 +291,27 @@ describe('BabylonTutorialWand', () => {
       screen.getByText('loop stopped at valves', { exact: false }),
     ).toBeDefined();
   });
+
+  it('lists what actions could not do in the running test run', () => {
+    show({
+      test: {
+        running: true,
+        completed: false,
+        fired: 1,
+        players: 1,
+        listening: [],
+        steps: [],
+        action_log: [
+          'walk: Move NPC: Guide gave up after 60 seconds at 4, 5, 3 tiles from 7, 5 (no way through).',
+        ],
+      },
+    });
+    openTab('Test run');
+    expect(screen.getByText('Actions that could not finish')).toBeDefined();
+    expect(
+      screen.getByText('Guide gave up after 60 seconds', { exact: false }),
+    ).toBeDefined();
+  });
 });
 
 const gate: TutorialObject = {
@@ -317,6 +338,29 @@ describe('tutorial wand helpers', () => {
     expect(flow.unused).toEqual([]);
     expect(flow.usedBy.off).toEqual(['both']);
     expect(allActions({ ...gate, actions_change: ['bell'] })).toEqual(['bell']);
+  });
+
+  it("counts an action's follow-ups (Move NPC's On arrival) as used", () => {
+    const flow = buildFlow([
+      { ...gate, actions: ['walk'], actions_false: [], actions_change: [] },
+      {
+        ...gate,
+        ref: '[0xc]',
+        id: 'walk',
+        kind: 'move_npc',
+        category: 'action',
+        follow_ups: ['greet'],
+      },
+      {
+        ...gate,
+        ref: '[0xd]',
+        id: 'greet',
+        kind: 'message',
+        category: 'action',
+      },
+    ]);
+    expect(flow.unused).toEqual([]);
+    expect(flow.usedBy.greet).toEqual(['walk']);
   });
 
   it('describes gate states', () => {

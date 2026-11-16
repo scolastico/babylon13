@@ -520,6 +520,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 			"actions_change" = istype(object, /obj/babylon_tutorial/trigger/gate) ? object.setting("actions_change") : null,
 			"starts" = object.tutorial_category == "trigger" ? object.setting("starts") : null,
 			"after" = object.tutorial_category == "trigger" && object.setting("starts") == "after" ? object.setting("after") : null,
+			"follow_ups" = istype(object, /obj/babylon_tutorial/action) ? babylon_tutorial_follow_ups(object) : null,
 		))
 	var/datum/babylon_tutorial_run/run = babylon_tutorial_current_run()
 	var/list/zone_pick
@@ -535,7 +536,7 @@ GLOBAL_LIST_EMPTY(babylon_tutorial_wands)
 		"warnings" = babylon_tutorial_overview_warnings(),
 		"picking" = zone_pick,
 		"has_start" = !!babylon_tutorial_marker_turf("start"),
-		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "players" = length(run.players()), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective, "gates" = babylon_tutorial_gates_live(run), "gate_log" = run.gate_log.Copy(max(1, length(run.gate_log) - 4))) : list("running" = FALSE),
+		"test" = run ? list("running" = TRUE, "completed" = run.completed, "fired" = length(run.history), "players" = length(run.players()), "listening" = babylon_tutorial_ids_of(run.enabled), "steps" = run.history.Copy(max(1, length(run.history) - 7)), "objective" = run.objective, "gates" = babylon_tutorial_gates_live(run), "gate_log" = run.gate_log.Copy(max(1, length(run.gate_log) - 4)), "action_log" = run.action_log.Copy(max(1, length(run.action_log) - 4))) : list("running" = FALSE),
 		"notice" = notice,
 		"area" = area_session(user).window_data(),
 	)
@@ -740,6 +741,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		"diseases" = babylon_tutorial_options(babylon_tutorial_diseases()),
 		"reagents" = babylon_tutorial_options(babylon_tutorial_blood_reagents()),
 		"new_actions" = new_actions,
+		"events" = babylon_tutorial_event_options(object),
+		"loadout_places" = babylon_tutorial_loadout_place_options(),
 	)
 
 /datum/babylon_tutorial_editor/ui_data(mob/user)
@@ -752,6 +755,8 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 		var/value = object.setting(key)
 		if(field["type"] == "typepath")
 			values[key] = list("path" = value, "name" = length(value) ? babylon_tutorial_type_label(value) : "")
+		else if(field["type"] == "loadout")
+			values[key] = babylon_tutorial_loadout_view(value)
 		else
 			values[key] = value
 	var/list/ids = list()
@@ -828,7 +833,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 			// when the window ends (the latest one wins), so the last keystroke is never lost.
 			var/key = "[params["key"]]"
 			var/list/field = babylon_tutorial_schema_field(object.type, key)
-			if(field?["type"] != "typepath")
+			if(!(field?["type"] in list("typepath", "loadout")))
 				return FALSE
 			var/query = copytext_char("[params["query"]]", 1, 64)
 			if(world.time < next_search)
@@ -837,6 +842,13 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 				pending_search = list(key, query)
 				return FALSE
 			run_search(key, query)
+			return TRUE
+		if("store_loadout", "loadout_add", "loadout_remove")
+			var/key = "[params["key"]]"
+			var/list/field = babylon_tutorial_schema_field(object.type, key)
+			if(field?["type"] != "loadout")
+				return FALSE
+			loadout_act(user, object, key, action, params)
 			return TRUE
 		if("new_linked")
 			// A new action on this trigger's tile, added to its action list, its settings opened.
@@ -909,6 +921,52 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 			return TRUE
 	return FALSE
 
+/// Store, add to or remove from a loadout setting (inventory.dm): every change goes through the
+/// setting's validation.
+/datum/babylon_tutorial_editor/proc/loadout_act(mob/living/user, obj/babylon_tutorial/object, key, action, list/params)
+	var/list/loadout = object.setting(key)
+	loadout = islist(loadout) ? loadout.Copy() : list()
+	var/done
+	switch(action)
+		if("store_loadout")
+			var/list/captured = babylon_tutorial_capture_loadout(user)
+			loadout = captured["loadout"]
+			var/list/left_out = captured["left_out"]
+			done = "Stored your loadout: [length(loadout)] item\s[length(left_out) ? " (left out, not allowed in tutorials: [english_list(left_out)])" : ""]. The tutorial wand is never part of it."
+		if("loadout_remove")
+			var/index = round(text2num("[params["index"]]") || 0) + 1
+			if(index < 1 || index > length(loadout))
+				return
+			var/list/removed = loadout[index]
+			loadout.Cut(index, index + 1)
+			done = "Removed [removed["name"] || babylon_tutorial_type_label(removed["type"])]."
+		if("loadout_add")
+			var/path = text2path("[params["path"]]")
+			var/place = "[params["place"]]"
+			var/list/entry = list("type" = "[path]")
+			if(place == "packed")
+				entry["packed"] = 1
+			else if(findtext(place, "hand:") == 1)
+				entry["hand"] = text2num(copytext(place, 6))
+			else if(findtext(place, "slot:") == 1)
+				entry["slot"] = text2num(copytext(place, 6))
+			else
+				set_notice("Choose where the item goes.", FALSE, key)
+				return
+			// An item already in that place is replaced.
+			if(place != "packed")
+				for(var/list/other as anything in loadout.Copy())
+					if(babylon_tutorial_loadout_place(other) == place)
+						loadout -= list(other)
+			loadout += list(entry)
+			done = "Added [babylon_tutorial_type_label("[path]")] ([babylon_tutorial_loadout_place_label(place)])."
+	var/error = object.set_setting(key, loadout)
+	if(error)
+		set_notice(error, FALSE, key)
+		return
+	set_notice(done, TRUE)
+	log_game("BABYLON TUTORIAL: [key_name(user)] changed the loadout of [object.tutorial_id] ([action]).")
+
 /datum/babylon_tutorial_editor
 	/// world.time before which another type search waits.
 	var/next_search = 0
@@ -934,7 +992,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 /// Type search results, cached per base and query (the last 50 queries).
 /proc/babylon_tutorial_cached_search(list/field, query)
 	var/static/list/cache = list()
-	var/key = "[field["base"]]|[lowertext(trim(query))]"
+	var/key = "[field["base"]]|[field["search"]]|[lowertext(trim(query))]"
 	if(cache[key])
 		return cache[key]
 	var/list/results = babylon_tutorial_search_types(field, query)
@@ -948,3 +1006,17 @@ GLOBAL_DATUM_INIT(babylon_tutorial_editor_state, /datum/ui_state/babylon_tutoria
 	for(var/mob/player as anything in run?.audience())
 		if(player != builder)
 			to_chat(player, span_notice(html_encode(text)))
+
+/// The follow-up actions an action runs itself (a Move NPC action's On arrival), for the Flow.
+/proc/babylon_tutorial_follow_ups(obj/babylon_tutorial/action/action)
+	return action.follow_up_ids()
+
+/// The events a Start event action offers (the Creative panel's list), for its window; empty for
+/// every other kind (the list is long).
+/proc/babylon_tutorial_event_options(obj/babylon_tutorial/object)
+	if(!istype(object, /obj/babylon_tutorial/action/start_event))
+		return list()
+	var/list/options = list()
+	for(var/list/event as anything in babylon_creative_events())
+		options += list(list("value" = event["path"], "label" = event["name"], "category" = event["category"], "description" = event["description"]))
+	return options

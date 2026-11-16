@@ -41,6 +41,8 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	// ends only the proc it happens in; the next fire steps the run again.
 	if(run && !QDELETED(run))
 		run.check_triggers()
+	// Events Start event actions started, where nothing else steps them (world_actions.dm).
+	babylon_tutorial_step_events()
 
 /// Hooks every used-on trigger to its current target (an NPC can be respawned).
 /datum/controller/subsystem/babylon_tutorial/proc/refresh_hooks()
@@ -171,6 +173,15 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	var/gate_wave_stopped = FALSE
 	/// Level trigger (zone, holding, condition) feeding a listening gate => its sampled state.
 	var/list/level_states = list()
+	/// Action => what went wrong the last time it ran in this run (an NPC that gave up walking, a
+	/// door that would not open ...): its issues show it as "Test run: ..." (wand checks).
+	var/list/action_notes = list()
+	/// Every note, in order, for the Test run tab (the last 20).
+	var/list/action_log = list()
+	/// NPC => its walk (/datum/babylon_tutorial_npc_move, npc.dm) started by a Move NPC action.
+	var/list/movers = list()
+	/// Objects the run's Spawn object actions created so far (BABYLON_TUTORIAL_SPAWN_RUN_CAP).
+	var/spawned_count = 0
 
 /datum/babylon_tutorial_run/New(test_run, mob/living/preview_for)
 	src.test_run = test_run
@@ -214,6 +225,15 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	gate_log.Cut()
 	gate_pending.Cut()
 	level_states.Cut()
+	for(var/mob/living/npc as anything in movers.Copy())
+		var/datum/babylon_tutorial_npc_move/walk = movers[npc]
+		qdel(walk)
+	movers.Cut()
+	if(length(action_notes))
+		// The actions' issues ("Test run: ...") go away.
+		babylon_tutorial_changed()
+	action_notes.Cut()
+	action_log.Cut()
 	preview_mob = null
 	if(complete_screen)
 		SStgui.close_uis(complete_screen)
@@ -232,6 +252,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	gate_stops -= object
 	gate_pending -= object
 	level_states -= object
+	action_notes -= object
+	for(var/mob/living/npc as anything in movers.Copy())
+		var/datum/babylon_tutorial_npc_move/walk = movers[npc]
+		if(walk.action_ref?.resolve() == object || !walk.action_ref?.resolve())
+			qdel(walk)
 	if(current_trigger == object)
 		current_trigger = null
 	for(var/image/picture as anything in images)
@@ -358,9 +383,11 @@ SUBSYSTEM_DEF(babylon_tutorial)
 		set_enabled(next, TRUE)
 
 /// Runs a list of action ids for a trigger in order, each after its own delay (the trigger's
-/// delay first).
-/datum/babylon_tutorial_run/proc/run_actions(obj/babylon_tutorial/trigger/trigger, list/ids)
-	var/wait = trigger.setting("delay") SECONDS
+/// delay first). wait: start from this delay instead of the trigger's (follow-up actions of an
+/// action, e.g. a Move NPC action's "On arrival", which already waited for their action).
+/datum/babylon_tutorial_run/proc/run_actions(obj/babylon_tutorial/trigger/trigger, list/ids, wait = null)
+	if(isnull(wait))
+		wait = trigger ? trigger.setting("delay") SECONDS : 0
 	for(var/id in ids)
 		var/obj/babylon_tutorial/action/action = babylon_tutorial_find(id)
 		if(!istype(action))
@@ -385,6 +412,23 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	current_trigger = trigger
 	action.perform(src)
 	current_trigger = null
+
+/// Something an action could not do in this run (a builder-visible note): the action's issues say
+/// "Test run: ..." until the run ends, the Test run tab lists it and the game log has it. A
+/// preview tells its builder instead.
+/datum/babylon_tutorial_run/proc/note_action(obj/babylon_tutorial/action/action, text)
+	var/line = "[action ? action.tutorial_id : "?"]: [text]"
+	log_game("BABYLON TUTORIAL: [line]")
+	if(preview)
+		if(preview_mob)
+			to_chat(preview_mob, span_warning("Preview: [html_encode(line)]"))
+		return
+	action_log += line
+	if(length(action_log) > 20)
+		action_log.Cut(1, 2)
+	if(action && action_notes[action] != text)
+		action_notes[action] = text
+		babylon_tutorial_changed()
 
 /datum/babylon_tutorial_run/proc/prune_timers()
 	for(var/timer in timers.Copy())

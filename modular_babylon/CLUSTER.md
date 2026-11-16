@@ -682,6 +682,12 @@ state and number.
 | Give item | puts an item in every living player's hand |
 | Damage / effect | on every living player or one NPC: brute, burn, toxin or suffocation damage, a bleeding cut, a wound, setting them on fire, a knockdown, blurred vision, blindness or a disease (never contagious); god mode and unhurtable NPCs are spared |
 | Heal / revive | on every player or one NPC: a full heal, healing one damage type by an amount, or reviving the dead: a dead player's body is revived and the player put back in; when the body was destroyed, a new one with the same looks appears where it was (or at the start marker), wearing the clothes the old body dropped (only lost items are made again); players in the lobby or SSD are not pulled back |
+| Move NPC | an NPC walks to a marker along a path the game's pathfinder finds (it crawls, slower, when it can't stand; it opens only public doors or those its ID card opens); **On arrival** actions run once it is there (or next to the marker when something solid stands on it); after **Give up after** seconds (default 60) it stops where it is and the action's checks and the Test run tab say why |
+| Spawn object | creates anything the Creative panel's Spawn tab may (same search, same blocklist; no mobs) on a marker's tile or spread over a zone (at most 400 tiles): copies (at most 10) or one stack of the given size; one run spawns at most 500 objects |
+| Remove objects | deletes every loose item, or objects of a type and its subtypes, on a marker's tile or in a zone; never players or other mobs, nothing with a mob inside or buckled to it, no tutorial objects, nothing protected (what the area tools keep); protected items inside a removed crate stay on the tile |
+| Set inventory | on every living player or one NPC: clear everything, clear the hands only, or replace everything with a stored loadout; the old items are deleted (default) or dropped; the tutorial wand is never taken. **Store my current loadout** copies what you wear and hold (slots, names, settings, reagents, what is in bags); the loadout can be edited (remove items, add items by type to a slot, a hand or the backpack). An NPC's new items are never saved, like its outfit |
+| Start event | starts a round event from the Creative panel's Events list, with its rules (no antagonists, nothing that picks on players or wrecks the world); tutorial actions start at most 3 events per 30 seconds; in a tutorial world without Creative the tutorial steps them |
+| Door / container | opens, closes, locks or unlocks airlocks, windoors, shutters and blast doors, lockers, closets and crates on a marker's tile, in a zone, or shutters by their button id. Open and close follow each thing's own rules (a bolted, welded or unpowered airlock and a locked or welded locker stay shut, and the Test run tab says so); lock and unlock are forced (airlock bolts drop also without power; secure lockers and crates lock, closing first); windoors, shutters and blast doors have no locks; firelocks are never touched |
 | Enable/disable triggers | chains steps: only the next step's triggers listen |
 | Sound | plays one of a dozen sounds for the players |
 | Complete | the "Tutorial complete!" screen with **Back to lobby**, for every player |
@@ -694,7 +700,10 @@ also to players who join while it runs.
 
 **NPC spawners** create a human standing still (no AI): name, outfit (common job
 outfits or a search; ids and gear are left out), species, facing, **Spawn at the
-start**, **Unhurtable until made vulnerable**, and **effects**, each with a chance from
+start**, **Unhurtable until made vulnerable**, **Spawn dead** (a corpse from the start that stays
+dead until a Heal / revive action; tutorial NPCs never rot), **Anchored** (players can't
+pull, push, buckle, carry, swap places with or walk over it, also while it lies or is dead;
+only Move NPC moves it), and **effects**, each with a chance from
 0 to 100 %: brute/burn damage on a body part, toxin and suffocation damage, a wound, a
 disease (never contagious), a reagent in the blood (from a list of medicines, common
 poisons and a few drugs), unconsciousness for some seconds, bleeding. Names allow
@@ -705,7 +714,9 @@ NPC is created again when the world starts and for every run.
 start marker (everyone is moved there) or where everyone stands, and shows which
 triggers listen now, every gate's state and number, and how many players take part. Anyone who may use the wand can
 start, restart or stop it; the other players are told. **Reset NPCs** (on by default)
-creates the NPCs again when a test starts. Stop resets the run, not the world. In a
+creates the NPCs again when a test starts. Stop resets the run, not the world. What an action could not do in the run (an NPC that
+gave up walking, a door that stayed shut, an event over the limit) is listed under **Actions
+that could not finish** and in that action's checks until the run ends. In a
 tutorial play instance the run starts by itself when the first player arrives at the
 start marker; players who arrive later join it.
 

@@ -9,6 +9,8 @@
 /mob/living
 	/// Created by a tutorial NPC spawner: never saved, removed and re-created by its spawner.
 	var/babylon_tutorial_npc = FALSE
+	/// A tutorial NPC stuck in place ("Anchored", spec 12 #4): see babylon_tutorial_anchor_npc().
+	var/babylon_tutorial_anchored = FALSE
 
 /obj/item
 	/// Part of a tutorial NPC's outfit: never saved, even when it was taken off the NPC.
@@ -61,6 +63,8 @@
 		babylon_tutorial_field("facing", "Facing", "choice", "[SOUTH]", null, options = babylon_tutorial_options(list("[SOUTH]" = "South (down)", "[NORTH]" = "North (up)", "[EAST]" = "East (right)", "[WEST]" = "West (left)"))),
 		babylon_tutorial_field("spawn_at_start", "Spawn at the start", "bool", 1, "On: the NPC is there from the start. Off: it appears when a Spawn NPC action runs."),
 		babylon_tutorial_field("invulnerable", "Unhurtable until made vulnerable", "bool", 0, "On: nothing can hurt the NPC until a \"Make NPC vulnerable\" action runs (its effects still apply when it is created)."),
+		babylon_tutorial_field("spawn_dead", "Spawn dead", "bool", 0, "On: the NPC is a corpse from the moment it appears (after its effects). It stays dead until a Heal / revive action revives it; an NPC State \"Dead\" check holds. Tutorial NPCs never rot."),
+		babylon_tutorial_field("anchored", "Anchored (stuck in place)", "bool", 0, "On: players can't pull, push, buckle, carry or swap places with the NPC and can't walk over it, even when it lies down or is dead. It only moves when a Move NPC action walks it somewhere."),
 		babylon_tutorial_field("effects", "Effects", "effects", list(), "What is wrong with the NPC. Each effect happens with its chance (100% = always) every time the NPC is created."),
 	)
 
@@ -71,7 +75,7 @@
 /obj/babylon_tutorial/npc_spawner/target_atom()
 	return current_npc() || get_turf(src)
 
-/obj/babylon_tutorial/npc_spawner/summary()
+/obj/babylon_tutorial/npc_spawner/proc/base_summary()
 	var/list/effects = setting("effects")
 	return "[setting("npc_name")][length(effects) ? ", [length(effects)] effect\s" : ""][current_npc() ? "" : " (not spawned)"]"
 
@@ -127,10 +131,67 @@
 	npc_ref = WEAKREF(npc)
 	spawned_settings = settings_json
 	babylon_tutorial_apply_effects(npc, setting("effects"))
+	if(setting("anchored"))
+		babylon_tutorial_anchor_npc(npc)
+	if(setting("spawn_dead"))
+		babylon_tutorial_kill_quietly(npc)
 	if(setting("invulnerable"))
 		ADD_TRAIT(npc, TRAIT_GODMODE, BABYLON_TUTORIAL_NPC_TRAIT)
 	babylon_tutorial_changed()
 	return npc
+
+/obj/babylon_tutorial/npc_spawner/summary()
+	. = base_summary()
+	var/list/extras = list()
+	if(setting("spawn_dead"))
+		extras += "dead"
+	if(setting("anchored"))
+		extras += "anchored"
+	if(length(extras))
+		. += " \[[jointext(extras, ", ")]\]"
+
+/// A corpse from the start: dead without a death gasp in chat (it was never seen alive); no rot
+/// (attach_rot below).
+/proc/babylon_tutorial_kill_quietly(mob/living/npc)
+	var/old_message = npc.death_message
+	var/old_sound = npc.death_sound
+	var/old_flags = npc.living_flags
+	npc.death_message = null
+	npc.death_sound = null
+	npc.living_flags &= ~ALWAYS_DEATHGASP
+	npc.death(FALSE)
+	npc.death_message = old_message
+	npc.death_sound = old_sound
+	npc.living_flags = old_flags
+
+/// Sticks a tutorial NPC in place (spec 12 #4), with the game's own flags and traits:
+/// - anchored and move_resist INFINITY: nobody can pull it (can_be_pulled) or push it (PushAM),
+///   no throw, conveyor or air pressure moves it, nothing can put it in a closet or body bag;
+/// - TRAIT_NOMOBSWAP: nobody swaps places with it;
+/// - can_buckle_to FALSE: nobody buckles it to a chair or roller bed (a fireman carry needs a
+///   pull first);
+/// - babylon_tutorial_anchored: nobody walks over it while it lies or is dead
+///   (/mob/living/CanAllowThrough below; a lying mob is otherwise passable).
+/// Its own Move() still works: a Move NPC action walks it (npc.dm, /datum/babylon_tutorial_npc_move).
+/proc/babylon_tutorial_anchor_npc(mob/living/npc)
+	npc.babylon_tutorial_anchored = TRUE
+	npc.set_anchored(TRUE)
+	npc.move_resist = INFINITY
+	npc.can_buckle_to = FALSE
+	ADD_TRAIT(npc, TRAIT_NOMOBSWAP, BABYLON_TUTORIAL_NPC_TRAIT)
+
+/mob/living/CanAllowThrough(atom/movable/mover, border_dir)
+	. = ..()
+	// An anchored tutorial NPC blocks other mobs also while it lies (a patient on the floor, a
+	// corpse): projectiles and thrown things pass as usual.
+	if(. && babylon_tutorial_anchored && ismob(mover) && !mover.throwing && body_position == LYING_DOWN)
+		return FALSE
+
+/// Tutorial NPCs wait for the players as long as it takes: a dead one never rots (no miasma).
+/mob/living/carbon/attach_rot()
+	if(babylon_tutorial_npc)
+		return
+	return ..()
 
 // ---------------------------------------------------------------------------------------------
 // Effects
@@ -374,6 +435,200 @@
 
 /obj/babylon_tutorial/action/npc_vulnerable/summary()
 	return "[setting("target") || "?"]"
+
+// ---------------------------------------------------------------------------------------------
+// Move NPC (spec 12 #3)
+
+/obj/babylon_tutorial/action/move_npc
+	tutorial_kind = "move_npc"
+	kind_name = "Move NPC"
+	kind_desc = "An NPC walks to a marker (or crawls when it can't stand), finding its way around walls; actions can run when it arrives."
+	kind_example = "e.g. the guide walks to the medbay door, then says \"Follow me\"."
+	ui_icon = "person-walking"
+	view_icon = 'icons/effects/mapping_helpers.dmi'
+	view_state = "mobspawner"
+
+/obj/babylon_tutorial/action/move_npc/own_schema()
+	return list(
+		babylon_tutorial_field("target", "NPC spawner", "id", "", "Its NPC walks. A new Move NPC action for the same NPC replaces the walk it is on.", filter = list("npc"), required = TRUE),
+		babylon_tutorial_field("destination", "To marker", "id", "", "Where it goes: the marker's tile (or next to it, when something solid stands there). It opens only doors anyone may open, or those its ID card opens.", filter = list("marker"), required = TRUE),
+		babylon_tutorial_field("timeout", "Give up after (seconds)", "number", 60, "When it has not arrived by then (blocked, no way through, knocked out), it stops where it is; the Test run tab and this action's checks say why.", min = 5, max = 600),
+		babylon_tutorial_field("on_arrival", "On arrival", "idlist", list(), "Actions to run, in order, once the NPC has arrived (each after its own delay).", filter = list("action")),
+	)
+
+/obj/babylon_tutorial/action/move_npc/follow_up_ids()
+	var/list/ids = setting("on_arrival")
+	return islist(ids) ? ids.Copy() : list()
+
+/obj/babylon_tutorial/action/move_npc/find_issues()
+	. = ..()
+	var/issue = npc_target_issue()
+	if(issue)
+		.["target"] = issue
+	if(tutorial_id in babylon_tutorial_expand_actions(follow_up_ids()))
+		.["on_arrival"] = "Its arrival runs this action again: the NPC walks again every time it arrives."
+
+/obj/babylon_tutorial/action/move_npc/npc_target_issue()
+	var/obj/babylon_tutorial/target = babylon_tutorial_find(setting("target"))
+	if(istype(target, /obj/babylon_tutorial/npc_spawner) && isturf(target.target_atom()))
+		return "[target.tutorial_id] has no NPC right now: spawn it first."
+	return null
+
+/obj/babylon_tutorial/action/move_npc/perform(datum/babylon_tutorial_run/run)
+	var/mob/living/npc = babylon_tutorial_resolve(setting("target"))
+	if(!isliving(npc) || !npc.babylon_tutorial_npc)
+		run.note_action(src, "[setting("target") || "?"] has no NPC to move.")
+		return
+	var/turf/destination = babylon_tutorial_marker_turf(setting("destination"))
+	if(!destination)
+		run.note_action(src, "there is no marker [setting("destination") || "?"] to walk to.")
+		return
+	if(destination.z != npc.z)
+		run.note_action(src, "[npc.real_name] can't walk to [setting("destination")]: it is on another level.")
+		return
+	var/datum/babylon_tutorial_npc_move/old = run.movers[npc]
+	if(old)
+		qdel(old)
+	var/datum/babylon_tutorial_npc_move/walk = new(run, src, npc, destination)
+	run.movers[npc] = walk
+	walk.trigger_ref = run.current_trigger ? WEAKREF(run.current_trigger) : null
+	walk.schedule(1)
+
+/obj/babylon_tutorial/action/move_npc/summary()
+	var/list/after = follow_up_ids()
+	return "[setting("target") || "?"] to [setting("destination") || "?"][length(after) ? ", then [jointext(after, ", ")]" : ""]"
+
+/// One NPC walking to a tile for a Move NPC action: a step every move delay along a JPS path
+/// (get_path_to, the game's pathfinder, the same one AI mobs use), found again when the way is
+/// blocked. Crawls when the NPC can't stand (a lying mob moves, only slower). Ends on arrival
+/// (the action's On arrival actions run), or gives up at the deadline (a note for the builder).
+/datum/babylon_tutorial_npc_move
+	var/datum/babylon_tutorial_run/run
+	var/datum/weakref/action_ref
+	var/datum/weakref/npc_ref
+	/// The trigger whose actions started the walk ("until the next step" of the follow-ups).
+	var/datum/weakref/trigger_ref
+	var/turf/destination
+	var/started
+	var/deadline
+	/// The tiles still to walk (the next one first).
+	var/list/path
+	var/timer
+	/// How many steps it walked; why it waits right now (for the give-up note).
+	var/steps = 0
+	var/waiting_for
+	var/done = FALSE
+
+/datum/babylon_tutorial_npc_move/New(datum/babylon_tutorial_run/run, obj/babylon_tutorial/action/move_npc/action, mob/living/npc, turf/destination)
+	src.run = run
+	action_ref = WEAKREF(action)
+	npc_ref = WEAKREF(npc)
+	src.destination = destination
+	started = world.time
+	deadline = world.time + (action.setting("timeout") || 60) SECONDS
+
+/datum/babylon_tutorial_npc_move/Destroy()
+	done = TRUE
+	if(timer)
+		deltimer(timer)
+		timer = null
+	var/mob/living/npc = npc_ref?.resolve()
+	if(run && npc && run.movers[npc] == src)
+		run.movers -= npc
+	run = null
+	destination = null
+	path = null
+	return ..()
+
+/datum/babylon_tutorial_npc_move/proc/schedule(delay)
+	if(done)
+		return
+	if(timer)
+		deltimer(timer)
+	timer = addtimer(CALLBACK(src, PROC_REF(walk_step)), max(1, delay), TIMER_STOPPABLE)
+
+/// The NPC is there: on the tile, or next to it when something solid stands on it.
+/datum/babylon_tutorial_npc_move/proc/arrived(mob/living/npc)
+	var/turf/here = get_turf(npc)
+	if(here == destination)
+		return TRUE
+	return get_dist(here, destination) <= 1 && destination.is_blocked_turf(TRUE, npc)
+
+/// One step: arrive, give up, wait, or move to the next tile of the path. Tests call it directly.
+/// It may sleep while the pathfinder works (get_path_to); a timer calls it.
+/datum/babylon_tutorial_npc_move/proc/walk_step()
+	if(timer)
+		deltimer(timer)
+	timer = null
+	if(done || QDELETED(run))
+		return
+	var/mob/living/npc = npc_ref?.resolve()
+	if(!npc || QDELETED(npc))
+		// Respawned or removed: the walk ends with it, nothing to report.
+		qdel(src)
+		return
+	if(arrived(npc))
+		return finish(npc)
+	if(npc.stat == DEAD)
+		return give_up("[npc.real_name] is dead and can't walk.")
+	if(world.time >= deadline)
+		return give_up("[npc.real_name] gave up after [round((world.time - started) / 10)] seconds at [npc.x], [npc.y], [get_dist(npc, destination)] tiles from [destination.x], [destination.y][waiting_for ? " ([waiting_for])" : ""].")
+	// Out cold, stunned, held, buckled: it waits (until the deadline).
+	if(!babylon_tutorial_awake(npc) || HAS_TRAIT(npc, TRAIT_IMMOBILIZED) || npc.buckled || npc.pulledby || !isturf(npc.loc))
+		waiting_for = "it could not move: out cold, held or stuck"
+		return schedule(1 SECONDS)
+	if(!length(path) || get_dist(npc, path[1]) > 1)
+		path = get_path_to(npc, destination, 120, 0, babylon_tutorial_npc_access(npc), TRUE)
+		if(done || QDELETED(npc))
+			return
+		if(!length(path))
+			waiting_for = "no way through: walls, locked doors or someone in the way"
+			return schedule(1 SECONDS)
+	var/turf/next = path[1]
+	if(npc.Move(next, get_dir(npc, next)) && get_turf(npc) == next)
+		path.Cut(1, 2)
+		steps++
+		waiting_for = null
+		if(arrived(npc))
+			return finish(npc)
+	else
+		// Blocked (a closed door opening, someone in the way): find the way again next step.
+		path = null
+		waiting_for = "the way was blocked"
+	schedule(babylon_tutorial_npc_step_delay(npc))
+
+/datum/babylon_tutorial_npc_move/proc/finish(mob/living/npc)
+	done = TRUE
+	var/obj/babylon_tutorial/action/move_npc/action = action_ref?.resolve()
+	var/datum/babylon_tutorial_run/current = run
+	qdel(src)
+	if(!action || QDELETED(current))
+		return
+	log_game("BABYLON TUTORIAL: [action.tutorial_id]: [npc.real_name] arrived at [AREACOORD(npc)].")
+	var/list/ids = action.follow_up_ids()
+	if(length(ids))
+		current.run_actions(trigger_ref?.resolve(), ids, 0)
+
+/datum/babylon_tutorial_npc_move/proc/give_up(text)
+	done = TRUE
+	var/obj/babylon_tutorial/action/move_npc/action = action_ref?.resolve()
+	var/datum/babylon_tutorial_run/current = run
+	qdel(src)
+	if(action && !QDELETED(current))
+		current.note_action(action, "Move NPC: [text]")
+
+/// The access an NPC walks with: its ID card's (an NPC without one opens only public doors).
+/proc/babylon_tutorial_npc_access(mob/living/npc)
+	var/obj/item/card/id/card = npc.get_idcard(TRUE)
+	return card ? card.GetAccess() : list()
+
+/// Deciseconds between two steps: the NPC's own move speed (slower when it crawls or is hurt),
+/// at least a brisk walk, at most two seconds.
+/proc/babylon_tutorial_npc_step_delay(mob/living/npc)
+	var/delay = npc.cached_multiplicative_slowdown
+	if(npc.body_position == LYING_DOWN)
+		delay = max(delay, 1 SECONDS)
+	return clamp(round(delay), 2, 2 SECONDS)
 
 // ---------------------------------------------------------------------------------------------
 // Presets (the wand's NPC mode)
