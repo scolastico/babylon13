@@ -169,7 +169,7 @@
 
 		// Every kind has a schema with known types and unique keys.
 		var/schemas_ok = length(babylon_tutorial_kinds()) >= 19
-		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "gateinputs", "zone", "effects", "target", "loadout", "event")
+		var/list/types = list("text", "longtext", "number", "bool", "choice", "typepath", "id", "idlist", "gateinputs", "zone", "tile", "effects", "target", "loadout", "event", "area_clip")
 		for(var/kind in babylon_tutorial_kinds())
 			var/list/keys = list()
 			for(var/list/field as anything in babylon_tutorial_schema(babylon_tutorial_kinds()[kind]))

@@ -152,6 +152,10 @@
 		result["no_characters_in_a_snapshot"] = !babylon_world_saves_characters(TRUE)
 		if(!babylon_tutorial_marker_turf("start"))
 			babylon_tutorial_test_place(/obj/babylon_tutorial/marker, tutorial_test_base(9), "start", list(), made)
+		// A Paste area with a stored room (spec 12 #9): the snapshot carries it.
+		var/turf/stored_at = tutorial_test_base(10)
+		var/datum/babylon_area_clip/stored_clip = babylon_area_capture(stored_at.x, stored_at.y, stored_at.x + 1, stored_at.y + 1, stored_at.z)
+		var/obj/babylon_tutorial/action/paste_area/reset_action = babylon_tutorial_test_place(/obj/babylon_tutorial/action/paste_area, stored_at, "snapshot_reset", list("snapshot" = stored_clip.to_data()), made)
 		var/latest_before = fexists("data/babylon/saves/latest.json") ? file2text("data/babylon/saves/latest.json") : null
 		var/last_save_before = last_save
 		// The level reuse state stays the real checkpoint's (a snapshot is deleted right away).
@@ -173,6 +177,16 @@
 		result["snapshot_has_no_characters"] = islist(state) && islist(state["characters"]) && !length(state["characters"])
 		// Per-player records (Task D2's "players") are left out too, where the build writes them.
 		result["snapshot_has_no_players"] = islist(state) && !length(state["players"])
+		// The stored room is in the snapshot, and a Paste area restored from it can paste it.
+		var/stored_json
+		for(var/list/record in (islist(state) ? state["records"] : list()))
+			if(record["type"] == "[/obj/babylon_tutorial/action/paste_area]" && islist(record["fields"]) && findtext("[record["fields"]["settings_json"]]", "\"snapshot\""))
+				stored_json = record["fields"]["settings_json"]
+		var/obj/babylon_tutorial/action/paste_area/restored_action = new(stored_at)
+		made += restored_action
+		restored_action.settings_json = stored_json
+		var/list/restored_clip = babylon_area_clip_from_data(restored_action.snapshot_data())
+		result["snapshot_carries_stored_area"] = istext(stored_json) && stored_json == reset_action.settings_json && !restored_clip["error"] && !!restored_clip["clip"]
 		result["snapshot_deleted"] = istext(generation) && !fexists("data/babylon/saves/[generation]/state.json")
 		var/latest_after = fexists("data/babylon/saves/latest.json") ? file2text("data/babylon/saves/latest.json") : null
 		result["latest_unchanged"] = latest_after == latest_before && last_save == last_save_before

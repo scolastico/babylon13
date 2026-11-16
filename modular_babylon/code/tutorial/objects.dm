@@ -398,8 +398,10 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 // Settings schema
 
 /// One settings field. type: text, longtext, number, bool, choice, typepath, id, idlist,
-/// gateinputs (a number gate's inputs, gates.dm), zone, effects, loadout (a stored inventory,
-/// inventory.dm) or event (a round event the Creative panel offers, world_actions.dm). options:
+/// gateinputs (a number gate's inputs, gates.dm), zone, tile (one picked tile: list(x, y, z)),
+/// effects, loadout (a stored inventory, inventory.dm), event (a round event the Creative panel
+/// offers, world_actions.dm) or area_clip (a stored area, room_reset.dm: only the server stores
+/// it, from the builder's world-edit selection; the window sees a summary). options:
 /// list(list("value", "label")). filter: categories an id may refer to. when:
 /// list(other key = list(values)) — the field applies only while that setting has one of them.
 /// search (typepath and loadout fields): "creative" searches and allows what the Creative panel's
@@ -550,6 +552,25 @@ GLOBAL_VAR_INIT(babylon_tutorial_version, 0)
 			if(field["max_tiles"] && tiles > field["max_tiles"])
 				return list("error" = "This zone can cover at most [field["max_tiles"]] tiles (that one has [tiles]). Pick smaller corners.")
 			return list("value" = list(x1, y1, x2, y2, z))
+		if("tile")
+			if(!islist(value) || length(value) != 3)
+				return list("error" = "Pick a tile.")
+			var/list/numbers = list()
+			for(var/entry in value)
+				var/number = isnum(entry) ? entry : text2num("[entry]")
+				if(isnull(number))
+					return list("error" = "Pick a tile.")
+				numbers += round(number)
+			if(numbers[3] < 1 || numbers[3] > world.maxz)
+				return list("error" = "That level is not part of this world.")
+			return list("value" = list(clamp(numbers[1], 1, world.maxx), clamp(numbers[2], 1, world.maxy), numbers[3]))
+		if("area_clip")
+			if(!islist(value) || !length(value))
+				return list("value" = null)
+			var/problem = babylon_area_clip_data_problem(value)
+			if(problem)
+				return list("error" = problem)
+			return list("value" = value)
 		if("effects")
 			return babylon_tutorial_clean_effects(value)
 		if("loadout")

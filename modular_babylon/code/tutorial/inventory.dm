@@ -244,7 +244,7 @@
 	var/obj/item/item_path = path
 	if(initial(item_path.babylon_builder_tool))
 		// Never in a loadout: inside a bag it is left out, as an item of its own it is refused.
-		return depth ? list("skip" = TRUE) : list("error" = "Builder tools (the tutorial wand) can't be part of a loadout.")
+		return depth ? list("skip" = TRUE) : list("error" = "Builder tools (the tutorial and world-edit wands) can't be part of a loadout.")
 	var/list/out = list("type" = "[path]")
 	if(istext(entry["name"]) && length(entry["name"]))
 		var/name = trim(strip_html("[entry["name"]]", 64))

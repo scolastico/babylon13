@@ -184,7 +184,31 @@ describe('BabylonCreative', () => {
   it('shows the wand as coming soon while it does not exist', () => {
     openTab('Kits');
     expect(screen.getByText('Get tool kit')).toBeDefined();
-    expect(screen.getByText('Coming soon')).toBeDefined();
+    // Both wands: the tutorial wand and the world-edit wand.
+    expect(screen.getAllByText('Coming soon').length).toBe(2);
+  });
+
+  it('hands out both wands from the Kits tab', () => {
+    const sent: string[] = [];
+    mock.module('../events/act', () => ({
+      sendAct: (action: string) => {
+        sent.push(action);
+      },
+    }));
+    store.set(gameDataAtom, {
+      ...data,
+      wand_available: true,
+      world_edit_available: true,
+    });
+    openTab('Kits');
+    act(() => {
+      fireEvent.click(screen.getByText('Get tutorial wand'));
+    });
+    act(() => {
+      fireEvent.click(screen.getByText('Get world-edit wand'));
+    });
+    expect(sent).toEqual(['give_wand', 'give_world_edit']);
+    store.set(gameDataAtom, data);
   });
 
   it('shows a placeholder for a server tab without a component', () => {

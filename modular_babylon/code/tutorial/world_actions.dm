@@ -180,7 +180,7 @@
  * - anything with a mob inside (a player in a locker, an NPC's body in a body bag) or a mob
  *   buckled to it (a player in a chair): mobs are never removed, neither directly nor with what
  *   holds them;
- * - a builder's tool (the tutorial wand) or anything holding one.
+ * - a builder's tool (the tutorial or world-edit wand) or anything holding one.
  */
 /proc/babylon_tutorial_removable(obj/thing)
 	if(QDELETED(thing) || istype(thing, /obj/babylon_tutorial))

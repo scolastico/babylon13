@@ -12,8 +12,11 @@ import {
   fieldActive,
   gateLiveText,
   idChoices,
+  liveCopyWarning,
   type ObjectData,
   operationTakesValue,
+  selectionText,
+  storeBlocked,
 } from './BabylonTutorialObject';
 
 const schema: Field[] = [
@@ -493,5 +496,159 @@ describe('world action editors', () => {
     expect(
       screen.getByText('Test run: Move NPC: Guide gave up after 60 seconds.'),
     ).toBeDefined();
+  });
+
+  describe('Paste area', () => {
+    const pasteSchema: Field[] = [
+      {
+        key: 'mode',
+        label: 'Copy from',
+        type: 'choice',
+        default: 'snapshot',
+        help: null,
+        options: [
+          { value: 'snapshot', label: 'A stored snapshot (recommended)' },
+          { value: 'live', label: 'A live area, copied when it runs' },
+        ],
+      },
+      {
+        key: 'snapshot',
+        label: 'Stored area',
+        type: 'area_clip',
+        default: null,
+        help: 'Select the room with the world-edit wand, then store it here.',
+        when: { mode: ['snapshot'] },
+      },
+      {
+        key: 'source',
+        label: 'Source area',
+        type: 'zone',
+        default: null,
+        help: null,
+        when: { mode: ['live'] },
+      },
+      {
+        key: 'protect',
+        label: 'Protect the source',
+        type: 'bool',
+        default: 1,
+        help: null,
+        when: { mode: ['live'] },
+      },
+      {
+        key: 'target',
+        label: 'Paste at',
+        type: 'tile',
+        default: null,
+        help: null,
+      },
+    ];
+    const selection = {
+      x1: 10,
+      y1: 20,
+      x2: 13,
+      y2: 22,
+      z: 2,
+      width: 4,
+      height: 3,
+      tiles: 12,
+      problem: null,
+    };
+    const paste: Partial<ObjectData> = {
+      kind: 'paste_area',
+      kind_name: 'Paste area',
+      schema: pasteSchema,
+      values: { mode: 'snapshot', snapshot: null, protect: 1, target: null },
+      area_selection: selection,
+    };
+
+    it('stores the world-edit selection and shows what is stored', () => {
+      show(paste);
+      expect(screen.getByText('Nothing stored yet.')).toBeDefined();
+      const store_button = screen
+        .getByText('Store selection in this action')
+        .closest('.Button');
+      expect(store_button?.className).not.toContain('Button--disabled');
+      expect(
+        screen.getByText('Your selection: 4×3 at 10, 20 (12 tiles).'),
+      ).toBeDefined();
+      cleanup();
+      show({
+        ...paste,
+        values: {
+          ...paste.values,
+          snapshot: {
+            width: 4,
+            height: 3,
+            x: 10,
+            y: 20,
+            z: 2,
+            objects: 7,
+            problem: null,
+          },
+          target: [30, 40, 2],
+        },
+      });
+      expect(
+        screen.getByText('tiles from (10, 20) on level 2', { exact: false }),
+      ).toBeDefined();
+      expect(screen.getByText('— 7 objects', { exact: false })).toBeDefined();
+      expect(
+        screen.getByText('(30, 40) on level 2', { exact: false }),
+      ).toBeDefined();
+      expect(screen.getByText('Pick tile')).toBeDefined();
+    });
+
+    it('needs a selection to store, and shows an old format as an error', () => {
+      expect(storeBlocked(null)).toContain('world-edit wand');
+      expect(storeBlocked({ ...selection, problem: 'Too big.' })).toBe(
+        'Too big.',
+      );
+      expect(storeBlocked(selection)).toBeNull();
+      expect(selectionText(selection)).toBe('4×3 at 10, 20');
+      show({
+        ...paste,
+        area_selection: null,
+        values: {
+          ...paste.values,
+          snapshot: {
+            width: 4,
+            height: 3,
+            x: 10,
+            y: 20,
+            z: 2,
+            objects: 7,
+            problem: 'This area was stored in an older format.',
+          },
+        },
+      });
+      expect(
+        screen.getByText('This area was stored in an older format.'),
+      ).toBeDefined();
+      const store_button = screen
+        .getByText('Store selection in this action')
+        .closest('.Button');
+      expect(store_button?.className).toContain('Button--disabled');
+    });
+
+    it('warns that a live source can change, and offers the selection as source', () => {
+      const live = {
+        ...paste,
+        values: { mode: 'live', source: null, protect: 0, target: null },
+      };
+      show(live);
+      expect(screen.getByText('Use my world-edit selection')).toBeDefined();
+      expect(
+        screen.getByText(/players can change or damage the source area/),
+      ).toBeDefined();
+      expect(
+        liveCopyWarning({
+          ...base,
+          ...live,
+          values: { mode: 'live', protect: 1 },
+        } as ObjectData),
+      ).toContain('nobody can build');
+      expect(liveCopyWarning({ ...base, ...paste } as ObjectData)).toBeNull();
+    });
   });
 });

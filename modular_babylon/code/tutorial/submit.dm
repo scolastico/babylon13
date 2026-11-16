@@ -61,7 +61,7 @@ GLOBAL_DATUM_INIT(babylon_tutorial_submissions, /datum/babylon_tutorial_submissi
 	// returns null, and the lock is let go in any case.
 	var/list/result = submit_steps(ckey, title, description)
 	if(!islist(result))
-		result = list("ok" = FALSE, "text" = "Submitting failed; nothing was submitted. Try again later.")
+		result = list("ok" = FALSE, "text" = "Submitting failed; it may not have gone through, and the Cooldown line shows if it did.")
 		log_world("BABYLON TUTORIAL: submitting was cut short.")
 	busy_ckey = null
 	return result

@@ -35,6 +35,8 @@ SUBSYSTEM_DEF(babylon_tutorial)
 	// No try: a wand whose view fails ends only its own sync_view(); the others still sync.
 	for(var/obj/item/babylon_tutorial_wand/wand as anything in GLOB.babylon_tutorial_wands)
 		wand.sync_view()
+	for(var/obj/item/babylon_world_edit_wand/edit_wand as anything in GLOB.babylon_world_edit_wands)
+		edit_wand.sync_view()
 	// No try here: a deep stack_trace (an outfit, a revive) would unwind the whole step. A runtime
 	// ends only the proc it happens in; the next fire steps the run again.
 	if(run && !QDELETED(run))

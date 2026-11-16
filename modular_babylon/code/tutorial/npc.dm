@@ -599,9 +599,10 @@
 	var/turf/next = path[1]
 	if(doors == "all")
 		// All doors: a closed door on the way opens with its own proc (bolts, welds and power
-		// still keep it shut); the NPC steps through once it is open.
+		// still keep it shut); the NPC steps through once it is open. Firelocks and protected
+		// doors are never opened (babylon_tutorial_door_target, as the Door action).
 		for(var/obj/machinery/door/door in next)
-			if(!door.density || istype(door, /obj/machinery/door/firedoor))
+			if(!door.density || !babylon_tutorial_door_target(door))
 				continue
 			var/why = babylon_tutorial_door_act(door, "open")
 			waiting_for = why ? "[door.name] [why]" : "waiting for [door.name] to open"

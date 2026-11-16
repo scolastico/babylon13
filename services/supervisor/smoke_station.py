@@ -588,7 +588,7 @@ def main():
             for proc in args.only_tutorial_tests or (
                     "test_tutorial_submit_refusals", "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review",
                     "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates", "test_tutorial_world_actions", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
-                    "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_checkpoint_has_no_characters"):
+                    "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_room_reset", "test_tutorial_checkpoint_has_no_characters"):
                 result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
                 tutorial[proc] = dm_entries(result)
             for proc, got in tutorial.items():

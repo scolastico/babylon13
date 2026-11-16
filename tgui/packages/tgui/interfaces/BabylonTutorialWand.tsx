@@ -1,6 +1,7 @@
 // Babylon tutorial wand (modular_babylon/code/tutorial/wand.dm). Chooses what a click with the
-// wand does (Place / Configure / NPC / Delete / Select with the area tools), lists every tutorial object with its problems
-// and starts or stops a test run. Every action is checked again on the server.
+// wand does (Place / Configure / NPC / Delete), lists every tutorial object with its problems
+// and starts or stops a test run. Every action is checked again on the server. The area tools
+// (select, copy, paste, fill, clear) are the world-edit wand's (BabylonWorldEditWand.tsx).
 import { type ReactNode, useEffect, useState } from 'react';
 import {
   Box,
@@ -16,7 +17,6 @@ import { createSearch } from 'tgui-core/string';
 
 import { useBackend } from '../backend';
 import { Window } from '../layouts';
-import { type AreaData, AreaTools, type Material } from './BabylonTutorialArea';
 
 export type PaletteEntry = {
   kind: string;
@@ -82,7 +82,8 @@ export type WandData = {
   selected_preset: string;
   objects: TutorialObject[];
   warnings: Warning[];
-  picking: { id: string; corner: number } | null;
+  /** A zone (two corners) or a tile (one click) being picked for an object's setting. */
+  picking: { id: string; corner: number; tile?: boolean } | null;
   has_start: boolean;
   test: {
     running: boolean;
@@ -98,8 +99,6 @@ export type WandData = {
     action_log?: string[];
   };
   notice: { text: string; ok: boolean; id: number } | null;
-  area?: AreaData;
-  materials?: Material[];
 };
 
 const MODES = [
@@ -127,13 +126,11 @@ const MODES = [
     icon: 'eraser',
     help: 'Click a tutorial object (or an NPC) with the wand to remove it.',
   },
-  {
-    id: 'select',
-    name: 'Select',
-    icon: 'vector-square',
-    help: 'Click two opposite corners to select an area, then copy, paste, fill, border or clear it here.',
-  },
 ];
+
+/** Where selecting, copying and pasting areas went (spec 12 #1). */
+export const WORLD_EDIT_HINT =
+  'Selecting, copying, pasting, filling and clearing areas is done with the world-edit wand (Creative panel → Kits).';
 
 export const BabylonTutorialWand = () => {
   const { data } = useBackend<WandData>();
@@ -211,9 +208,20 @@ const PickingBanner = () => {
     <NoticeBox info mb={0}>
       <Stack align="center">
         <Stack.Item grow>
-          <Icon name="vector-square" mr={1} />
-          Zone of <b>{data.picking.id}</b>: click corner {data.picking.corner}{' '}
-          of 2 with the wand.
+          <Icon
+            name={data.picking.tile ? 'crosshairs' : 'vector-square'}
+            mr={1}
+          />
+          {data.picking.tile ? (
+            <>
+              Tile of <b>{data.picking.id}</b>: click it with the wand.
+            </>
+          ) : (
+            <>
+              Zone of <b>{data.picking.id}</b>: click corner{' '}
+              {data.picking.corner} of 2 with the wand.
+            </>
+          )}
         </Stack.Item>
         <Stack.Item>
           <Button icon="xmark" onClick={() => act('cancel_pick')}>
@@ -252,15 +260,13 @@ const BuildTab = () => {
           <Icon name="circle-info" mr={1} />
           {mode.help} Right-click the wand while holding it to switch modes.
         </Box>
+        <Box mt={0.5} color="label">
+          <Icon name="vector-square" mr={1} />
+          {WORLD_EDIT_HINT}
+        </Box>
       </Section>
-      {data.mode === 'select' ? (
-        <AreaTools />
-      ) : (
-        <>
-          {!data.objects.length && <FirstSteps />}
-          {data.mode === 'npc' ? <PresetPalette /> : <ObjectPalette />}
-        </>
-      )}
+      {!data.objects.length && <FirstSteps />}
+      {data.mode === 'npc' ? <PresetPalette /> : <ObjectPalette />}
     </>
   );
 };

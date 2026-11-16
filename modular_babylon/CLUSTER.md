@@ -574,9 +574,19 @@ to open its window and choose what a click does:
 - **NPC**: pick a preset (Guide, Bystander, bruised/burned/poisoned/bleeding/sick or
   unconscious patient, broken leg) and click a tile; the NPC appears at once.
 - **Delete**: click an object (or an NPC) to remove it.
-- **Select** (area tools, a small WorldEdit): click one corner, then the opposite
-  corner; the selection is outlined for you and its size shown ("12×8 (96 tiles)").
-  The window then offers:
+
+Right-clicking the wand while holding it switches to the next mode.
+
+### The world-edit wand: area tools
+
+Selecting, copying, pasting, filling and clearing areas is done with a second tool,
+the **world-edit wand** (Creative panel → Kits, next to the tutorial wand; same
+rules: Creative worlds only, your own body, in your hand). It looks like a blocky
+wooden axe. The tutorial wand keeps tutorial objects only. With the world-edit wand
+(a small WorldEdit): click one corner, then the opposite corner; the selection is
+outlined for you and its size shown ("12×8 (96 tiles)"). Right-clicking the wand in
+your hand drops the selection (or stops pasting). Use it in your hand to open its
+window, which offers:
   - **Copy** the selection to your clipboard (tiles, objects with what is inside
     closets and boxes, reagents, tutorial objects).
   - **Paste…**, then click the tile that becomes the copy's **bottom-left (south-west)**
@@ -609,7 +619,8 @@ to open its window and choose what a click does:
   are not carried over. Mobs are not copied; NPC spawners come along and make their NPC
   again.
 
-Right-clicking the wand while holding it switches to the next mode.
+Both wands are builder tools: tutorial actions never take, delete or copy them (Set
+inventory, Remove objects, Paste area), and area copies leave them out.
 
 Every object has an **id** (letters, digits, `_` and `-`); objects refer to each
 other by id, like airlock ids. A marker with the id **start** is where players begin
@@ -685,8 +696,9 @@ state and number.
 | Move NPC | an NPC walks to a marker along a path the game's pathfinder finds (it crawls, slower, when it can't stand); **Doors**: its ID card's doors (the default; job outfits come without an ID), public doors only, or all doors (each door on its way opens for it unless bolted, welded or unpowered); **On arrival** actions run once it is there (or next to the marker when something solid stands on it); after **Give up after** seconds (default 60) it stops where it is and the action's checks and the Test run tab say why |
 | Spawn object | creates anything the Creative panel's Spawn tab may (same search, same blocklist; no mobs) on a marker's tile or spread over a zone (at most 400 tiles): copies (at most 10) or one stack of the given size; one run spawns at most 500 objects |
 | Remove objects | deletes every loose item, or objects of a type and its subtypes, on a marker's tile or in a zone; never players or other mobs, nothing with a mob inside or buckled to it, no tutorial objects, nothing protected (what the area tools keep), no builder tool (or a bag holding one); protected items inside a removed crate stay on the tile |
-| Set inventory | on every living player or one NPC: clear everything, clear the hands only, or replace everything with a stored loadout; the old items are deleted (default) or dropped; builder tools (the tutorial wand) are never taken, also not from inside a bag that goes (they move to a free hand or the floor), and are never part of a loadout. **Store my current loadout** copies what you wear and hold (slots, names, settings, reagents, what is in bags; items inside bags keep name, amount, reagents and contents but not their other settings); the loadout can be edited (remove items, add items by type to a slot, a hand or the backpack). An NPC's new items are never saved, like its outfit |
+| Set inventory | on every living player or one NPC: clear everything, clear the hands only, or replace everything with a stored loadout; the old items are deleted (default) or dropped; builder tools (the tutorial and world-edit wands) are never taken, also not from inside a bag that goes (they move to a free hand or the floor), and are never part of a loadout. **Store my current loadout** copies what you wear and hold (slots, names, settings, reagents, what is in bags; items inside bags keep name, amount, reagents and contents but not their other settings); the loadout can be edited (remove items, add items by type to a slot, a hand or the backpack). An NPC's new items are never saved, like its outfit |
 | Start event | starts a round event from the Creative panel's Events list, with its rules (no antagonists, nothing that picks on players or wrecks the world); tutorial actions start at most 3 events per 30 seconds; in a tutorial world without Creative the tutorial steps them |
+| Paste area | puts an area back the way it was (a room reset). **A stored snapshot** (the default): select the room with the world-edit wand, then **Store selection in this action** in the action's settings; the copy is kept in the action, so it is saved with the world and comes along when the tutorial is submitted, played or copied, and it pastes back where it was stored (or at a picked **Paste at** tile). **A live area**: copies a source area (a template room) to the picked tile each time it runs; players can change the source before that, so **Protect the source** (on by default) stops anyone from using tools or items on anything in it while the tutorial runs (builder wands still work). Both clear the target first (players are moved aside), paste over several ticks for big rooms and set up walls, pipes and cables as a paste does; tutorial objects, tutorial NPCs and builder tools in the target stay, and the copy never carries tutorial objects. At most 10,000 tiles and 20,000 objects, as the area tools; one area operation runs at a time (a paste waits up to 30 seconds for another). A snapshot stored in an older format is refused with a message to store it again, never pasted half understood |
 | Door / container | opens, closes, locks or unlocks airlocks, windoors, shutters and blast doors, lockers, closets and crates on a marker's tile, in a zone, or shutters by their button id. Open and close follow each thing's own rules (a bolted, welded or unpowered airlock and a locked or welded locker stay shut, and the Test run tab says so); lock and unlock are forced (airlock bolts drop also without power; secure lockers and crates lock, closing first); windoors, shutters and blast doors have no locks; firelocks and protected doors are never touched; closing or locking a locker shuts in whoever stands on its tile (they can climb out) |
 | Enable/disable triggers | chains steps: only the next step's triggers listen |
 | Sound | plays one of a dozen sounds for the players |

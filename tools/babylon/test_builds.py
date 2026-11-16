@@ -15,7 +15,7 @@ SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", 
           "creative/powers", "creative/spawning", "creative/teleport",
           "creative/events", "creative/supermatter", "creative/panel", "creative/testing_creative",
           "tutorial/objects", "tutorial/triggers", "tutorial/gates", "tutorial/actions", "tutorial/npc", "tutorial/runtime", "tutorial/players", "tutorial/inventory", "tutorial/world_actions",
-          "tutorial/area_tools", "tutorial/wand", "tutorial/submit", "tutorial/testing_tutorial",
+          "tutorial/area_tools", "tutorial/world_edit", "tutorial/room_reset", "tutorial/wand", "tutorial/submit", "tutorial/testing_tutorial",
           "tutorial/testing_area_tools", "tutorial/testing_submit"}
 BABYLON_ONLY = {"rules", "session", "drone_recovery", "builder_experience", "lore", "vault", "survival",
                 "silicons", "research", "testing"}

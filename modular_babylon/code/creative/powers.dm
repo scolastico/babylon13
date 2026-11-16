@@ -202,8 +202,9 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 	return list(belt, gloves, rcd, rpd)
 
 /// The tutorial wand (tutorial-capable worlds), in hand. Null while it does not exist.
-/proc/babylon_creative_give_wand(mob/living/user)
-	var/wand_type = babylon_tutorial_wand_type()
+/// world_edit: the world-edit wand instead (the area tools, same rules).
+/proc/babylon_creative_give_wand(mob/living/user, world_edit = FALSE)
+	var/wand_type = world_edit ? babylon_world_edit_wand_type() : babylon_tutorial_wand_type()
 	if(!ispath(wand_type, /obj/item))
 		return null
 	var/obj/item/wand = new wand_type(get_turf(user))

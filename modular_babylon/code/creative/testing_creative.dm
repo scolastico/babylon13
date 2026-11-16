@@ -278,6 +278,11 @@
 		&& !!((locate(/obj/item/construction/rcd) in body.get_all_contents()) || (locate(/obj/item/construction/rcd) in start))
 	panel.handle_action(body, "give_wand")
 	result["wand"] = ispath(babylon_tutorial_wand_type(), /obj/item) ? panel.notice_ok : !panel.notice_ok
+	// The world-edit wand (spec 12 #1) comes from the same tab, under the same rules.
+	panel.spawn_times.Cut()
+	panel.handle_action(body, "give_world_edit")
+	result["world_edit_wand"] = panel.notice_ok && !!((locate(/obj/item/babylon_world_edit_wand) in body.get_all_contents()) || (locate(/obj/item/babylon_world_edit_wand) in start))
+	result["panel_offers_world_edit"] = !!panel.ui_static_data(body)["world_edit_available"]
 
 	// Creative switched off at runtime: the world tick takes everything back.
 	panel.handle_action(body, "godmode")

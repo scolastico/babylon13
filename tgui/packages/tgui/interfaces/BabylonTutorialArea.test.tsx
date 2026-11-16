@@ -16,7 +16,10 @@ import {
   sizeText,
   stepHint,
 } from './BabylonTutorialArea';
-import { BabylonTutorialWand, type WandData } from './BabylonTutorialWand';
+import {
+  BabylonWorldEditWand,
+  type WorldEditData,
+} from './BabylonWorldEditWand';
 
 const materials: Material[] = [
   { path: '/turf/open/floor/iron', name: 'floor', group: 'Floors' },
@@ -64,24 +67,8 @@ const clipboard = {
   y: 20,
 };
 
-const wand: WandData = {
-  palette: [],
-  presets: [],
-  colors: {
-    trigger: '#ffc857',
-    action: '#5ad1c6',
-    marker: '#8be07c',
-    npc: '#c49bff',
-  },
+const wand: WorldEditData = {
   creative: true,
-  mode: 'select',
-  selected_kind: 'message',
-  selected_preset: 'guide',
-  objects: [],
-  warnings: [],
-  picking: null,
-  has_start: true,
-  test: { running: false },
   notice: null,
   materials,
   area,
@@ -91,7 +78,7 @@ afterEach(cleanup);
 
 const show = (override: Partial<AreaData> = {}) => {
   store.set(gameDataAtom, { ...wand, area: { ...area, ...override } });
-  act(() => render(<BabylonTutorialWand />));
+  act(() => render(<BabylonWorldEditWand />));
 };
 
 describe('BabylonTutorialArea', () => {
@@ -99,6 +86,19 @@ describe('BabylonTutorialArea', () => {
     expect(sizeText(12, 8)).toBe('12×8 (96 tiles)');
     expect(sizeText(100, 100)).toBe('100×100 (10,000 tiles)');
     expect(sizeText(1, 1)).toBe('1×1 (1 tile)');
+  });
+
+  it('opens in the world-edit wand, without the tutorial wand modes', () => {
+    show();
+    expect(screen.getByText('World-edit wand')).toBeDefined();
+    expect(screen.queryByText('Back to Place')).toBeNull();
+    expect(screen.queryByText('Place')).toBeNull();
+    cleanup();
+    store.set(gameDataAtom, { ...wand, creative: false });
+    act(() => render(<BabylonWorldEditWand />));
+    expect(
+      screen.getByText('The world-edit wand only works in creative worlds.'),
+    ).toBeDefined();
   });
 
   it('says which corner to click', () => {

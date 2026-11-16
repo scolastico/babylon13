@@ -11,14 +11,14 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULES = ["modular_babylon/code/tutorial", "modular_babylon/code/creative"]
-TRY = re.compile(r"^\s*try\s*(//.*)?$")
+TRY = re.compile(r"^\s*try\b")
 
 
 class NoTryTest(unittest.TestCase):
     def test_no_try_outside_tests(self):
         found = []
         for module in MODULES:
-            for path in sorted((ROOT / module).glob("*.dm")):
+            for path in sorted((ROOT / module).rglob("*.dm")):
                 if path.name.startswith("testing_"):
                     continue
                 for number, line in enumerate(path.read_text().splitlines(), 1):

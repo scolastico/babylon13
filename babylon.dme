@@ -55,6 +55,8 @@
 #include "modular_babylon/code/tutorial/inventory.dm"
 #include "modular_babylon/code/tutorial/world_actions.dm"
 #include "modular_babylon/code/tutorial/area_tools.dm"
+#include "modular_babylon/code/tutorial/world_edit.dm"
+#include "modular_babylon/code/tutorial/room_reset.dm"
 #include "modular_babylon/code/tutorial/wand.dm"
 #include "modular_babylon/code/tutorial/submit.dm"
 #ifdef BABYLON_TESTING

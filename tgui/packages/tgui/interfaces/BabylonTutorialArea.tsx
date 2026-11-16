@@ -1,6 +1,7 @@
-// Area tools of the tutorial wand's Select mode (modular_babylon/code/tutorial/area_tools.dm):
-// select a rectangle with two clicks, then copy, paste, fill, border, clear or undo. Every
-// action is checked again on the server; disabled buttons say why.
+// Area tools of the world-edit wand (modular_babylon/code/tutorial/area_tools.dm and
+// world_edit.dm; the window is BabylonWorldEditWand.tsx): select a rectangle with two clicks,
+// then copy, paste, fill, border, clear or undo. Every action is checked again on the server;
+// disabled buttons say why.
 import { useState } from 'react';
 import {
   Box,
@@ -275,20 +276,15 @@ const StepBanner = (props: { area: AreaData }) => {
       </Stack.Item>
       {(area.step === 'corner2' || area.step === 'selected') && (
         <Stack.Item>
-          <Button icon="xmark" onClick={() => act('area_reselect')}>
+          <Button
+            icon="xmark"
+            tooltip="Right-clicking the wand while holding it does the same."
+            onClick={() => act('area_reselect')}
+          >
             {area.step === 'corner2' ? 'Cancel' : 'Deselect'}
           </Button>
         </Stack.Item>
       )}
-      <Stack.Item>
-        <Button
-          icon="plus"
-          tooltip="Leave Select mode (right-clicking the wand while holding it also switches modes)."
-          onClick={() => act('mode', { mode: 'place' })}
-        >
-          Back to Place
-        </Button>
-      </Stack.Item>
     </Stack>
   );
   // Paste mode stands out in the default (yellow) notice colour.

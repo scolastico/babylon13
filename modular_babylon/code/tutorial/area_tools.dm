@@ -1,6 +1,7 @@
-// Area tools of the tutorial wand (spec 7.1 item 3): a small WorldEdit for creative worlds.
-// In the wand's Select mode a builder clicks two corners; the window then works on that
-// rectangle:
+// Area tools of the world-edit wand (spec 7.1 item 3, 12 #1; the wand is world_edit.dm): a small
+// WorldEdit for creative worlds. A builder clicks two corners with the wand; its window then works
+// on that rectangle (a tutorial's Paste area action, room_reset.dm, uses the same capture and
+// paste):
 // - Copy: the tiles, objects (with container contents and reagents) and tutorial objects go to
 //   the builder's clipboard (kept in memory, also written to data/babylon/clipboard/<ckey>.dmm).
 // - Paste: click the tile that becomes the copy's bottom-left (south-west) corner, then confirm.
@@ -227,12 +228,14 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// Each tile is handled within one tick: its players (also inside lockers, body bags, mechs) are
 /// moved out, then its contents go, so nobody can step or be put in between.
 /// turf_path: then the tile becomes this turf, in the same tick (Clear).
-/proc/babylon_area_clear_tiles(list/tiles, list/rect, turf_path)
+/// keep_tutorial (a tutorial's Paste area action, room_reset.dm): tutorial objects, tutorial NPCs
+/// and builder tools (and whatever holds one) stay where they are.
+/proc/babylon_area_clear_tiles(list/tiles, list/rect, turf_path, keep_tutorial = FALSE)
 	var/list/counts = list("objects" = 0, "tutorial" = 0, "mobs" = 0, "moved" = 0, "kept" = 0, "occupied" = 0)
 	for(var/turf/tile as anything in tiles)
 		counts["moved"] += babylon_area_evict(list(tile), rect, FALSE)
 		for(var/mob/living/body in tile)
-			if(babylon_area_is_player(body))
+			if(babylon_area_is_player(body) || (keep_tutorial && body.babylon_tutorial_npc))
 				continue
 			counts["mobs"]++
 			babylon_area_delete(body)
@@ -241,6 +244,8 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 				counts["kept"]++
 				continue
 			if(!babylon_area_removable(thing))
+				continue
+			if(keep_tutorial && babylon_area_kept_by_tutorial(thing))
 				continue
 			// Deleting a container deletes what it holds: players (checked again, just before) and
 			// protected items come out first.
@@ -271,6 +276,20 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		BABYLON_AREA_TICK
 	return counts
 
+/// What a tutorial's Paste area leaves where it is: tutorial objects, builder tools and anything
+/// holding a builder tool.
+/proc/babylon_area_kept_by_tutorial(obj/thing)
+	if(istype(thing, /obj/babylon_tutorial))
+		return TRUE
+	if(isitem(thing))
+		var/obj/item/item = thing
+		if(item.babylon_builder_tool)
+			return TRUE
+	for(var/obj/item/inner in thing.get_all_contents())
+		if(inner.babylon_builder_tool)
+			return TRUE
+	return FALSE
+
 /// A player is on a tile or inside something on it.
 /proc/babylon_area_player_on(turf/tile)
 	for(var/mob/living/body in tile.get_all_contents())
@@ -299,7 +318,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 // proc between the error and the try: one stack_trace() deep in a Destroy() or a reconcile step
 // would abort the rest of that delete, turf change or paste and leave it half done. Each step
 // that may fail is a proc of its own that returns TRUE at its end; a falsy return means it was
-// cut short, and the caller logs it and goes on. Guarded by test_area_tools_no_try.
+// cut short, and the caller logs it and goes on. Guarded by tools/babylon/test_no_try.py.
 
 /// Deletes one thing.
 /proc/babylon_area_delete(datum/thing)
@@ -509,6 +528,175 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /datum/babylon_area_clip/proc/entry(dx, dy)
 	return tiles[dx * height + dy + 1]
 
+// ---------------------------------------------------------------------------------------------
+// Stored clips: a tutorial's Paste area action (room_reset.dm) keeps a clip in its settings, so it
+// is saved with the world and travels with a submitted, played or copied tutorial.
+
+/// The stored clip format. Bump it when the clip's fields change: a clip stored in another version
+/// is refused with a clear message (babylon_area_clip_from_data), never pasted half understood.
+#define BABYLON_AREA_CLIP_VERSION 1
+
+/// The clip as JSON-safe data. Tutorial objects are left out: a stored room never carries them
+/// (the room's own tutorial objects stay where they are when it is pasted).
+/datum/babylon_area_clip/proc/to_data()
+	var/list/stored_extras = list()
+	for(var/tag in extras)
+		var/list/extra = extras[tag]
+		var/list/stored = list()
+		if(extra["fields"])
+			var/list/fields = list()
+			var/list/given = extra["fields"]
+			for(var/field in given)
+				if(babylon_area_storable(given[field]))
+					fields[field] = babylon_area_store_value(given[field])
+			if(length(fields))
+				stored["fields"] = fields
+		if(extra["reagents"])
+			stored["reagents"] = extra["reagents"]
+		if(!isnull(extra["contents"]))
+			stored["contents"] = extra["contents"]
+		stored_extras["[tag]"] = stored
+	return list(
+		"version" = BABYLON_AREA_CLIP_VERSION,
+		"width" = width,
+		"height" = height,
+		"origin" = origin.Copy(),
+		"tiles" = tiles.Copy(),
+		"extras" = stored_extras,
+		"objects" = object_count,
+		"nested" = nested_count,
+		"skipped_mobs" = skipped_mobs,
+		"skipped_protected" = skipped_protected,
+		"skipped_locked" = skipped_locked,
+		"replaced_turfs" = replaced_turfs,
+		"skipped_tutorial" = length(tutorial),
+	)
+
+/// A setting value JSON can carry (with babylon_area_store_value): null, a number, a text, a
+/// type path, or a list of those (two levels deep). References to atoms are not.
+/proc/babylon_area_storable(value, depth = 0)
+	if(isnull(value) || isnum(value) || istext(value) || ispath(value))
+		return TRUE
+	if(!islist(value) || depth >= 2)
+		return FALSE
+	var/list/values = value
+	for(var/key in values)
+		if(!(istext(key) || isnum(key) || ispath(key)))
+			return FALSE
+		if(!babylon_area_storable(key, depth + 1))
+			return FALSE
+		if(!isnum(key) && !isnull(values[key]) && !babylon_area_storable(values[key], depth + 1))
+			return FALSE
+	return TRUE
+
+/// A storable value as JSON data: paths and lists are wrapped so they come back as they were.
+/proc/babylon_area_store_value(value)
+	if(ispath(value))
+		return list("path" = "[value]")
+	if(islist(value))
+		var/list/values = value
+		var/list/entries = list()
+		for(var/key in values)
+			entries += list(list(babylon_area_store_value(key), (!isnum(key) && !isnull(values[key])) ? babylon_area_store_value(values[key]) : null))
+		return list("list" = entries)
+	return value
+
+/proc/babylon_area_load_value(value)
+	if(!islist(value))
+		return value
+	var/list/wrapped = value
+	if(!isnull(wrapped["path"]))
+		return text2path("[wrapped["path"]]")
+	var/list/result = list()
+	for(var/list/entry in wrapped["list"])
+		if(length(entry) < 2)
+			continue
+		var/key = babylon_area_load_value(entry[1])
+		result += list(key)
+		if(!isnull(entry[2]) && !isnum(key) && !isnull(key))
+			result[key] = babylon_area_load_value(entry[2])
+	return result
+
+/// Why stored clip data can't be pasted (a missing or other-version clip), or null. Cheap: it
+/// reads only the header (the window's summary uses it).
+/proc/babylon_area_clip_data_problem(list/data)
+	if(!islist(data) || !length(data))
+		return "No area is stored yet."
+	var/version = data["version"]
+	if(version != BABYLON_AREA_CLIP_VERSION)
+		var/age = isnum(version) && version > BABYLON_AREA_CLIP_VERSION ? "a newer" : "an older"
+		return "This area was stored in [age] format (version [isnum(version) ? version : "unknown"]; this server reads version [BABYLON_AREA_CLIP_VERSION]), so it can't be pasted. Select the area with the world-edit wand and store it again."
+	var/width = data["width"]
+	var/height = data["height"]
+	var/list/origin = data["origin"]
+	var/list/tiles = data["tiles"]
+	if(!isnum(width) || !isnum(height) || width < 1 || height < 1 || width * height > BABYLON_AREA_MAX_TILES || !islist(origin) || length(origin) != 3 || !islist(tiles) || length(tiles) != width * height)
+		return "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again."
+	return null
+
+/// A clip from stored data: list("clip" = clip, "missing" = types that no longer exist) or
+/// list("error" = why not). A type this server no longer has is left out (a turf becomes plating),
+/// so a stored room never breaks the map load.
+/proc/babylon_area_clip_from_data(list/data)
+	var/problem = babylon_area_clip_data_problem(data)
+	if(problem)
+		return list("error" = problem)
+	var/datum/babylon_area_clip/clip = new
+	clip.width = round(data["width"])
+	clip.height = round(data["height"])
+	var/list/origin = data["origin"]
+	clip.origin = list(round(text2num("[origin[1]]") || 1), round(text2num("[origin[2]]") || 1), round(text2num("[origin[3]]") || 1))
+	var/list/missing = list()
+	for(var/list/stored in data["tiles"])
+		if(!islist(stored) || !istext(stored["turf"]))
+			return list("error" = "The stored area is damaged, so it can't be pasted. Select the area with the world-edit wand and store it again.")
+		var/list/entry = list("turf" = stored["turf"], "objects" = list(), "space" = !!stored["space"])
+		if(stored["keep"])
+			entry["keep"] = TRUE
+		else if(!babylon_area_entry_type(stored["turf"], /turf))
+			missing |= babylon_area_entry_path_text(stored["turf"])
+			entry["turf"] = "[/turf/open/floor/plating]"
+		for(var/object_text in stored["objects"])
+			if(!istext(object_text))
+				continue
+			if(!babylon_area_entry_type(object_text, /obj))
+				missing |= babylon_area_entry_path_text(object_text)
+				continue
+			entry["objects"] += object_text
+		clip.tiles += list(entry)
+		BABYLON_AREA_TICK
+	var/list/stored_extras = data["extras"]
+	if(islist(stored_extras))
+		for(var/tag in stored_extras)
+			var/list/stored = stored_extras[tag]
+			if(!islist(stored))
+				continue
+			var/list/extra = list()
+			if(islist(stored["fields"]))
+				var/list/fields = list()
+				var/list/given = stored["fields"]
+				for(var/field in given)
+					fields[field] = babylon_area_load_value(given[field])
+				extra["fields"] = fields
+			if(islist(stored["reagents"]))
+				extra["reagents"] = stored["reagents"]
+			if(islist(stored["contents"]))
+				extra["contents"] = stored["contents"]
+			clip.extras["[tag]"] = extra
+	clip.object_count = round(text2num("[data["objects"]]") || 0)
+	clip.nested_count = round(text2num("[data["nested"]]") || 0)
+	return list("clip" = clip, "missing" = missing)
+
+/// "/obj/structure/table" from a map entry ("/obj/structure/table{\n\tdir = 4\n\t}").
+/proc/babylon_area_entry_path_text(text)
+	var/brace = findtext(text, "{")
+	return brace ? copytext(text, 1, brace) : text
+
+/// The map entry's type when it exists under base, else null.
+/proc/babylon_area_entry_type(text, base)
+	var/path = text2path(babylon_area_entry_path_text(text))
+	return ispath(path, base) ? path : null
+
 /// Copies a rectangle (south-west and north-east corners). Protected (indestructible) tiles are
 /// left out: a paste leaves the target there as it is, so the Creative Plane's edge can't be
 /// carried elsewhere. faithful: an undo snapshot, which keeps every other turf as it is; a copy
@@ -560,8 +748,13 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		return FALSE
 	if(istype(thing, /obj/effect) && !istype(thing, /obj/effect/decal))
 		return FALSE
-	if(istype(thing, /obj/projectile) || istype(thing, /obj/docking_port) || istype(thing, /obj/item/babylon_tutorial_wand))
+	if(istype(thing, /obj/projectile) || istype(thing, /obj/docking_port))
 		return FALSE
+	// Builder tools (both wands) are never copied: one per builder, from the Creative panel.
+	if(isitem(thing))
+		var/obj/item/item = thing
+		if(item.babylon_builder_tool)
+			return FALSE
 	if(thing.flags_1 & HOLOGRAM_1)
 		return FALSE
 	if(thing.babylon_skip_save())
@@ -709,7 +902,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /proc/babylon_area_capture_contents(atom/container, datum/babylon_area_clip/clip, depth)
 	var/list/entries = list()
 	for(var/obj/item/item in container)
-		if(QDELETED(item) || item.babylon_skip_save() || (item.flags_1 & HOLOGRAM_1))
+		if(QDELETED(item) || item.babylon_skip_save() || (item.flags_1 & HOLOGRAM_1) || item.babylon_builder_tool)
 			continue
 		if(babylon_area_protected_object(item))
 			clip.skipped_protected++
@@ -904,8 +1097,9 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			return list("map" = map, "suffix" = candidate)
 	return list("error" = "No free suffix was found. Choose a custom suffix.")
 
-/// A tutorial object's settings for its copy: links to copied objects use the new ids, zones
-/// inside the copied area move with it. Links and zones outside the copy stay as they were.
+/// A tutorial object's settings for its copy: links to copied objects use the new ids, zones,
+/// picked tiles and stored areas (their origin) inside the copied area move with it. Links and
+/// places outside the copy stay as they were.
 /proc/babylon_area_rewrite_settings(path, json, list/ids, datum/babylon_area_clip/clip, turf/origin)
 	var/list/decoded = length(json) ? safe_json_decode(json) : null
 	var/list/values = islist(decoded) ? decoded : list()
@@ -925,6 +1119,22 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 					&& min(zone[1], zone[3]) >= clip.origin[1] && max(zone[1], zone[3]) < clip.origin[1] + clip.width \
 					&& min(zone[2], zone[4]) >= clip.origin[2] && max(zone[2], zone[4]) < clip.origin[2] + clip.height)
 					values[key] = list(zone[1] + dx, zone[2] + dy, zone[3] + dx, zone[4] + dy, origin.z)
+			if("tile")
+				var/list/spot = value
+				if(islist(spot) && length(spot) == 3 && spot[3] == clip.origin[3] \
+					&& spot[1] >= clip.origin[1] && spot[1] < clip.origin[1] + clip.width \
+					&& spot[2] >= clip.origin[2] && spot[2] < clip.origin[2] + clip.height)
+					values[key] = list(spot[1] + dx, spot[2] + dy, origin.z)
+			if("area_clip")
+				// A stored room inside the copy resets the copied room, not the original.
+				var/list/stored = value
+				var/list/stored_origin = islist(stored) ? stored["origin"] : null
+				if(length(stored_origin) == 3 && stored_origin[3] == clip.origin[3] \
+					&& stored_origin[1] >= clip.origin[1] && stored_origin[1] < clip.origin[1] + clip.width \
+					&& stored_origin[2] >= clip.origin[2] && stored_origin[2] < clip.origin[2] + clip.height)
+					var/list/moved = stored.Copy()
+					moved["origin"] = list(stored_origin[1] + dx, stored_origin[2] + dy, origin.z)
+					values[key] = moved
 	return values
 
 /// Builds a clip with its south-west corner on origin: clears the tiles it covers (players are
@@ -932,8 +1142,12 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 /// tutorial objects. id_mode/suffix: how tutorial ids are given ("auto", "custom", "keep"); the
 /// map is worked out right before the objects are made, as other builders may have taken ids
 /// while this paused. If the chosen way no longer works it falls back to "auto"; counts gets
-/// "suffix" and "id_note". Returns an error or null.
-/proc/babylon_area_place(datum/babylon_area_clip/clip, turf/origin, id_mode, suffix, skip_space, file_name, list/counts)
+/// "suffix" and "id_note". Returns an error or null; a place cut short by a runtime in its own
+/// body returns the first line's text (every success path returns null explicitly).
+/// keep_tutorial: a tutorial's Paste area (babylon_area_clear_tiles); the clip has no tutorial
+/// objects then.
+/proc/babylon_area_place(datum/babylon_area_clip/clip, turf/origin, id_mode, suffix, skip_space, file_name, list/counts, keep_tutorial = FALSE)
+	. = "The paste was cut short; Undo puts back what changed."
 	var/list/rect = list(origin.x, origin.y, origin.x + clip.width - 1, origin.y + clip.height - 1, origin.z)
 	var/list/written = list()
 	for(var/dx in 0 to clip.width - 1)
@@ -952,7 +1166,10 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 			var/obj/machinery/power/apc/existing = room?.apc
 			if(existing && !QDELETED(existing) && !(get_turf(existing) in written))
 				no_apc["[dx],[dy]"] = TRUE
-	var/list/cleared = babylon_area_clear_tiles(written, rect)
+	var/list/cleared = babylon_area_clear_tiles(written, rect, null, keep_tutorial)
+	if(!cleared)
+		log_world("BABYLON AREA: clearing the paste footprint at [origin.x],[origin.y],[origin.z] was cut short.")
+		return "The area could not be cleared; nothing was pasted."
 	if(counts)
 		for(var/key in cleared)
 			counts[key] = cleared[key]
@@ -1306,7 +1523,6 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	var/not_copied = babylon_area_not_copied(clipboard)
 	return result("Copied [babylon_area_size_text(rect[3] - rect[1] + 1, rect[4] - rect[2] + 1)]: [clipboard.object_count] object\s[tutorial ? ", [tutorial] tutorial object\s" : ""]. [not_copied ? "[not_copied] " : ""]Press Paste, then click where it goes.", TRUE)
 
-/// "Not copied: 2 mobs (NPC spawners come along and make their NPC again), floor markings."
 /// Copy's work (no try: see babylon_area_delete). TRUE when it got to the end.
 /datum/babylon_area_session/proc/copy_steps(list/rect)
 	clipboard = babylon_area_capture(rect[1], rect[2], rect[3], rect[4], rect[5])
@@ -1315,6 +1531,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		log_world("BABYLON AREA: writing the clipboard file failed: [written["error"]]")
 	return TRUE
 
+/// "Not copied: 2 mobs (NPC spawners come along and make their NPC again), floor markings."
 /proc/babylon_area_not_copied(datum/babylon_area_clip/clip)
 	var/list/parts = list()
 	if(clip.skipped_mobs)
@@ -1404,7 +1621,6 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 		notes += "moved [counts["moved"]] player\s aside"
 	return result("Pasted [size] at [rect[1]], [rect[2]][tutorial ? "; [tutorial] tutorial object\s[length(counts["suffix"]) ? " got the suffix [counts["suffix"]]" : " kept their ids"]" : ""][length(notes) ? "; [english_list(notes)]" : ""].[counts["id_note"] ? " [counts["id_note"]]" : ""] Click another tile to paste again, or press Stop pasting.", TRUE)
 
-/// Tutorial objects inside a rectangle.
 /// Paste's work (no try: see babylon_area_delete). Fills steps["before"] (the undo snapshot) as
 /// soon as it exists and steps["error"]. TRUE when it got to the end.
 /datum/babylon_area_session/proc/paste_steps(list/rect, turf/origin, suffix_mode, custom_suffix, skip_space, list/counts, list/steps)
@@ -1416,6 +1632,7 @@ GLOBAL_VAR_INIT(babylon_area_next_tag, 0)
 	steps["error"] = babylon_area_place(clipboard, origin, suffix_mode, custom_suffix, skip_space, "[world.port]-[ckey(key)]-paste", counts)
 	return TRUE
 
+/// Tutorial objects inside a rectangle.
 /proc/babylon_area_tutorial_in(list/rect)
 	var/list/found = list()
 	for(var/obj/babylon_tutorial/object as anything in GLOB.babylon_tutorial_objects)

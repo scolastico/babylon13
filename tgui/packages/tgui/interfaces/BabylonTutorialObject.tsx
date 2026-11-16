@@ -36,10 +36,12 @@ export type Field = {
     | 'idlist'
     | 'gateinputs'
     | 'zone'
+    | 'tile'
     | 'effects'
     | 'target'
     | 'loadout'
-    | 'event';
+    | 'event'
+    | 'area_clip';
   default: unknown;
   help: string | null;
   options?: Option[];
@@ -63,6 +65,32 @@ export type LoadoutEntry = {
   name: string;
   path: string;
   inside: number;
+};
+
+/** A stored area (a Paste area's snapshot), as the window sees it: never the copy itself. */
+export type AreaClipView = {
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+  objects: number;
+  skipped_tutorial?: number;
+  /** Why it can't be pasted (stored in another format ...), or null. */
+  problem: string | null;
+};
+
+/** The builder's world-edit selection. */
+export type AreaSelection = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  z: number;
+  width: number;
+  height: number;
+  tiles: number;
+  problem: string | null;
 };
 
 /** A round event a Start event action can start. */
@@ -138,6 +166,8 @@ export type ObjectData = {
   } | null;
   notice: { text: string; ok: boolean; id: number; key?: string } | null;
   picking: boolean;
+  /** The builder's world-edit selection (objects with a zone or a stored area). */
+  area_selection?: AreaSelection | null;
   gate?: GateLive;
   npc?: {
     name: string;
@@ -231,6 +261,9 @@ export const BabylonTutorialObject = () => {
             ))}
           </LabeledList>
         </Section>
+        {liveCopyWarning(data) && (
+          <NoticeBox>{liveCopyWarning(data)}</NoticeBox>
+        )}
         {otherIssues(data).map((text) => (
           <NoticeBox key={text}>{text}</NoticeBox>
         ))}
@@ -269,6 +302,16 @@ export const BabylonTutorialObject = () => {
       </Window.Content>
     </Window>
   );
+};
+
+/** A Paste area copying a live area: players can change its source before it runs. */
+export const liveCopyWarning = (data: ObjectData) => {
+  if (data.kind !== 'paste_area' || data.values.mode !== 'live') {
+    return null;
+  }
+  return data.values.protect
+    ? 'Live copy: the source area is copied as it is when the action runs. While the tutorial runs, nobody can build in it or take it apart, but anything that reaches it otherwise (fire, explosions, gas) still changes it.'
+    : 'Live copy: players can change or damage the source area before the action runs, and the copy takes it as it is then. Turn on "Protect the source", or use a stored snapshot.';
 };
 
 /** Problems that belong to no field (an action's "Test run: ..." note); a gate shows its own. */
@@ -401,6 +444,10 @@ const FieldInput = (props: { field: Field }) => {
       );
     case 'zone':
       return <ZoneInput field={field} value={value} />;
+    case 'tile':
+      return <TileInput field={field} value={value} />;
+    case 'area_clip':
+      return <AreaClipInput field={field} value={value} />;
     case 'effects':
       return <EffectsInput value={value || []} onChange={set} />;
     case 'target':
@@ -851,6 +898,15 @@ const ZoneInput = (props: { field: Field; value: number[] | null }) => {
           >
             Pick corners
           </Button>
+          {data.area_selection && (
+            <Button
+              icon="object-group"
+              tooltip={`Your world-edit selection: ${selectionText(data.area_selection)}.`}
+              onClick={() => act('use_selection', { key: props.field.key })}
+            >
+              Use my world-edit selection
+            </Button>
+          )}
           {zone && (
             <Button
               icon="xmark"
@@ -861,6 +917,112 @@ const ZoneInput = (props: { field: Field; value: number[] | null }) => {
           )}
         </>
       )}
+    </Box>
+  );
+};
+
+/** "12×8 at 10, 20" */
+export const selectionText = (selection: AreaSelection) =>
+  `${selection.width}×${selection.height} at ${selection.x1}, ${selection.y1}`;
+
+/** One picked tile (a Paste area's target corner): pick it with the wand, or clear it. */
+const TileInput = (props: { field: Field; value: number[] | null }) => {
+  const { act, data } = useBackend<ObjectData>();
+  const tile = props.value;
+  return (
+    <Box>
+      <Box mb={0.5}>
+        {tile ? (
+          <>
+            ({tile[0]}, {tile[1]}) on level {tile[2]}
+          </>
+        ) : (
+          <Box inline color="label">
+            Not set.
+          </Box>
+        )}
+      </Box>
+      {data.picking ? (
+        <NoticeBox info mb={0}>
+          Click the tile with the wand…
+        </NoticeBox>
+      ) : (
+        <>
+          <Button
+            icon="crosshairs"
+            onClick={() => act('pick_zone', { key: props.field.key })}
+          >
+            Pick tile
+          </Button>
+          {tile && (
+            <Button
+              icon="xmark"
+              onClick={() => act('clear_zone', { key: props.field.key })}
+            >
+              Clear
+            </Button>
+          )}
+        </>
+      )}
+    </Box>
+  );
+};
+
+/** Why "Store selection" can't run, or null. */
+export const storeBlocked = (selection?: AreaSelection | null) => {
+  if (!selection) {
+    return 'Select an area with the world-edit wand first (click two opposite corners with it).';
+  }
+  return selection.problem || null;
+};
+
+/** A stored area (Paste area's snapshot): what is stored, and storing the world-edit selection. */
+const AreaClipInput = (props: { field: Field; value: AreaClipView | null }) => {
+  const { act, data } = useBackend<ObjectData>();
+  const stored = props.value;
+  const selection = data.area_selection;
+  const blocked = storeBlocked(selection);
+  return (
+    <Box>
+      <Box mb={0.5}>
+        {stored ? (
+          <>
+            {stored.width}×{stored.height} tiles from ({stored.x}, {stored.y})
+            on level {stored.z}
+            <Box inline color="label">
+              {' '}
+              — {stored.objects} object{stored.objects === 1 ? '' : 's'}
+            </Box>
+          </>
+        ) : (
+          <Box inline color="label">
+            Nothing stored yet.
+          </Box>
+        )}
+      </Box>
+      {stored?.problem && (
+        <NoticeBox danger mb={0.5}>
+          {stored.problem}
+        </NoticeBox>
+      )}
+      <Button
+        icon="floppy-disk"
+        disabled={!!blocked}
+        tooltip={
+          blocked ||
+          (stored
+            ? 'Replaces the stored area with your world-edit selection as it is now.'
+            : 'Copies your world-edit selection as it is now into this action.')
+        }
+        onClick={() => act('store_area', { key: props.field.key })}
+      >
+        Store selection in this action
+      </Button>
+      <Box mt={0.5} color="label" fontSize="0.9em">
+        {selection
+          ? `Your selection: ${selectionText(selection)} (${selection.tiles} tiles).`
+          : blocked}
+      </Box>
     </Box>
   );
 };

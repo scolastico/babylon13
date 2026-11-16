@@ -57,6 +57,8 @@ export type CreativeData = {
   areas: AreaEntry[];
   events: EventEntry[];
   wand_available: boolean;
+  /** The world-edit wand (area tools), handed out like the tutorial wand. */
+  world_edit_available?: boolean;
   kit: Entry[];
   show_markers: boolean;
   map_size: { x: number; y: number };
@@ -1121,7 +1123,7 @@ function EventsTab() {
 
 function KitsTab() {
   const { act, data } = useBackend<CreativeData>();
-  const { wand_available, kit = [] } = data;
+  const { wand_available, world_edit_available, kit = [] } = data;
   return (
     <Scroll>
       <Section
@@ -1179,6 +1181,30 @@ function KitsTab() {
               onClick={() => act('give_wand')}
             >
               {wand_available ? 'Get tutorial wand' : 'Coming soon'}
+            </Button>
+          </Stack.Item>
+        </Stack>
+      </Section>
+      <Section title="World-edit wand">
+        <Stack align="center">
+          <Stack.Item grow>
+            <Box color="label">
+              Select areas and copy, paste, fill, border or clear them (a small
+              WorldEdit).
+            </Box>
+          </Stack.Item>
+          <Stack.Item>
+            <Button
+              icon="vector-square"
+              disabled={!world_edit_available}
+              tooltip={
+                world_edit_available
+                  ? 'Puts the world-edit wand into your hand: click two corners with it, then pick what to do in its window.'
+                  : 'Coming soon: the wand that copies, pastes and clears whole areas.'
+              }
+              onClick={() => act('give_world_edit')}
+            >
+              {world_edit_available ? 'Get world-edit wand' : 'Coming soon'}
             </Button>
           </Stack.Item>
         </Stack>

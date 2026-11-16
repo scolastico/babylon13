@@ -15,6 +15,7 @@ import {
   gateStateText,
   type TutorialObject,
   type WandData,
+  WORLD_EDIT_HINT,
 } from './BabylonTutorialWand';
 
 const colors = {
@@ -133,6 +134,30 @@ describe('BabylonTutorialWand', () => {
       ),
     ).toBeDefined();
     expect(screen.getByText('Placed message message1.')).toBeDefined();
+  });
+
+  it('has no area tools: Select moved to the world-edit wand', () => {
+    show();
+    expect(screen.queryByText('Select')).toBeNull();
+    expect(screen.queryByText('Copy selection')).toBeNull();
+    expect(screen.getByText(WORLD_EDIT_HINT)).toBeDefined();
+    // A wand from before the split, still in Select mode, shows the palette.
+    cleanup();
+    show({ mode: 'select' });
+    expect(screen.getByText('Triggers')).toBeDefined();
+    expect(screen.queryByText('Copy selection')).toBeNull();
+  });
+
+  it('says when a tile, not a zone, is being picked', () => {
+    show({ picking: { id: 'reset1', corner: 1, tile: true } });
+    expect(
+      screen.getByText(': click it with the wand.', { exact: false }),
+    ).toBeDefined();
+    cleanup();
+    show({ picking: { id: 'enter_lab', corner: 2 } });
+    expect(
+      screen.getByText('click corner 2 of 2 with the wand.', { exact: false }),
+    ).toBeDefined();
   });
 
   it('shows the NPC presets in NPC mode', () => {

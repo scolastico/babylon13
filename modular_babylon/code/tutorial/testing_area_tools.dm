@@ -517,7 +517,8 @@
 		result["rescue_opens_wall_on_stuck_player"] = !isclosedturf(stuck_tile) && get_turf(player) == stuck_tile && !QDELETED(player)
 		babylon_area_change_turf(stuck_tile, /turf/open/floor/plating, NONE)
 
-		// The wand: Select mode, two clicks, outlines for the holder.
+		// The wands (spec 12 #1): the tutorial wand has no area tools; the world-edit wand selects
+		// with two clicks and outlines the selection for its holder.
 		var/was_creative = GLOB.babylon_world.creative
 		GLOB.babylon_world.creative = TRUE
 		var/mob/living/carbon/human/builder = new(locate(x1 + 20, y1 + 6, z))
@@ -527,16 +528,36 @@
 		builder.put_in_hands(wand)
 		wand.attack_self_secondary(builder)
 		var/cycled = wand.mode == "configure"
-		wand.mode = "select"
-		var/datum/babylon_area_session/wand_session = wand.area_session(builder)
-		wand_session.reselect()
-		wand.use_on(locate(x1 + 15, y1 + 1, z), builder)
-		wand.use_on(locate(x1 + 18, y1 + 3, z), builder)
 		result["wand_cycles_modes"] = cycled
+		var/list/tutorial_data = wand.ui_data(builder)
+		var/list/tutorial_static = wand.ui_static_data(builder)
+		result["tutorial_wand_has_no_area_tools"] = !("select" in babylon_tutorial_wand_modes()) && !("area" in tutorial_data) \
+			&& !hascall(wand, "area_session") && !hascall(wand, "area_operation") && !("materials" in tutorial_static)
+		var/datum/babylon_area_session/wand_session = babylon_area_session(builder.ckey || REF(builder))
+		wand_session.reselect()
+		// A tutorial wand from before the split, still in Select mode, selects nothing.
+		wand.mode = "select"
+		wand.use_on(locate(x1 + 15, y1 + 1, z), builder)
+		result["old_select_wand_selects_nothing"] = wand.mode == "place" && !wand_session.corner && !wand_session.selection && !(locate(/obj/babylon_tutorial) in locate(x1 + 15, y1 + 1, z))
+		builder.dropItemToGround(wand)
+		var/obj/item/babylon_world_edit_wand/edit_wand = new(get_turf(builder))
+		made += edit_wand
+		builder.put_in_hands(edit_wand)
+		result["both_wands_are_builder_tools"] = wand.babylon_builder_tool && edit_wand.babylon_builder_tool
+		edit_wand.use_on(locate(x1 + 15, y1 + 1, z), builder)
+		edit_wand.use_on(locate(x1 + 18, y1 + 3, z), builder)
 		result["wand_selects"] = wand_session.selection ~= list(x1 + 15, y1 + 1, x1 + 18, y1 + 3, z)
-		result["wand_outline"] = length(wand.area_images(wand_session)) == 4 * 3 + 1
-		var/list/data = wand.ui_data(builder)
-		result["wand_window_data"] = data["area"]["step"] == "selected" && data["area"]["selection"]["tiles"] == 12
+		result["wand_outline"] = length(edit_wand.area_images(wand_session)) == 4 * 3 + 1
+		var/list/data = edit_wand.ui_data(builder)
+		var/list/static_data = edit_wand.ui_static_data(builder)
+		result["wand_window_data"] = data["area"]["step"] == "selected" && data["area"]["selection"]["tiles"] == 12 && length(static_data["materials"])
+		// Right-click in hand drops the selection.
+		edit_wand.attack_self_secondary(builder)
+		result["wand_right_click_deselects"] = !wand_session.selection && !wand_session.corner
+		// Only in creative worlds, as the tutorial wand.
+		GLOB.babylon_world.creative = FALSE
+		result["world_edit_wand_creative_only"] = !edit_wand.usable_by(builder) && edit_wand.use_on(locate(x1 + 15, y1 + 1, z), builder) == ITEM_INTERACT_BLOCKING && !wand_session.corner
+		GLOB.babylon_world.creative = TRUE
 		GLOB.babylon_area_sessions -= builder.ckey || REF(builder)
 		GLOB.babylon_world.creative = was_creative
 	catch(var/exception/error)
@@ -644,5 +665,163 @@
 	catch(var/exception/error)
 		result["no_error"] = FALSE
 		log_world("test_area_tools_paste_id_card failed: [error] ([error.file]:[error.line])")
+	babylon_area_test_cleanup(setup, made)
+	return result
+
+/// Paste area (spec 12 #9, room_reset.dm): a snapshot of a room is stored from the builder's
+/// world-edit selection, survives its JSON, and pastes the room back over a changed one (players
+/// moved aside; tutorial objects, the tutorial NPC and a builder tool stay); a live copy pastes
+/// another area and protects its source while the run runs; a stored area in an old format is
+/// refused with a clear message and nothing is pasted; an area copy of the action carries the
+/// stored area.
+/datum/babylon_save/proc/test_tutorial_room_reset()
+	var/list/result = list()
+	var/list/rect = area_test_rect()
+	var/z = rect[5]
+	var/x1 = rect[1]
+	var/y1 = rect[2]
+	var/datum/babylon_area_session/setup
+	var/list/made = list()
+	var/session_key
+	try
+		setup = area_test_setup(rect)
+		// The room: iron floor, a wall, a table, a full medkit, a tutorial marker and an NPC.
+		var/list/room = list(x1, y1, x1 + 3, y1 + 2, z)
+		babylon_area_put(babylon_area_tiles(room[1], room[2], room[3], room[4], z), /turf/open/floor/iron, FALSE, room, list("turfs" = list(), "made" = list()))
+		babylon_area_change_turf(locate(x1 + 3, y1 + 2, z), /turf/closed/wall, NONE)
+		var/obj/structure/table/table = new(locate(x1, y1, z))
+		made += table
+		var/obj/item/storage/medkit/regular/kit = new(locate(x1 + 1, y1, z))
+		made += kit
+		var/kit_items = length(kit.contents)
+		var/obj/babylon_tutorial/marker/marker = babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(x1 + 2, y1 + 1, z), "rr_marker", list(), made)
+		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(x1 + 1, y1 + 2, z), "rr_npc", list("npc_name" = "Patient", "spawn_at_start" = 0), made)
+		var/mob/living/carbon/human/npc = spawner.spawn_npc()
+		made += npc
+
+		// Stored from the builder's world-edit selection.
+		var/mob/living/carbon/human/builder = new(locate(x1 + 20, y1 + 6, z))
+		made += builder
+		session_key = REF(builder)
+		var/datum/babylon_area_session/session = babylon_area_session(session_key)
+		session.rate_limited = FALSE
+		session.select(room[1], room[2], z, room[3], room[4], z)
+		var/obj/babylon_tutorial/action/paste_area/action = babylon_tutorial_test_place(/obj/babylon_tutorial/action/paste_area, locate(x1 + 20, y1 + 5, z), "rr_reset", list(), made)
+		result["empty_action_asks_for_area"] = !!action.find_issues()["snapshot"]
+		var/list/stored = babylon_tutorial_store_area(builder, action, "snapshot")
+		var/list/data = action.snapshot_data()
+		result["snapshot_stored"] = stored["ok"] && data?["version"] == BABYLON_AREA_CLIP_VERSION && data["width"] == 4 && data["height"] == 3 && length(data["tiles"]) == 12
+		result["snapshot_leaves_tutorial_objects_out"] = data?["skipped_tutorial"] == 2 && !findtext(action.settings_json, "/obj/babylon_tutorial")
+		result["snapshot_action_valid"] = !length(action.find_issues())
+		// Persisted: the settings are one JSON text (the save's extra_fields "settings_json").
+		var/obj/babylon_tutorial/action/paste_area/restored = new(locate(x1 + 21, y1 + 5, z))
+		made += restored
+		restored.settings_json = action.settings_json
+		var/list/reloaded = babylon_area_clip_from_data(restored.snapshot_data())
+		var/datum/babylon_area_clip/reclip = reloaded["clip"]
+		result["snapshot_survives_json"] = !reloaded["error"] && reclip?.width == 4 && reclip.height == 3 && reclip.origin ~= list(x1, y1, z) && length(reclip.extras) >= 1
+		// The window gets a summary, never the clip; it sees the builder's selection.
+		var/obj/item/babylon_tutorial_wand/tutorial_wand = new(get_turf(builder))
+		made += tutorial_wand
+		builder.put_in_hands(tutorial_wand)
+		var/datum/babylon_tutorial_editor/editor = new(action, tutorial_wand)
+		var/list/window = editor.ui_data(builder)
+		var/list/view = window["values"]["snapshot"]
+		var/list/selection_view = window["area_selection"]
+		result["window_summary_only"] = view?["width"] == 4 && view["x"] == x1 && !("tiles" in view) && !view["problem"] && selection_view?["tiles"] == 12
+		qdel(editor)
+
+		// The room changes: the table and medkit go, a grille and a wrench come, the wall opens.
+		qdel(table)
+		kit.forceMove(locate(x1 + 20, y1 + 4, z))
+		var/obj/structure/grille/grille = new(locate(x1 + 2, y1, z))
+		made += grille
+		var/obj/item/wrench/junk = new(locate(x1 + 1, y1 + 1, z))
+		made += junk
+		babylon_area_change_turf(locate(x1 + 3, y1 + 2, z), /turf/open/floor/plating, NONE)
+		var/obj/item/babylon_world_edit_wand/dropped_wand = new(locate(x1, y1 + 1, z))
+		made += dropped_wand
+		var/mob/living/carbon/human/player = new(locate(x1, y1 + 2, z))
+		made += player
+		player.key = "RoomResetPlayer"
+		var/datum/babylon_tutorial_run/run = babylon_tutorial_begin(FALSE, TRUE, FALSE, list())
+		babylon_tutorial_paste_area(action, run)
+		result["reset_no_note"] = !run.action_notes[action]
+		result["reset_puts_table_back"] = !!(locate(/obj/structure/table) in locate(x1, y1, z))
+		var/obj/item/storage/medkit/regular/new_kit = locate() in locate(x1 + 1, y1, z)
+		result["reset_puts_full_kit_back"] = !!new_kit && length(new_kit.contents) == kit_items
+		result["reset_removes_new_things"] = QDELETED(grille) && QDELETED(junk)
+		result["reset_puts_wall_back"] = istype(locate(x1 + 3, y1 + 2, z), /turf/closed/wall)
+		result["reset_keeps_tutorial_objects"] = !QDELETED(marker) && get_turf(marker) == locate(x1 + 2, y1 + 1, z) && !QDELETED(spawner)
+		result["reset_keeps_tutorial_npc"] = !QDELETED(npc) && spawner.current_npc() == npc
+		result["reset_keeps_builder_tools"] = !QDELETED(dropped_wand)
+		// The world-edit wand is a builder tool for Set inventory and Remove objects too (I3's flag).
+		var/list/wand_loadout = babylon_tutorial_clean_loadout(list(list("type" = "[/obj/item/babylon_world_edit_wand]", "hand" = 1)))
+		result["world_edit_wand_kept_by_actions"] = babylon_tutorial_inventory_kept(dropped_wand) && !babylon_tutorial_removable(dropped_wand) && !!wand_loadout["error"]
+		var/turf/player_at = get_turf(player)
+		result["reset_moves_players_out"] = !QDELETED(player) && !!player_at && !babylon_area_rects_overlap(room, list(player_at.x, player_at.y, player_at.x, player_at.y, player_at.z))
+
+		// Live: the room is copied to a target corner when the action runs.
+		var/list/target_rect = list(x1 + 8, y1, x1 + 11, y1 + 2, z)
+		var/obj/babylon_tutorial/action/paste_area/live = babylon_tutorial_test_place(/obj/babylon_tutorial/action/paste_area, locate(x1 + 21, y1 + 6, z), "rr_live", list("mode" = "live", "source" = room.Copy(), "target" = list(x1 + 8, y1, z)), made)
+		result["live_action_valid"] = !length(live.find_issues())
+		var/mob/living/carbon/human/visitor = new(locate(x1 + 9, y1 + 1, z))
+		made += visitor
+		visitor.key = "RoomResetVisitor"
+		babylon_tutorial_paste_area(live, run)
+		result["live_no_note"] = !run.action_notes[live]
+		result["live_copies_source"] = !!(locate(/obj/structure/table) in locate(x1 + 8, y1, z)) && istype(locate(x1 + 11, y1 + 2, z), /turf/closed/wall) && !!(locate(/obj/item/storage/medkit/regular) in locate(x1 + 9, y1, z))
+		result["live_leaves_tutorial_objects_out"] = !(locate(/obj/babylon_tutorial) in locate(x1 + 10, y1 + 1, z)) && !(locate(/obj/babylon_tutorial) in locate(x1 + 9, y1 + 2, z))
+		var/turf/visitor_at = get_turf(visitor)
+		result["live_moves_players_out"] = !QDELETED(visitor) && !!visitor_at && !babylon_area_rects_overlap(target_rect, list(visitor_at.x, visitor_at.y, visitor_at.x, visitor_at.y, visitor_at.z))
+		// The source is protected while the run runs: no item use there, builder wands excepted.
+		var/turf/source_tile = locate(x1 + 1, y1 + 1, z)
+		var/obj/item/wrench/tool = new(get_turf(builder))
+		made += tool
+		var/obj/item/babylon_world_edit_wand/edit_wand = new(get_turf(builder))
+		made += edit_wand
+		var/obj/structure/table/source_table = locate() in locate(x1, y1, z)
+		result["source_protected_while_running"] = babylon_tutorial_build_protected(source_tile) && babylon_tutorial_blocks_building(builder, source_tile, tool) \
+			&& !babylon_tutorial_blocks_building(builder, source_tile, edit_wand) && !babylon_tutorial_build_protected(locate(x1 + 9, y1 + 1, z))
+		result["protected_table_untouched"] = !!source_table && !tool.melee_attack_chain(builder, source_table) && !QDELETED(source_table)
+		live.set_setting("protect", 0)
+		result["unprotected_source_open"] = !babylon_tutorial_build_protected(source_tile)
+		live.set_setting("protect", 1)
+		// A target on its own source is refused.
+		var/obj/babylon_tutorial/action/paste_area/overlap = babylon_tutorial_test_place(/obj/babylon_tutorial/action/paste_area, locate(x1 + 22, y1 + 6, z), "rr_overlap", list("mode" = "live", "source" = room.Copy(), "target" = list(x1 + 2, y1 + 1, z)), made)
+		result["overlap_warned"] = findtext(overlap.find_issues()["target"], "own source") != 0
+
+		// An area stored in another format: refused on store, and an old save's is noted, not pasted.
+		var/list/old_data = data.Copy()
+		old_data["version"] = 0
+		result["old_version_refused"] = findtext(action.set_setting("snapshot", old_data), "older format") != 0
+		var/obj/babylon_tutorial/action/paste_area/old = new(locate(x1 + 22, y1 + 5, z))
+		made += old
+		old.settings_json = json_encode(list("mode" = "snapshot", "snapshot" = old_data))
+		result["old_version_issue"] = findtext(old.find_issues()["snapshot"], "older format") != 0
+		var/obj/structure/grille/stays = new(locate(x1 + 2, y1, z))
+		made += stays
+		babylon_tutorial_paste_area(old, run)
+		result["old_version_noted_not_pasted"] = findtext(run.action_notes[old], "older format") && !QDELETED(stays)
+		babylon_tutorial_end()
+		result["protection_ends_with_run"] = !babylon_tutorial_build_protected(source_tile)
+
+		// An area copy of the action (the area tools) carries its stored area.
+		var/datum/babylon_area_session/copier = babylon_area_test_session("room_reset")
+		copier.select(x1 + 20, y1 + 5, z, x1 + 20, y1 + 5, z)
+		copier.copy(null)
+		copier.arm_paste()
+		copier.click(locate(x1 + 23, y1 + 7, z))
+		var/list/pasted_result = copier.paste(null)
+		var/obj/babylon_tutorial/action/paste_area/copied = locate() in locate(x1 + 23, y1 + 7, z)
+		made += copied
+		var/list/copied_data = copied?.snapshot_data()
+		result["area_copy_carries_snapshot"] = pasted_result["ok"] && copied_data?["version"] == BABYLON_AREA_CLIP_VERSION && length(copied_data["tiles"]) == 12 && copied_data["origin"] ~= list(x1, y1, z)
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_room_reset failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_end()
+	if(session_key)
+		GLOB.babylon_area_sessions -= session_key
 	babylon_area_test_cleanup(setup, made)
 	return result
