@@ -512,7 +512,7 @@ class Instances(TutorialFixture):
         self.s.dispatch("player", "create", dict(name="Mine", visibility="private"))
         mine = self.s.row("SELECT id FROM worlds WHERE owner='player' AND kind='world'")["id"]
         self.start(mine, "player")
-        with self.assertRaisesRegex(Denied, "running-world limit"):
+        with self.assertRaisesRegex(Denied, "You already have a world running"):
             self.s.dispatch("player", "tutorial_play", {"tutorial": tid})
         # The instance that could not start is gone again.
         self.assertIsNone(self.s.row("SELECT * FROM worlds WHERE kind='tutorial'"))
@@ -537,6 +537,33 @@ class Instances(TutorialFixture):
         self.assertTrue(self.s.row("SELECT * FROM worlds WHERE kind='world'"))
         # A new run of the tutorial starts a fresh instance.
         self.assertNotEqual(self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"], world)
+
+    def test_hung_instance_stop_kills_it(self):
+        # Review C-M1: a tutorial instance that does not answer its stop is ended at once with a
+        # short timeout (it is never saved), not kept in error for the 600 s save timeout.
+        tid = self.published()
+        world = self.s.dispatch("player", "tutorial_play", {"tutorial": tid})["world"]
+        self.s.tick()
+        self.driver.hang_stop = True
+        self.s.dispatch("player", "stop", {"world": world})
+        for _ in range(200):
+            if not self.s.stop_workers:
+                break
+            time.sleep(.01)
+        self.assertEqual(self.driver.stop_timeouts[-1], 30)
+        self.assertIsNone(self.s.row("SELECT * FROM runs WHERE world=?", (world,)))
+        self.assertIsNone(self.instance(world))
+        self.assertTrue(self.driver.killed)
+        # An ordinary world keeps the long timeout and goes to error when its stop fails.
+        mine = self.make("player", name="Mine", persistent=1)
+        self.start(mine, "player")
+        self.s.dispatch("player", "stop", {"world": mine})
+        for _ in range(200):
+            if not self.s.stop_workers:
+                break
+            time.sleep(.01)
+        self.assertEqual(self.driver.stop_timeouts[-1], 600)
+        self.assertEqual(self.s.row("SELECT state FROM runs WHERE world=?", (mine,))["state"], "error")
 
     def test_edit_world_deleted_on_stop(self):
         # The admin's edit world is unsaved like a play instance: stopping it deletes its row and
@@ -687,6 +714,36 @@ class Instances(TutorialFixture):
                                 if (p / "data/babylon/saves/latest.json").exists()), [])
         self.assertFalse(self.s.copying)
         self.assertFalse(self.s.tutorial_readers)
+
+    def test_copy_is_journalled_until_its_world_row_exists(self):
+        # Review C-M9: a restart during the copy leaves no orphaned directory: the copy is in the
+        # deletion journal until its row exists, and the cleanup skips it while it is copied.
+        tid = self.published()
+        import tutorials
+        real = tutorials.seed_first_save
+        seen = {}
+
+        def seed_and_look(snapshot, saves):
+            result = real(snapshot, saves)
+            world = saves.parents[2].name
+            seen["journalled"] = bool(self.s.row("SELECT 1 FROM world_deletions WHERE world=?", (world,)))
+            self.s.next_cleanup = 0
+            self.s.cleanup_unused_worlds()
+            seen["kept_while_copying"] = (saves / "latest.json").is_file()
+            return result
+        with unittest.mock.patch("supervisor.seed_first_save", seed_and_look):
+            copied = self.s.dispatch("player", "tutorial_copy", {"tutorial": tid})["id"]
+        self.assertEqual(seen, dict(journalled=True, kept_while_copying=True))
+        self.assertIsNone(self.s.row("SELECT 1 FROM world_deletions WHERE world=?", (copied,)))
+        self.assertFalse(self.s.copying_worlds)
+        # An interrupted copy (no row, journal left as after a restart) is removed by the cleanup.
+        orphan = "ab" * 16
+        (self.data / "worlds" / orphan / "data").mkdir(parents=True)
+        with self.s.lock, self.s.db:
+            self.s.db.execute("INSERT INTO world_deletions VALUES(?)", (orphan,))
+        self.s.next_cleanup = 0
+        self.s.cleanup_unused_worlds()
+        self.assertFalse((self.data / "worlds" / orphan).exists())
 
     def test_copy_reservations_survive_no_failed_commit(self):
         # m-c: the reservations are taken outside the transaction block; a failing commit there

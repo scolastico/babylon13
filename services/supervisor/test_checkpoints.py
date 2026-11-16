@@ -156,6 +156,18 @@ class Storage(unittest.TestCase):
         self.store.retain(self.world)
         self.assertEqual(self.generations(), {first, latest, young})
 
+    def test_young_snapshot_older_than_latest_survives_retain(self):
+        # Review C-I1: an autosave commits a newer generation while the supervisor copies a
+        # submission's snapshot; pruning must leave the snapshot to the age-based sweep.
+        root = self.store.root(self.world)
+        points = [seed(self.store, self.world, 1)]
+        snapshot = seed(self.store, self.world, 2, commit=False)
+        (root / snapshot / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        points += [seed(self.store, self.world, n) for n in range(3, 3 + self.store.keep + 2)]
+        self.store.retain(self.world, expected=points[-1])
+        self.assertIn(snapshot, self.generations())
+        self.assertNotIn(points[0], self.generations())
+
     def test_bad_head_does_not_delete_older_saves(self):
         points = [seed(self.store, self.world, n) for n in range(1, 7)]
         (self.store.root(self.world) / points[-1] / "state.json").write_text("incomplete")

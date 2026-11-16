@@ -51,6 +51,10 @@ class LaunchCancelled(Denied):
 # Link codes avoid look-alike characters (0/O, 1/I) because players type them.
 LINK_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 LINK_CODE_SECONDS = 600
+# Seconds a managed stop may take: a station world's final save (every level) can take minutes;
+# a tutorial instance is never saved and answers at once.
+STOP_TIMEOUT = 600
+TUTORIAL_STOP_TIMEOUT = 30
 
 
 def plain_text(value):
@@ -227,8 +231,11 @@ class Driver:
         latest = data / "worlds" / world["id"] / "data/babylon/saves/latest.json"
         if not latest.exists():
             return None
-        generation = json.loads(latest.read_text())["generation"]
-        if not re.fullmatch(r"save-\d{8}-\d{6}-\d+", generation):
+        try:
+            generation = json.loads(latest.read_text())["generation"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise Denied("This world's checkpoint pointer is damaged. Restore a checkpoint or reset the world.") from None
+        if not isinstance(generation, str) or not re.fullmatch(r"save-\d{8}-\d{6}-\d+", generation):
             raise Denied("Invalid checkpoint generation")
         return latest.parent / generation
 
@@ -472,9 +479,10 @@ class Driver:
                     raise TimeoutError("process %s did not exit after SIGKILL" % run["pid"])
                 time.sleep(0.1)
 
-    def stop(self, run):
-        # The final save of a station world (every level) can take minutes.
-        return topic(run["port"], run["secret"], "managed_stop", timeout=600)
+    def stop(self, run, timeout=STOP_TIMEOUT):
+        # The final save of a station world (every level) can take minutes; a world that is not
+        # saved answers at once (the supervisor passes a short timeout for tutorial instances).
+        return topic(run["port"], run["secret"], "managed_stop", timeout=timeout)
 
     def ahelp_reply(self, run, payload):
         return topic(run["port"], run["secret"], "ahelp_reply", payload)
@@ -519,6 +527,7 @@ class Supervisor:
               password_hash TEXT, admin INTEGER);
             CREATE TABLE IF NOT EXISTS sessions (ckey TEXT PRIMARY KEY, world TEXT, run TEXT);
             CREATE TABLE IF NOT EXISTS audit (at REAL, actor TEXT, action TEXT, world TEXT);
+            CREATE INDEX IF NOT EXISTS audit_world ON audit(world, action, at);
             CREATE TABLE IF NOT EXISTS world_deletions (world TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS discord_links (ckey TEXT PRIMARY KEY, discord_id TEXT UNIQUE NOT NULL,
               discord_name TEXT, linked REAL NOT NULL);
@@ -576,6 +585,9 @@ class Supervisor:
         self.world_busy = set()
         # Owners with a "Copy to my worlds" being copied.
         self.copying = set()
+        # World ids those copies write: journalled in world_deletions until their row exists, so an
+        # interrupted copy is cleaned up; the cleanup itself skips them while they are copied.
+        self.copying_worlds = set()
         # Serializes checkpoint maintenance (retain, rollback) now that it runs without self.lock.
         self.checkpoint_lock = threading.RLock()
         # world id -> expected latest generation (or None): maintenance to run once self.lock is free.
@@ -631,7 +643,8 @@ class Supervisor:
                 for row in expired:
                     world = row[0]
                     self.queue_world_deletion(world, "supervisor", "expire_unused_world")
-            pending = [row[0] for row in self.db.execute("SELECT world FROM world_deletions")]
+            pending = [row[0] for row in self.db.execute("SELECT world FROM world_deletions")
+                       if row[0] not in self.copying_worlds]
         # Deleting runtime assets can take time. Do not hold the admission/database lock.
         for world in pending:
             self.finish_world_deletion(world)
@@ -819,7 +832,10 @@ class Supervisor:
         log("%s: %s %s" % (actor, action, self.describe(world_id)))
 
     def describe(self, world_id):
-        world = self.row("SELECT id, name FROM worlds WHERE id=?", (world_id,)) if world_id else None
+        # One connection for every thread: read under the lock (an RLock, so callers that hold it
+        # already are unaffected). Log lines call this from worker threads too.
+        with self.lock:
+            world = self.row("SELECT id, name FROM worlds WHERE id=?", (world_id,)) if world_id else None
         return world_source(dict(world)).split(" ", 1)[1] if world else (world_id or "")
 
     def settings(self, data, current=None):
@@ -1610,6 +1626,12 @@ class Supervisor:
                         "reused": True}
             else:
                 raise Denied("Your last run of this tutorial is still ending. Try again in a moment.")
+        # The instance is the player's own world: their running-world limit applies (start()). Said
+        # in their terms here, before an instance is made ("this owner's limit" reads as someone else's).
+        if actor not in self.admins:
+            owned = self.row("SELECT count(*) n FROM runs r JOIN worlds w ON w.id=r.world WHERE w.owner=?", (actor,))["n"]
+            if owned >= self.config["max_running_worlds_per_player"]:
+                raise Denied("You already have a world running. Stop it, or wait until it has stopped, to play a tutorial.")
         world = self.tutorial_instance(actor, "tutorial", tutorial, tutorial["title"], 0, 1)
         return self.start_instance(world, actor, cleanup)
 
@@ -1664,9 +1686,14 @@ class Supervisor:
             current = self.row("SELECT status FROM tutorials WHERE id=?", (tutorial["id"],))
             if not current or current["status"] != "published":
                 raise Denied("This tutorial does not exist or is no longer available")
+            world_id = secrets.token_hex(16)
+            # Journalled before any file is written: a supervisor restart during the copy leaves a
+            # directory that cleanup_unused_worlds() removes (the world row deletes the entry).
+            with self.db:
+                self.db.execute("INSERT OR IGNORE INTO world_deletions VALUES(?)", (world_id,))
             self.copying.add(actor)
+            self.copying_worlds.add(world_id)
             self.tutorial_readers[tutorial["id"]] = self.tutorial_readers.get(tutorial["id"], 0) + 1
-        world_id = secrets.token_hex(16)
         root = Path(self.config["data_directory"]) / "worlds" / world_id
         try:
             try:
@@ -1690,6 +1717,7 @@ class Supervisor:
                                     "creative,persistent,copied_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                     (world_id, actor, name, tutorial["description"], "private", None, self.config["max_players_per_world"],
                                      self.clock(), self.clock(), tutorial["map"], 1, 1, copied_from))
+                    self.db.execute("DELETE FROM world_deletions WHERE world=?", (world_id,))
                     self.audit(actor, "tutorial_copy:" + tutorial["id"], world_id)
             except Exception:
                 # The row is rolled back; its seeded files must not stay behind without it.
@@ -1698,6 +1726,7 @@ class Supervisor:
         finally:
             with self.lock:
                 self.copying.discard(actor)
+                self.copying_worlds.discard(world_id)
         return {"ok": True, "id": world_id, "name": name}
 
     def check_world_limits(self, owner, persistent, ignore=None):
@@ -1713,7 +1742,7 @@ class Supervisor:
         path = Path(self.config["data_directory"]) / "worlds" / world_id / "data/babylon/saves/latest.json"
         try:
             return json.loads(path.read_text())["generation"]
-        except (FileNotFoundError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError):
             return None
 
     def start(self, world, actor=None):
@@ -1913,6 +1942,9 @@ class Supervisor:
             return
         world = self.row("SELECT * FROM worlds WHERE id=?", (run["world"],))
         saved = bool(world) and self.world_policy(world)["stop_saves"]
+        # A tutorial instance is throwaway and never saved: a stop that does not answer at once
+        # ends its process instead of leaving it in error (Play stays refused while it ends).
+        throwaway = bool(world) and not saved and world["kind"] in TUTORIAL_KINDS
         name = self.describe(run["world"])  # Under the lock here; the stop worker reuses it.
         log("Stopping %s (port %s): %s" % (name, run["port"], "saving" if saved else "not saved"))
         self.db.execute("UPDATE runs SET state='stopping',error=NULL WHERE id=?", (run["id"],))
@@ -1924,10 +1956,12 @@ class Supervisor:
 
         def stop():
             try:
-                response = self.driver.stop(run)
+                response = self.driver.stop(run, timeout=TUTORIAL_STOP_TIMEOUT if throwaway else STOP_TIMEOUT)
                 if not response.get("ok"):
                     raise Denied("Final save failed; child has been kept alive")
             except Exception as error:
+                if throwaway and self.end_throwaway_instance(run, name, error):
+                    return
                 log("Stopping %s failed, process retained: %s" % (name, error))
                 with self.lock, self.db:
                     self.db.execute("UPDATE runs SET state='error',error=? WHERE id=?",
@@ -1936,6 +1970,18 @@ class Supervisor:
                 with self.lock:
                     self.stop_workers.discard(run["id"])
         threading.Thread(target=stop, daemon=True).start()
+
+    def end_throwaway_instance(self, run, name, error):
+        """A tutorial instance whose stop failed is killed and deleted (on_run_exited), not kept in
+        error. Returns False when it could not be killed (it then goes to error as usual)."""
+        log("Stopping %s failed (%s); ending the tutorial instance" % (name, error))
+        try:
+            self.driver.kill(run)
+        except Exception as kill_error:
+            log("Ending %s failed: %s" % (name, kill_error))
+            return False
+        self.on_run_exited(run)
+        return True
 
     def startup_timeout(self, run):
         """Seconds a starting child may take: station maps (tg rounds, several levels) load far longer."""
@@ -2154,8 +2200,10 @@ def load_config(path):
     return config
 
 
-# Actions a world child may call with its run id and secret. serve() authenticates each of them with
-# Supervisor.child() before the handler runs; every other action needs the lobby secret instead.
+# Actions a world child may call with its run id and secret. serve() does not authenticate them:
+# each handler authenticates itself (Supervisor.child() under the service lock), and
+# test_contracts checks that every entry rejects bad credentials. Every other action needs the
+# lobby secret instead.
 CHILD_ACTIONS = {
     "redeem": lambda service, data: service.redeem(data.get("run"), data.get("secret", ""), data.get("ticket", ""), data.get("actor", ""),
                                                    data.get("_received"), data.get("wait_seconds")),

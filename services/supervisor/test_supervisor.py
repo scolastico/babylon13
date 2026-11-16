@@ -43,7 +43,10 @@ class FakeDriver:
         self.killed = getattr(self, "killed", []) + [run["id"]]
         self.runs.pop(run["id"], None)
 
-    def stop(self, run):
+    def stop(self, run, timeout=None):
+        self.stop_timeouts = getattr(self, "stop_timeouts", []) + [timeout]
+        if getattr(self, "hang_stop", False):
+            raise TimeoutError("timed out")
         if self.fail_save:
             return {"error": "disk full"}
         del self.runs[run["id"]]
@@ -87,6 +90,13 @@ class Policies(unittest.TestCase):
 
     def create(self, actor="owner", **kwargs):
         return self.s.dispatch(actor, "create", dict(name="World", visibility="public", **kwargs))["id"]
+
+    def test_audit_queries_use_the_index(self):
+        # Review C-M8: the list and tick queries on audit must not scan the whole (unpruned) table.
+        for sql, args in (("SELECT 1 FROM audit WHERE world=? AND action='round_ended' AND at>=?", ("w", 0)),
+                          ("SELECT actor FROM audit WHERE action='admit' AND world=? AND at>?", ("w", 0))):
+            plan = " ".join(str(tuple(r)) for r in self.s.db.execute("EXPLAIN QUERY PLAN " + sql, args))
+            self.assertIn("audit_world", plan)
 
     def start(self, world, actor="owner", **kwargs):
         self.assertTrue(self.s.dispatch(actor, "join", dict(world=world, **kwargs))["pending"])

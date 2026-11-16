@@ -640,5 +640,15 @@ class Companions(unittest.TestCase):
             self.assertNotIn("\ttry", body)
 
 
+class LobbyWaits(unittest.TestCase):
+    def test_lobby_waits_longer_than_the_station_startup_timeout(self):
+        # Review C-M6: the lobby's join poll outlasts the supervisor's startup timeout.
+        from constants import DEFAULTS
+        lobby = (DM.parent / "lobby/lobby.dm").read_text(encoding="utf-8")
+        wait = int(re.search(r"^#define LOBBY_JOIN_WAIT (\d+)$", lobby, re.M).group(1))
+        self.assertGreater(wait / 10, DEFAULTS["station_startup_timeout_seconds"])
+        self.assertIn("world.time + LOBBY_JOIN_WAIT", lobby)
+
+
 if __name__ == "__main__":
     unittest.main()

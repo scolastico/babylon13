@@ -181,6 +181,10 @@ class Checkpoints:
             return
         keep = {p["generation"] for p in history["checkpoints"][:self.keep]} | {latest}
         for generation in self.directories(root):
+            if (root / generation / TUTORIAL_SNAPSHOT_MARKER).exists():
+                # Tutorial snapshots: only sweep_tutorial_snapshots removes them (by age), because
+                # the supervisor may be copying one while an autosave commits a newer generation.
+                continue
             if generation not in keep and order(generation) < order(latest):
                 self.remove(root, generation)
         self.maintained[world] = (latest, self.keep)

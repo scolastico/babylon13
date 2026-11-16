@@ -204,6 +204,10 @@ var/global/list/lobby_config
 /// One supervisor request in the background: world.Export has no timeout of its own.
 /// After this long (deciseconds) a request that never answered no longer blocks new ones.
 #define LOBBY_STALLED_CAP 3000
+/// Deciseconds the lobby keeps asking for a starting world's ticket: longer than the supervisor's
+/// station_startup_timeout_seconds (constants.py, 600 s), so the supervisor's own outcome (ready or
+/// a startup error) reaches the player instead of "taking longer than expected" (test_contracts).
+#define LOBBY_JOIN_WAIT 6600
 
 /datum/lobby_request
 	var/url
@@ -905,7 +909,7 @@ var/global/list/lobby_config
 /// A dialog's request is answered after the first reply; later problems become the page notice.
 /// A tutorial passes its own loading stage, and how it is tried again (retry, see lobby_retry_notice).
 /mob/lobby/proc/join_world(id, world_name, list/join, request = 0, stage = "Starting world and restoring its checkpoint...", retry = "join")
-	var/deadline = world.time + 3600
+	var/deadline = world.time + LOBBY_JOIN_WAIT
 	while(client && world.time < deadline)
 		var/list/result = api("join", join)
 		if(result["error"])

@@ -67,6 +67,27 @@ class Shutdown(unittest.TestCase):
                 self.db.execute('DELETE FROM runs')
         stop_worlds(self.config, request=stopped, sleep=initialized)
 
+    def test_running_world_is_stopped_while_another_still_starts(self):
+        # Review C-M3: a running world's final save does not wait for another world's start.
+        self.world('a', 'alice')
+        self.world('b', 'bob')
+        with self.db:
+            self.db.execute("UPDATE runs SET state='starting' WHERE world='b'")
+        requests = []
+        def stop(actor, world):
+            requests.append(world)
+            with self.db:
+                self.db.execute("DELETE FROM runs WHERE world=?", (world,))
+        passes = []
+        def tick(_):
+            passes.append(list(requests))
+            if len(passes) == 2:
+                with self.db:
+                    self.db.execute("UPDATE runs SET state='running' WHERE world='b'")
+        stop_worlds(self.config, request=stop, sleep=tick)
+        self.assertEqual(passes[0], ['a'])
+        self.assertEqual(requests, ['a', 'b'])
+
     def test_timeout_does_not_remove_or_kill_world(self):
         self.world('a', 'alice')
         with self.assertRaises(TimeoutError):

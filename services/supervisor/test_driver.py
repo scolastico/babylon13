@@ -189,6 +189,15 @@ class BabylonPrepare(DriverFixture):
         fresh.assert_called_once()
         self.assertIsNone(self.driver.restore_source(world))
 
+    def test_damaged_latest_pointer_is_a_clear_denial(self):
+        # Review C-M5: a damaged latest.json names what the owner can do, not a generic failure.
+        saves = self.root() / "data/babylon/saves"
+        saves.mkdir(parents=True)
+        for text in ("{", "[]", "{}", '{"generation": 5}'):
+            (saves / "latest.json").write_text(text)
+            with self.assertRaisesRegex(Denied, "checkpoint pointer is damaged|Invalid checkpoint generation"):
+                self.driver.restore_source(self.world())
+
     def test_persistent_babylon_restores_latest(self):
         self.save_generation({"save_count": 1}, ["map.dmm"])
         self.driver.prepare(dict(self.world(), map="babylon"), RUN)
