@@ -1,10 +1,12 @@
 """Focused native handoff matrix; no DreamSeeker and no existing player data.
 
-Compile babylon-test.dme and babylon-station-test.dme first. Run from a source tree with
-its native/runtime assets (like smoke_native.py). --client-endpoint models winget's
+Compile the selected maps' babylon-test.dme and/or babylon-station-test.dme first.
+Run from a source tree with its native/runtime assets (like smoke_native.py). --client-endpoint models winget's
 server IP:port, not the player's IP. The routed child host must be reachable here.
-This checks real listeners, the actual DM router and DM HTTP admission/replay; it does
-not claim to exercise client.New, DreamSeeker skin replacement or game-window readiness.
+--maps accepts a focused catalog matrix; station maps also check the loaded map
+name and real late-join points. This checks real listeners, the actual DM router
+and DM HTTP admission/replay. It does not exercise client.New, DreamSeeker skin
+replacement or game-window readiness.
 """
 import argparse
 import json
@@ -19,6 +21,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import parse_qs, urlsplit
 
+from catalog import load_catalog
 from protocol import topic
 from smoke_native import dm_entries
 from supervisor import Driver, Supervisor, serve
@@ -37,15 +40,19 @@ def main():
     parser.add_argument('--api-port', type=int, default=15560)
     parser.add_argument('--child-port', type=int, default=15500)
     parser.add_argument('--client-endpoint', default='127.0.0.1:15561')
+    parser.add_argument('--maps', nargs='+', default=['babylon', 'creative_plane_s', 'creative_plane_m',
+                                                   'creative_plane_l', 'metastation'])
     args = parser.parse_args()
     data = Path(args.data_directory).resolve()
     template = Path(args.template_directory).resolve()
     if data.exists():
         raise RuntimeError('Use a new empty test data directory')
-    for build in ('babylon-test', 'babylon-station-test'):
+    catalog = load_catalog(template / '_maps/babylon/catalog.json')
+    builds = {catalog[map_id]['build'] for map_id in args.maps}
+    for build in ('babylon-test' if b == 'babylon' else 'babylon-station-test' for b in builds):
         for ext in ('dmb', 'rsc'):
             if not (template / f'{build}.{ext}').is_file():
-                raise RuntimeError('Compile both test builds first')
+                raise RuntimeError('Compile %s first' % build)
     for port in (args.api_port, args.child_port):
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', port))
@@ -111,7 +118,7 @@ def main():
             time.sleep(.05)
 
     report = []
-    for map_id in ('babylon', 'creative_plane_s', 'creative_plane_m', 'creative_plane_l', 'metastation'):
+    for map_id in args.maps:
         world = api('create', dict(name='Handoff ' + map_id, map=map_id, visibility='private',
                                    persistent=False, creative=map_id.startswith('creative')))['id']
         try:
@@ -128,6 +135,7 @@ def main():
             run = current(world)
             status = topic(run['port'], run['secret'], 'status')
             assert status['ready'] and status['run'] == run['id'] and status['world'] == world
+            assert status.get('map') == map_id and status.get('build') == catalog[map_id]['build']
             assert service.driver.alive(run)
             result = dict(map=map_id, ready_seconds=round(time.monotonic() - started, 1))
             for phase in ('fresh', 'running'):
@@ -147,6 +155,26 @@ def main():
                 assert not redeem(run, token).get('ok'), 'One-use ticket replay admitted'
                 result[phase + '_dm_admission'] = True
                 result['endpoint'] = routed.split('?')[0]
+            if catalog[map_id]['group'] == 'station':
+                def station_values(proc):
+                    reply = topic(run['port'], run['secret'], 'call', dict(
+                        target='session', proc=proc, args=[]), timeout=30)
+                    assert reply.get('ok'), 'Station native probe failed'
+                    return dm_entries(reply['result'])
+                info = station_values('test_station_info')
+                source = json.loads((template / '_maps' / catalog[map_id]['map_json']).read_text())
+                assert info['map_name'] == source['map_name'], (map_id, info['map_name'])
+                overrides = station_values('test_station_arrival_overrides')
+                print(json.dumps(dict(map=map_id, arrival_overrides=overrides)), flush=True)
+                assert all(overrides.values()), (map_id, overrides)
+                latejoin = station_values('test_station_latejoin')
+                assert all(latejoin.values()), (map_id, latejoin)
+                result['map_name'] = info['map_name']
+                result['latejoin_spawns'] = info['latejoin_spawns']
+                result['latejoin_source'] = info['latejoin_source']
+                result['latejoin_checks'] = latejoin
+                result['arrival_override_checks'] = overrides
+                result['levels'] = info['levels']
             report.append(result)
             print(json.dumps(result), flush=True)
         finally:

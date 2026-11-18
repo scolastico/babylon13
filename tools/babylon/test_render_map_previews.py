@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import struct
 import sys
+import tempfile
+from unittest.mock import patch
 import unittest
 import zlib
 
@@ -107,21 +109,78 @@ class Parser(unittest.TestCase):
         self.assertIn(255, alphas)
 
 
+class MapInputs(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.patch = patch.object(previews, "ROOT", self.root)
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+        (self.root / "_maps/maps").mkdir(parents=True)
+        (self.root / "_maps/maps/a.dmm").write_text(CLASSIC)
+        # Same dictionary key, different meaning; second file is the busiest deck.
+        (self.root / "_maps/maps/b.dmm").write_text(
+            '\"a\" = (/turf/open/floor/iron,/area/station/medical)\n(1,1,1) = {\"\naaa\naaa\n\"}\n')
+        self.entry = {"map_json": "test.json", "id": "test"}
+        self.config(["a.dmm", "b.dmm"])
+
+    def config(self, files):
+        (self.root / "_maps/test.json").write_text(json.dumps({"map_path": "maps", "map_file": files}))
+
+    def test_all_files_and_levels_participate_without_dictionary_collisions(self):
+        keys, levels = previews.load_map(self.entry)
+        self.assertEqual(sorted(levels), [1, 2, 3])
+        self.assertEqual(keys[levels[1][(1, 1)]], ["/turf/open/space/basic", "/area/space"])
+        self.assertEqual(keys[levels[3][(1, 1)]], ["/turf/open/floor/iron", "/area/station/medical"])
+        self.assertEqual(previews.busiest_level(keys, levels), 3)
+        image = previews.png(previews.render(keys, levels[3]))
+        self.assertEqual(image, previews.png(previews.render(*self.main_level())))
+
+    def main_level(self):
+        keys, levels = previews.load_map(self.entry)
+        return keys, levels[previews.busiest_level(keys, levels)]
+
+    def test_string_map_file_and_case_sensitive_paths(self):
+        self.config("a.dmm")
+        self.assertEqual(previews.map_files(self.entry), [self.root / "_maps/maps/a.dmm"])
+        self.config("A.dmm")
+        with self.assertRaises(previews.MapError):
+            previews.map_files(self.entry)
+
+    def test_invalid_sources_fail_instead_of_skipping_or_using_first_file(self):
+        for files in ([], None, ["a.dmm", "missing.dmm"], ["a.dmm", 3], "../../../outside.dmm"):
+            with self.subTest(files=files):
+                self.config(files)
+                with self.assertRaises(previews.MapError):
+                    previews.load_map(self.entry)
+        (self.root / "_maps/test.json").unlink()
+        with self.assertRaises(previews.MapError):
+            previews.load_map(self.entry)
+
+
 class ShippedPreviews(unittest.TestCase):
     def test_every_catalog_preview_exists(self):
         catalog = json.loads((ROOT / "_maps/babylon/catalog.json").read_text(encoding="utf-8"))
         for entry in catalog["maps"]:
-            if entry["preview"] is None:
-                continue
+            self.assertIsNotNone(entry["preview"], entry["id"])
             with self.subTest(entry["id"]):
                 path = ROOT / entry["preview"]
                 self.assertTrue(path.is_file())
                 self.assertEqual(decode_png(path.read_bytes())[:2], (previews.WIDTH, previews.HEIGHT))
 
+    def test_multiz_badges_match_actual_map_levels(self):
+        catalog = json.loads((ROOT / "_maps/babylon/catalog.json").read_text())
+        for entry in catalog["maps"]:
+            if entry["build"] == "station":
+                with self.subTest(entry["id"]):
+                    _, levels = previews.load_map(entry)
+                    self.assertEqual(len(levels) > 1, entry["multiz"])
+
     def test_every_station_map_with_a_map_file_has_a_preview(self):
         catalog = json.loads((ROOT / "_maps/babylon/catalog.json").read_text(encoding="utf-8"))
         for entry in catalog["maps"]:
-            if entry["build"] == "station" and previews.map_file(entry) is not None:
+            if entry["build"] == "station" and previews.map_files(entry):
                 self.assertEqual(entry["preview"], "_maps/babylon/previews/%s.png" % entry["id"])
 
 
