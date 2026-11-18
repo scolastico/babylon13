@@ -469,16 +469,37 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 /obj/item/babylon_test_unsaved/babylon_skip_save()
 	return TRUE
 
+/// The test owns the release, so scheduler delays cannot race a timed fake completion.
+/datum/babylon_test_save_wait
+	var/returned = FALSE
+	var/outcome
+
+/datum/babylon_test_save_wait/proc/wait_for_idle(datum/babylon_save/save)
+	set waitfor = FALSE
+	outcome = save.await_save_idle(30 SECONDS)
+	returned = TRUE
+
+/datum/babylon_test_save_wait/proc/wait_for_stop(datum/babylon_save/save)
+	set waitfor = FALSE
+	outcome = save.managed_stop()
+	returned = TRUE
+
+/datum/babylon_test_save_wait/proc/finished()
+	return returned
+
 /// Save controls shared by both builds: a stop waits for a save in progress, the pause is
 /// announced with an estimate, the autosave interval, and atoms marked babylon_skip_save().
 /datum/babylon_save/proc/test_save_controls()
 	var/list/result = list()
 	var/real_busy = busy
 	busy = TRUE
-	spawn(2 SECONDS)
-		busy = FALSE
-	var/started = world.time
-	result["stop_waits_for_a_running_save"] = await_save_idle(30 SECONDS) && world.time - started >= 2 SECONDS
+	var/datum/babylon_test_save_wait/idle_wait = new
+	idle_wait.wait_for_idle(src)
+	var/blocked_while_busy = !idle_wait.returned
+	busy = FALSE
+	babylon_tutorial_test_wait_for(CALLBACK(idle_wait, TYPE_PROC_REF(/datum/babylon_test_save_wait, finished)))
+	result["stop_waits_for_a_running_save"] = blocked_while_busy && idle_wait.outcome
+	qdel(idle_wait)
 	busy = TRUE
 	result["wait_is_bounded"] = !await_save_idle(1 SECONDS)
 	busy = real_busy
@@ -487,11 +508,14 @@ GLOBAL_DATUM_INIT(babylon_debug, /datum/babylon_debug, new)
 	var/real_last_stop = last_stop_result
 	stop_pending = TRUE
 	last_stop_result = list("error" = "first stop failed (test)")
-	spawn(2 SECONDS)
-		stop_pending = FALSE
-	var/list/second = managed_stop()
-	result["second_stop_gets_first_outcome"] = second["error"] == "first stop failed (test)" && !draining
+	var/datum/babylon_test_save_wait/stop_wait = new
+	stop_wait.wait_for_stop(src)
+	var/blocked_while_stopping = !stop_wait.returned
 	stop_pending = FALSE
+	babylon_tutorial_test_wait_for(CALLBACK(stop_wait, TYPE_PROC_REF(/datum/babylon_test_save_wait, finished)))
+	var/list/second = stop_wait.outcome
+	result["second_stop_gets_first_outcome"] = blocked_while_stopping && second["error"] == "first stop failed (test)" && !draining
+	qdel(stop_wait)
 	last_stop_result = real_last_stop
 	result["pause_estimate"] = estimated_pause_seconds() >= 1
 #ifdef BABYLON_STATION

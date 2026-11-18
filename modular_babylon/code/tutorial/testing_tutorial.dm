@@ -6,17 +6,32 @@
 	/// Saved test decks, separate from the map's machinery, air and traffic.
 	var/tutorial_test_z
 	var/tutorial_test_level_building = FALSE
+	/// A failed constructor is terminal for this fixture; later callers report the same cause.
+	var/tutorial_test_level_error
 	var/list/tutorial_test_dirty_rooms = list()
 
 /// Both decks are managed and saved: snapshot and multi-deck pipe tests exercise real persistence.
 /// Separate sealed rooms keep one test's gas actions out of the next test's fixture.
 /datum/babylon_save/proc/tutorial_test_level()
 	UNTIL(!tutorial_test_level_building)
+	if(tutorial_test_level_error)
+		CRASH(tutorial_test_level_error)
 	if(tutorial_test_z)
 		return tutorial_test_z
 	if(world.maxx < 143 || world.maxy < 41)
 		CRASH("Tutorial test fixtures require at least 143 by 41 tiles")
 	tutorial_test_level_building = TRUE
+	try
+		tutorial_test_z = tutorial_test_build_level()
+	catch(var/exception/error)
+		tutorial_test_level_error = "Tutorial fixture construction failed: [error] ([error.file]:[error.line])"
+	tutorial_test_level_building = FALSE
+	if(tutorial_test_level_error)
+		CRASH(tutorial_test_level_error)
+	return tutorial_test_z
+
+/// Kept behind the constructor lock, including yields and all validation failures.
+/datum/babylon_save/proc/tutorial_test_build_level()
 	// Explicit traits serialize as an object, as the real restore contract requires.
 	// Self-looping also keeps these decks out of the live map's cross-linked space pool.
 	var/datum/space_level/lower = SSmapping.add_new_zlevel("Tutorial test fixtures", list(ZTRAIT_LINKAGE = SELFLOOPING))
@@ -37,9 +52,15 @@
 					tile = tile.ChangeTurf(wall_pass ? /turf/closed/wall : /turf/open/floor/iron, null, CHANGETURF_IGNORE_AIR | CHANGETURF_NO_AREA_CHANGE)
 					tile.change_area(get_area(tile), room)
 					CHECK_TICK
-	tutorial_test_z = lower.z_value
-	tutorial_test_level_building = FALSE
-	return tutorial_test_z
+	return lower.z_value
+
+/// Exercises the failure path without allocating decks or touching another test's fixture.
+/datum/babylon_save/test_failed_tutorial_fixture
+	var/build_calls = 0
+
+/datum/babylon_save/test_failed_tutorial_fixture/tutorial_test_build_level()
+	build_calls++
+	CRASH("deliberate tutorial fixture construction failure")
 
 /// Restore this test's rooms after its objects are gone, including air changed by gas actions.
 /datum/babylon_save/proc/tutorial_test_reset_rooms()
@@ -86,7 +107,7 @@
 			machines += "[machine.type] at [machine.x],[machine.y],[machine.z]"
 		CRASH("Tutorial fixture is not ready: turf=[base?.type] z=[base?.z] expected=[tutorial_test_z] saved=[json_encode(persisted_levels())] area=[room?.type] requires_power=[room?.requires_power] gravity=[room?.default_gravity] pressure=[base?.air?.return_pressure()] oxygen=[base?.air?.has_gas(/datum/gas/oxygen)] machines=[json_encode(machines)]")
 	return base
-#else
+#elif defined(BABYLON_DRONE)
 	// The drone build has one synthetic saved deck and no ambient station machinery.
 	var/turf/origin = respawn_turf || locate(round(world.maxx / 2), round(world.maxy / 2), station_z || 1)
 	return locate(clamp(origin.x - 6 + offset, 2, world.maxx - 12), clamp(origin.y - 6, 2, world.maxy - 12), origin.z)
@@ -121,6 +142,26 @@
 	var/list/made = list()
 	var/turf/base = tutorial_test_base()
 	try
+#ifdef BABYLON_STATION
+		var/datum/babylon_save/test_failed_tutorial_fixture/failed_fixture = new
+		var/first_error
+		try
+			failed_fixture.tutorial_test_level()
+		catch(var/exception/error)
+			first_error = "[error]"
+		result["fixture_construction_reports_failure"] = !!findtext(first_error, "deliberate tutorial fixture construction failure")
+		result["fixture_failure_releases_build_lock"] = !failed_fixture.tutorial_test_level_building
+		var/next_error
+		// A regressed lock must fail this assertion without hanging the test's second call.
+		if(!failed_fixture.tutorial_test_level_building)
+			try
+				failed_fixture.tutorial_test_level()
+			catch(var/exception/error)
+				next_error = "[error]"
+		result["fixture_failure_is_reported_to_later_callers"] = !!first_error && next_error == first_error
+		result["failed_fixture_is_not_built_again"] = failed_fixture.build_calls == 1
+		qdel(failed_fixture)
+#endif
 		var/turf/zone_tile = locate(base.x + 2, base.y, base.z)
 		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, base, "start", list(), made)
 		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, locate(base.x + 4, base.y + 2, base.z), "flow_patient", list("npc_name" = "Patient", "spawn_at_start" = 1), made)

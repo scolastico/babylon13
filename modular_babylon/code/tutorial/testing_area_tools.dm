@@ -6,12 +6,19 @@
 /datum/babylon_save/proc/area_test_rect()
 #ifdef BABYLON_STATION
 	return list(4, 26, 27, 33, tutorial_test_level())
-#else
+#elif defined(BABYLON_DRONE)
 	var/turf/origin = respawn_turf || locate(round(world.maxx / 2), round(world.maxy / 2), station_z || 1)
 	var/x1 = clamp(origin.x - 12, 2, world.maxx - 25)
 	var/y1 = clamp(origin.y - 10, 2, world.maxy - 9)
 	return list(x1, y1, x1 + 23, y1 + 7, origin.z)
 #endif
+
+/// Wait for the air subsystem's real work, under the native harness watchdog.
+/proc/babylon_area_test_pipe_ready(obj/machinery/atmospherics/pipe/pipe)
+	return !pipe || !!pipe.parent
+
+/proc/babylon_area_test_pipenets_ready(obj/machinery/atmospherics/pipe/pipe, obj/machinery/atmospherics/components/unary/vent_pump/vent, obj/machinery/atmospherics/pipe/deck_pipe, obj/machinery/atmospherics/pipe/riser)
+	return !length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pipe?.parent && vent.parents[1] && (!deck_pipe || (riser?.parent && deck_pipe.parent))
 
 /// A test session without the 2 second limit (a fresh one for every name).
 /proc/babylon_area_test_session(name)
@@ -431,7 +438,14 @@
 		made += riser
 		var/obj/machinery/atmospherics/pipe/multiz/scrubbers/visible/deck_pipe
 		var/datum/pipeline/deck_net_before
-		for(var/other_z in list(z + 1, z - 1))
+#ifdef BABYLON_STATION
+		if(z != tutorial_test_z || z + 1 > world.maxz)
+			CRASH("Area multiz test requires its isolated upper fixture deck")
+		var/list/candidate_decks = list(tutorial_test_z + 1)
+#elif defined(BABYLON_DRONE)
+		var/list/candidate_decks = list(z + 1, z - 1)
+#endif
+		for(var/other_z in candidate_decks)
 			var/turf/deck_tile = locate(x1 + 9, y1 + 3, other_z)
 			if(!deck_tile || (deck_tile.turf_flags & RESERVATION_TURF))
 				continue
@@ -442,11 +456,13 @@
 			made += deck_pipe
 			deck_pipe.on_construction(null, deck_pipe.pipe_color, deck_pipe.piping_layer)
 			break
+#ifdef BABYLON_STATION
+		if(!deck_pipe || deck_pipe.z != tutorial_test_z + 1)
+			CRASH("Area multiz test could not build on its isolated upper fixture deck")
+		result["multiz_uses_fixture_upper_deck"] = deck_pipe.z == tutorial_test_z + 1
+#endif
 		result["multiz_case_built"] = !!deck_pipe
-		for(var/wait in 1 to 100)
-			if(!deck_pipe || deck_pipe.parent)
-				break
-			sleep(1)
+		babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_area_test_pipe_ready), deck_pipe))
 		deck_net_before = deck_pipe?.parent
 		result["multiz_deck_pipe_has_pipenet"] = !!deck_net_before
 		var/failures_before = GLOB.babylon_area_link_failures
@@ -460,10 +476,7 @@
 		var/obj/machinery/atmospherics/pipe/multiz/pasted_riser = locate() in locate(x1 + 9, y1 + 3, z)
 		result["paste_cable_in_powernet"] = !!pasted_cable?.powernet
 		// One live pipenet across the paste edge once the air subsystem rebuilt it.
-		for(var/wait in 1 to 100)
-			if(!length(SSair.rebuild_queue) && !length(SSair.expansion_queue) && pasted_pipe?.parent && vent.parents[1] && (!deck_pipe || (pasted_riser?.parent && deck_pipe.parent)))
-				break
-			sleep(1)
+		babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_area_test_pipenets_ready), pasted_pipe, vent, deck_pipe, pasted_riser))
 		var/datum/pipeline/net = pasted_pipe?.parent
 		result["paste_pipe_in_pipenet"] = !!net && !QDELETED(net) && (net in SSair.networks)
 		result["paste_edge_one_pipenet"] = !!net && outside.parent == net
