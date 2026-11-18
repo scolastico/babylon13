@@ -475,7 +475,9 @@ Audit findings and every affected occurrence fixed:
 - Toasts: the fixed container is bounded by both viewport edges and its text
   can shrink/wrap; long errors no longer extend beyond the screen. A stack of
   three long messages scrolls within half the viewport height. Padding leaves
-  room for toast shadows inside that scrolling container. Loading,
+  room for toast shadows inside that scrolling container. The shared root is
+  hidden when empty so its padding cannot intercept clicks on dialog actions,
+  including after the final dismissal, timeout or overlay cleanup. Loading,
   intentional handoff and lost-connection screens clear stale toasts alongside
   the modal, as `lobbyHideOverlays` promises.
 
@@ -500,7 +502,7 @@ NODE_PATH="$PWD/data/babylon-supervisor/lobby-layout/browser/node_modules" \
 
 An existing Chromium executable can be supplied with `CHROMIUM_EXECUTABLE`,
 for example the Playwright Chromium path on the test host.
-The final run passed 197 checks at widths 320, 375, 600, 640, 641, 768 and 1920 px
+The final run passed 208 checks at widths 320, 375, 600, 640, 641, 768 and 1920 px
 (740 px tall below desktop; desktop 1920×1080). Checks cover neither/Babylon/
 Creative Plane S/M/L selection, equal preview/title/description tops and card
 heights, unequal help/description lengths, the selected background and spacing,
@@ -517,6 +519,11 @@ stacks, and the DOM test caught stale toasts surviving overlay cleanup. Review
 guards also reproduced lost Stations columns at 600 px, missing shadow space
 and the colliding Creative Plane heading/button IDs before their fixes. The
 spacing assertion requires at least 12 px, matching the intended padding.
+At 320/375 px, lower-edge hit tests and actual mouse clicks send real create
+requests before any toast and after the final toast dismissal; these four
+checks reproduced the invisible padded-root blocker before the `:empty` fix.
+Long-message stack scrolling and actual dismiss buttons are exercised at every
+width so hiding an empty root does not hide active notifications.
 
 Browser screenshots were inspected at desktop and narrow widths, including
 `desktop-map-unselected.png`, `desktop-map-selected.png`, `320-map.png`,

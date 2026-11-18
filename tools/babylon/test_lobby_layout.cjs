@@ -142,6 +142,19 @@ async function main() {
       }
       assert.ok(Math.abs(geometry[0].card.height - geometry[1].card.height) <= 1, 'equal card heights');
     };
+    const clickLowerSubmit = async () => {
+      const point = await page.locator('#modal-submit').evaluate(el => {
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = Math.min(r.bottom - 3, innerHeight - 3);
+        const hit = document.elementFromPoint(x, y);
+        return { x, y, hit: hit && hit.closest('button') && hit.closest('button').id, request: lobbyRequestCounter };
+      });
+      assert.equal(point.hit, 'modal-submit', 'lower action edge is reachable without an invisible overlay');
+      await page.mouse.click(point.x, point.y);
+      assert.equal(await page.evaluate(() => lobbyRequestCounter), point.request + 1, 'the mouse click sends the real create request');
+      assert.match(await page.evaluate(() => window.lastNavigation), /action=create;/);
+      await page.evaluate(() => { lobbyModal.busy = false; lobbyRenderModal(); });
+    };
 
     await page.setViewportSize({ width: 1920, height: 1080 });
     await render();
@@ -288,6 +301,7 @@ async function main() {
         lobbyWizardStep('details');
       });
       await check(width + ' details and chosen map', () => contained('.modal'));
+      if (width <= 375) await check(width + ' empty initial toast root cannot block lower dialog action', clickLowerSubmit);
       if (width <= 375) await check(width + ' details footer leaves room for the form', async () => {
         const height = await page.locator('.modal-foot').evaluate(el => el.getBoundingClientRect().height);
         assert.ok(height < 160, 'four actions fit in two rows; footer height ' + height);
@@ -352,6 +366,26 @@ async function main() {
         const box = await page.locator('.toasts').boundingBox();
         assert.ok(box.y >= 0 && box.height <= page.viewportSize().height / 2, JSON.stringify(box));
       });
+      await check(width + ' long toast stack scrolls and dismisses', async () => {
+        const scrollable = await page.locator('.toasts').evaluate(el => {
+          el.scrollTop = el.scrollHeight;
+          return el.scrollTop > 0;
+        });
+        assert.ok(scrollable, 'all long messages remain reachable');
+        await page.locator('.toast-close').last().click();
+        assert.equal(await page.locator('.toast').count(), 2);
+        await page.locator('.toast-close').last().click();
+        await page.locator('.toast-close').last().click();
+        assert.equal(await page.locator('.toast').count(), 0);
+      });
+      if (width <= 375) {
+        await page.evaluate(() => {
+          lobbyOpenCreate();
+          lobbyPickSize(document.querySelector('[data-map="creative_plane_m"]'));
+          lobbyWizardStep('details');
+        });
+        await check(width + ' dismissed last toast cannot block lower dialog action', clickLowerSubmit);
+      }
       await page.evaluate(() => showLobbyLoading(fixture.state.worlds[0].name, fixture.state.worlds[0].description));
       await check(width + ' loading long world name', () => contained('#action-loading'));
       await page.evaluate(() => { document.querySelector('#action-loading').style.display = 'none'; document.querySelector('#connection-lost').style.display = 'block'; });
