@@ -243,6 +243,7 @@ var/global/babylon_byond_1686_slot_pad_station_test_16
 var/global/babylon_byond_1686_slot_pad_station_test_17
 var/global/babylon_byond_1686_slot_pad_station_test_18
 var/global/babylon_byond_1686_slot_pad_station_test_19
+var/global/babylon_byond_1686_slot_pad_station_test_20
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 var/global/babylon_byond_1686_slot_pad_station_1

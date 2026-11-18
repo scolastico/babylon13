@@ -266,10 +266,11 @@ change can break one build and not the other three. Treat a build that shows it 
 possibly miscompiled, not as noise: the slot is used for code generation too, and a
 clean build only means that whichever variable holds the slot now gives no diagnostic.
 A local that really is never read is an ordinary warning, not the quirk.
-It can also miscompile with no diagnostic at all: in the final review (H2) a clean
-`babylon-station-test.dme` build failed one tutorial test (an NPC's "All doors" walk)
-three times in a row, and the same code passed once a padding global moved the slot. A
-test that fails for no visible reason after an unrelated change is worth one pad move.
+Investigate a failing runtime test and prove its cause independently of this compiler
+workaround. The earlier "All doors" NPC test failure was traced to live-map AI turrets
+adding stamina damage to the walker, together with timing-dependent completion checks.
+Tutorial and area-tool tests now use isolated fixtures and exact completion conditions.
+Moving a padding global until a runtime test passes does not establish a fix.
 
 Recipe: add or remove one padding global (`var/global/babylon_byond_1686_slot_pad_<n>`)
 in the block for the affected build at the end of `modular_babylon/code/world_flags.dm`,

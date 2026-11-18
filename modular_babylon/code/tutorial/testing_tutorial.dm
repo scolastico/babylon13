@@ -1,5 +1,61 @@
 // Tutorial tests (both test builds; services/supervisor/smoke_native.py and smoke_station.py).
-// Each test builds its tutorial next to the world's respawn point and removes it again.
+// Each test builds its tutorial in a controlled fixture and removes it again.
+
+#ifdef BABYLON_STATION
+/datum/babylon_save
+	/// Saved test decks, separate from the map's machinery, air and traffic.
+	var/tutorial_test_z
+	var/tutorial_test_level_building = FALSE
+	var/list/tutorial_test_dirty_rooms = list()
+
+/// Both decks are managed and saved: snapshot and multi-deck pipe tests exercise real persistence.
+/// Separate sealed rooms keep one test's gas actions out of the next test's fixture.
+/datum/babylon_save/proc/tutorial_test_level()
+	UNTIL(!tutorial_test_level_building)
+	if(tutorial_test_z)
+		return tutorial_test_z
+	if(world.maxx < 143 || world.maxy < 41)
+		CRASH("Tutorial test fixtures require at least 143 by 41 tiles")
+	tutorial_test_level_building = TRUE
+	var/datum/space_level/lower = SSmapping.add_new_zlevel("Tutorial test fixtures")
+	var/datum/space_level/upper = SSmapping.add_new_zlevel("Tutorial test fixtures upper")
+	if(upper.z_value != lower.z_value + 1)
+		CRASH("Tutorial test fixtures require adjacent controlled decks")
+	for(var/test_z in list(lower.z_value, upper.z_value))
+		var/area/misc/testroom/room = new
+		// Fill the entire rectangle with solid turf before carving its rooms. Otherwise
+		// unbuilt interior space tiles are vacuum sinks during CHECK_TICK, even behind walls.
+		for(var/wall_pass in list(TRUE, FALSE))
+			for(var/x in 2 to 142)
+				for(var/y in 2 to 40)
+					var/perimeter = x == 2 || x == 142 || y == 2 || y == 18 || y == 24 || y == 40 || (y < 18 && (x - 2) % 14 == 0)
+					if(!wall_pass && perimeter)
+						continue
+					var/turf/tile = locate(x, y, test_z)
+					tile = tile.ChangeTurf(wall_pass ? /turf/closed/wall : /turf/open/floor/iron, null, CHANGETURF_IGNORE_AIR | CHANGETURF_NO_AREA_CHANGE)
+					tile.change_area(get_area(tile), room)
+					CHECK_TICK
+	tutorial_test_z = lower.z_value
+	tutorial_test_level_building = FALSE
+	return tutorial_test_z
+
+/// Restore this test's rooms after its objects are gone, including air changed by gas actions.
+/datum/babylon_save/proc/tutorial_test_reset_rooms()
+	var/list/dirty = tutorial_test_dirty_rooms.Copy()
+	tutorial_test_dirty_rooms.Cut()
+	for(var/left in dirty)
+		tutorial_test_reset_rect(left + 1, 3, left + 13, 17, tutorial_test_z)
+
+/// Remove all old air before seeding new air; an atmos tick cannot mix it back during a yield.
+/// Object ownership stays with each test's made list, including deliberately preserved markers.
+/datum/babylon_save/proc/tutorial_test_reset_rect(x1, y1, x2, y2, test_z)
+	for(var/wall_pass in list(TRUE, FALSE))
+		for(var/x in x1 to x2)
+			for(var/y in y1 to y2)
+				var/turf/tile = locate(x, y, test_z)
+				tile.ChangeTurf(wall_pass ? /turf/closed/wall : /turf/open/floor/iron, null, CHANGETURF_FORCEOP | CHANGETURF_IGNORE_AIR | CHANGETURF_NO_AREA_CHANGE)
+				CHECK_TICK
+#endif
 
 /// Places a tutorial object for a test with validated settings; it is added to `made`.
 /proc/babylon_tutorial_test_place(path, turf/tile, id, list/settings, list/made)
@@ -13,15 +69,47 @@
 			CRASH("tutorial test setting [key] of [id] refused: [error]")
 	return object
 
-/// A free spot to build test tutorials: next to the respawn point, away from other tests.
+/// A free spot to build test tutorials. A real station may have automatic turrets beside respawn.
 /datum/babylon_save/proc/tutorial_test_base(offset = 0)
+#ifdef BABYLON_STATION
+	if(offset < 0 || offset > 126)
+		CRASH("Tutorial test fixture offset [offset] is outside its rooms")
+	var/test_z = tutorial_test_level()
+	tutorial_test_dirty_rooms |= 2 + FLOOR(offset / 14, 1) * 14
+	var/turf/open/floor/iron/base = locate(3 + offset, 4, test_z)
+	if(!tutorial_test_fixture_ready(base))
+		var/area/room = get_area(base)
+		var/list/machines = list()
+		for(var/obj/machinery/machine in range(10, base))
+			machines += "[machine.type] at [machine.x],[machine.y],[machine.z]"
+		CRASH("Tutorial fixture is not ready: turf=[base?.type] z=[base?.z] expected=[tutorial_test_z] saved=[json_encode(persisted_levels())] area=[room?.type] requires_power=[room?.requires_power] gravity=[room?.default_gravity] pressure=[base?.air?.return_pressure()] oxygen=[base?.air?.has_gas(/datum/gas/oxygen)] machines=[json_encode(machines)]")
+	return base
+#else
+	// The drone build has one synthetic saved deck and no ambient station machinery.
 	var/turf/origin = respawn_turf || locate(round(world.maxx / 2), round(world.maxy / 2), station_z || 1)
 	return locate(clamp(origin.x - 6 + offset, 2, world.maxx - 12), clamp(origin.y - 6, 2, world.maxy - 12), origin.z)
+#endif
+
+#ifdef BABYLON_STATION
+/// Reject a live-map fixture even before an autonomous machine gets its first processing tick.
+/datum/babylon_save/proc/tutorial_test_fixture_ready(turf/open/floor/iron/base)
+	if(!istype(base) || base.z != tutorial_test_z || !(base.z in persisted_levels()))
+		return FALSE
+	var/area/misc/testroom/room = get_area(base)
+	if(!istype(room) || room.requires_power || room.default_gravity != STANDARD_GRAVITY || !base.air || base.air.return_pressure() < 90 || !base.air.has_gas(/datum/gas/oxygen))
+		return FALSE
+	for(var/obj/machinery/machine in range(10, base))
+		return FALSE
+	return TRUE
+#endif
 
 /proc/babylon_tutorial_test_cleanup(list/made)
 	for(var/datum/thing as anything in made)
 		if(!QDELETED(thing))
 			qdel(thing)
+#ifdef BABYLON_STATION
+	GLOB.babylon_save.tutorial_test_reset_rooms()
+#endif
 
 /// The trigger -> action chain the spec describes: entering a zone shows a message, holding a
 /// health analyzer points at the patient, using it on the patient completes the tutorial.
@@ -544,7 +632,9 @@
 		// Its lifetime ends with the fade, and once that passed, it is gone while the target's
 		// own arrow stays (no second arrow resting on the target).
 		var/flying_lifetime_ok = flying_info && flying_info["until"] <= world.time + BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE
-		sleep(BABYLON_TUTORIAL_POINT_FLIGHT + BABYLON_TUTORIAL_POINT_FADE + 1)
+		// Exercise expiry at its boundary without depending on the scheduler reaching it first.
+		if(flying_info)
+			flying_info["until"] = world.time
 		run.expire_images()
 		result["point_speaker_arrow_fades_on_arrival"] = flying_lifetime_ok && flying && !(flying in run.images) && !!run.image_with_key(arrow_key)
 		run.perform(null, spoken)
@@ -1336,6 +1426,17 @@
 		walk.walk_step()
 	return run.movers[npc]
 
+/// Wait for the operation itself. The native harness watchdog bounds a broken test;
+/// an arbitrary delay must not become a second, test-only completion deadline.
+/proc/babylon_tutorial_test_wait_for(datum/callback/condition)
+	while(!condition.Invoke())
+		sleep(world.tick_lag)
+	return TRUE
+
+/proc/babylon_tutorial_test_door_ready(obj/machinery/door/door, closed)
+	return !QDELETED(door) && !door.operating && !!door.density == closed
+
+
 /// The world actions of spec 12: dead (#2) and anchored (#4) NPCs, Move NPC (#3), Spawn object
 /// (#5), Remove objects (#6), Set inventory with a stored loadout (#7), Start event (#11) and
 /// Door / container (#12).
@@ -1346,6 +1447,9 @@
 	var/list/old_event_times = GLOB.babylon_tutorial_event_times.Copy()
 	var/list/rect = list(base.x, base.y, base.x + 7, base.y + 3, base.z)
 	try
+#ifdef BABYLON_STATION
+		result["fixture_isolated_before_processing"] = tutorial_test_fixture_ready(base) && base.z != station_z
+#endif
 		// A clear 8x4 floor to walk and build on.
 		babylon_area_clear_tiles(babylon_area_tiles(rect[1], rect[2], rect[3], rect[4], rect[5]), rect, /turf/open/floor/iron)
 		var/turf/row_start = locate(base.x, base.y, base.z)
@@ -1609,11 +1713,11 @@
 		result["airlock_unbolted"] = !airlock.locked
 		run.perform(null, open_door)
 		if(airlock.hasPower())
-			sleep(2 SECONDS)
-			result["airlock_opens"] = !airlock.density
+			var/opened = babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_tutorial_test_door_ready), airlock, FALSE))
+			result["airlock_opens"] = opened && !airlock.density
 			run.perform(null, close_door)
-			sleep(2 SECONDS)
-			result["airlock_closes"] = airlock.density
+			var/closed = babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_tutorial_test_door_ready), airlock, TRUE))
+			result["airlock_closes"] = closed && airlock.density
 		else
 			result["unpowered_airlock_noted"] = airlock.density && findtext(run.action_notes[open_door], "no power")
 		// A secure locker: locked ones stay shut until unlocked; lock closes an open one first.
@@ -1646,8 +1750,8 @@
 		result["shutters_found_by_id"] = (shutter in open_shutters.targets())
 		var/was_closed = shutter.density
 		run.perform(null, open_shutters)
-		sleep(2 SECONDS)
-		result["shutters_open"] = was_closed && !shutter.density
+		var/shutters_opened = babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_tutorial_test_door_ready), shutter, FALSE))
+		result["shutters_open"] = was_closed && shutters_opened && !shutter.density
 		run.perform(null, lock_shutters)
 		result["shutters_no_bolts_noted"] = findtext(run.action_notes[lock_shutters], "can't be locked") != 0
 		var/obj/machinery/door/firedoor/firelock = new(locate(base.x + 6, base.y + 3, base.z))
@@ -1711,13 +1815,14 @@
 		airlock.unbolt()
 		if(!airlock.density)
 			INVOKE_ASYNC(airlock, TYPE_PROC_REF(/obj/machinery/door, close))
-			sleep(2 SECONDS)
+		result["restricted_door_ready"] = babylon_tutorial_test_wait_for(CALLBACK(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_tutorial_test_door_ready), airlock, TRUE))
 		// The walker is still knocked down from the crawl check above unless that ran longer than its
 		// 60 seconds (a loaded machine): stand it up, so the walk depends on the doors only.
 		walker.SetKnockdown(0)
 		walker.SetImmobilized(0)
 		walker.SetParalyzed(0)
 		walker.get_up(TRUE)
+		result["door_walker_ready"] = babylon_tutorial_awake(walker) && !HAS_TRAIT(walker, TRAIT_IMMOBILIZED) && walker.body_position == STANDING_UP && !walker.get_stamina_loss() && !walker.has_status_effect(/datum/status_effect/tased)
 		result["door_access_modes"] = !length(babylon_tutorial_npc_access(walker, "public")) && (ACCESS_MEDICAL in babylon_tutorial_npc_access(walker, "all")) && !length(babylon_tutorial_npc_access(walker, "id"))
 		walker.forceMove(locate(door_tile.x, base.y, base.z))
 		babylon_tutorial_test_place(/obj/babylon_tutorial/marker, locate(door_tile.x, base.y + 2, base.z), "wa_beyond", list("target" = "tile"), made)
@@ -1728,24 +1833,29 @@
 		result["public_walk_avoids_restricted_door"] = airlock.density && get_turf(walker) != door_tile && (!public_walk || !(door_tile in public_walk.path))
 		walker.forceMove(locate(door_tile.x, base.y, base.z))
 		run.perform(null, walk_all)
-		for(var/i in 1 to 12)
-			if(!run.movers[walker])
-				break
+		if(airlock.hasPower())
+			// Let the real mover's timers complete it, or its own unchanged deadline fail it.
 			var/datum/babylon_tutorial_npc_move/all_walk = run.movers[walker]
-			all_walk.walk_step()
-			sleep(5)
+			while(run.movers[walker] && world.time < all_walk.deadline)
+				sleep(world.tick_lag)
+			if(run.movers[walker])
+				all_walk.walk_step()
 		if(airlock.hasPower())
 			result["all_doors_walk_through"] = get_turf(walker) == locate(door_tile.x, base.y + 2, base.z)
 			if(!result["all_doors_walk_through"])
 				var/datum/babylon_tutorial_npc_move/stuck_walk = run.movers[walker]
 				log_world("test_tutorial_world_actions: All doors walk ended at [walker.x],[walker.y] (door [door_tile.x],[door_tile.y], dense [airlock.density], locked [airlock.locked], welded [airlock.welded], operating [airlock.operating]); walk [stuck_walk ? "running" : "ended"], waiting for: [stuck_walk?.waiting_for], path [length(stuck_walk?.path)], note: [run.action_notes[walk_all]], stat [walker.stat], lying [walker.body_position], pulled [walker.pulledby], buckled [walker.buckled].")
+				log_world("test_tutorial_world_actions: Walker state: awake [babylon_tutorial_awake(walker)], unconscious [walker.IsUnconscious()], sleeping [walker.IsSleeping()], resting [walker.resting], mobility [walker.mobility_flags], hands [walker.usable_hands], legs [walker.usable_legs]; immobilized sources [json_encode(GET_TRAIT_SOURCES(walker, TRAIT_IMMOBILIZED))], floored sources [json_encode(GET_TRAIT_SOURCES(walker, TRAIT_FLOORED))].")
+				log_world("test_tutorial_world_actions: Walker health [walker.health], brute [walker.get_brute_loss()], burn [walker.get_fire_loss()], oxy [walker.get_oxy_loss()], tox [walker.get_tox_loss()], stamina [walker.get_stamina_loss()], temperature [walker.bodytemperature], traits [json_encode(walker._status_traits)].")
 		else
 			// An unpowered door keeps it waiting (the pathfinder never routes through it); the note
 			// comes when it gives up (its deadline) and names doors with no power.
 			var/datum/babylon_tutorial_npc_move/blocked_walk = run.movers[walker]
 			if(blocked_walk)
-				blocked_walk.deadline = world.time - 1
 				blocked_walk.walk_step()
+				if(run.movers[walker] == blocked_walk)
+					blocked_walk.deadline = world.time - 1
+					blocked_walk.walk_step()
 			result["all_doors_unpowered_noted"] = !run.movers[walker] && findtext(run.action_notes[walk_all], "no power") != 0
 
 		// Ending the run drops its notes and its walks.

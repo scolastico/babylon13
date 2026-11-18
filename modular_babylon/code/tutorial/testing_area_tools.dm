@@ -1,13 +1,17 @@
 // Area tool tests (both test builds; services/supervisor/smoke_native.py and smoke_station.py).
-// Each test works in a 24×8 rectangle next to the world's respawn point: a setup session clears
+// Each test works in a controlled 24×8 rectangle: a setup session clears
 // it first and its Undo puts the rectangle back at the end.
 
 /// The test rectangle: list(x1, y1, x2, y2, z).
 /datum/babylon_save/proc/area_test_rect()
+#ifdef BABYLON_STATION
+	return list(4, 26, 27, 33, tutorial_test_level())
+#else
 	var/turf/origin = respawn_turf || locate(round(world.maxx / 2), round(world.maxy / 2), station_z || 1)
 	var/x1 = clamp(origin.x - 12, 2, world.maxx - 25)
 	var/y1 = clamp(origin.y - 10, 2, world.maxy - 9)
 	return list(x1, y1, x1 + 23, y1 + 7, origin.z)
+#endif
 
 /// A test session without the 2 second limit (a fresh one for every name).
 /proc/babylon_area_test_session(name)
@@ -34,6 +38,12 @@
 	GLOB.babylon_area_busy = 0
 	GLOB.babylon_area_lock_owner = null
 	setup?.undo(null)
+#ifdef BABYLON_STATION
+	var/datum/babylon_save/save = GLOB.babylon_save
+	if(save.tutorial_test_z)
+		save.tutorial_test_reset_rect(3, 25, 141, 39, save.tutorial_test_z)
+		save.tutorial_test_reset_rect(3, 25, 141, 39, save.tutorial_test_z + 1)
+#endif
 	for(var/key in GLOB.babylon_area_sessions)
 		if(findtext(key, "areatest_") == 1)
 			GLOB.babylon_area_sessions -= key
