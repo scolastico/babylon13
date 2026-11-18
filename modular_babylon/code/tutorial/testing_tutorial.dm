@@ -910,7 +910,102 @@
 		if(findtext(keyed.ckey, "babylontutorialtester") == 1)
 			keyed.key = null
 	babylon_tutorial_test_cleanup(made)
+	result += test_tutorial_godmode_healing()
 	return result
+
+/// Authoring heals bypass immunity without changing their scope: typed heals keep other damage,
+/// full heal leaves corpses alone, and both NPC/player revives retain HEAL_ADMIN behavior.
+/datum/babylon_save/proc/test_tutorial_godmode_healing()
+	var/list/result = list()
+	var/list/made = list()
+	var/turf/base = tutorial_test_base(84)
+	try
+		var/list/effects = list(
+			list("kind" = "brute", "amount" = 30, "zone" = BODY_ZONE_CHEST, "chance" = 100),
+			list("kind" = "burn", "amount" = 20, "zone" = BODY_ZONE_CHEST, "chance" = 100),
+			list("kind" = "tox", "amount" = 10, "chance" = 100),
+			list("kind" = "oxy", "amount" = 5, "chance" = 100),
+		)
+		var/obj/babylon_tutorial/npc_spawner/spawner = babylon_tutorial_test_place(/obj/babylon_tutorial/npc_spawner, base, "immunity_npc", list("effects" = effects, "invulnerable" = 1, "spawn_at_start" = 0), made)
+		var/obj/babylon_tutorial/action/heal/action = babylon_tutorial_test_place(/obj/babylon_tutorial/action/heal, base, "immunity_heal", list("apply_to" = "npc", "target" = "immunity_npc", "heal" = "type", "amount" = 3), made)
+		for(var/damage_type in list("brute", "burn", "tox", "oxy"))
+			var/mob/living/npc = spawner.spawn_npc()
+			ADD_TRAIT(npc, TRAIT_GODMODE, "babylon_test_other")
+			ADD_TRAIT(npc, TRAIT_GODMODE, ROUNDSTART_TRAIT)
+			result["[damage_type]_injured_invulnerable"] = npc.health == npc.maxHealth - 65 && HAS_TRAIT_FROM(npc, TRAIT_GODMODE, "babylon_tutorial_npc")
+			action.set_setting("damage_type", damage_type)
+			action.perform(null)
+			result["[damage_type]_partial_heal"] = npc.health == npc.maxHealth - 62 \
+				&& npc.get_brute_loss() == (damage_type == "brute" ? 27 : 30) \
+				&& npc.get_fire_loss() == (damage_type == "burn" ? 17 : 20) \
+				&& npc.get_tox_loss() == (damage_type == "tox" ? 7 : 10) \
+				&& npc.get_oxy_loss() == (damage_type == "oxy" ? 2 : 5)
+			result["[damage_type]_partial_sources"] = babylon_tutorial_test_immunity(npc, "babylon_tutorial_npc")
+			var/before_zero = npc.health
+			result["[damage_type]_negative_heal_is_zero"] = babylon_tutorial_heal(npc, "type", damage_type, -50) && npc.health == before_zero
+			result["[damage_type]_invalid_type_refused"] = !babylon_tutorial_heal(npc, "type", "invalid", 50) && babylon_tutorial_test_immunity(npc, "babylon_tutorial_npc")
+			action.set_setting("heal", "full")
+			action.perform(null)
+			result["[damage_type]_full_heal"] = npc.health == npc.maxHealth && !npc.get_brute_loss() && !npc.get_fire_loss() && !npc.get_tox_loss() && !npc.get_oxy_loss()
+			result["[damage_type]_full_sources"] = babylon_tutorial_test_immunity(npc, "babylon_tutorial_npc")
+			action.set_setting("heal", "type")
+
+		spawner.set_setting("spawn_dead", 1)
+		var/mob/living/corpse = spawner.spawn_npc()
+		ADD_TRAIT(corpse, TRAIT_GODMODE, "babylon_test_other")
+		ADD_TRAIT(corpse, TRAIT_GODMODE, ROUNDSTART_TRAIT)
+		ADD_TRAIT(corpse, TRAIT_DNR, "babylon_test")
+		corpse.set_nutrition(0, forced = TRUE)
+		action.set_setting("heal", "full")
+		action.perform(null)
+		result["full_heal_does_not_revive"] = corpse.stat == DEAD && corpse.get_brute_loss() == 30 && babylon_tutorial_test_immunity(corpse, "babylon_tutorial_npc")
+		action.set_setting("heal", "revive")
+		action.perform(null)
+		result["npc_revived_despite_dnr"] = corpse.stat == STABLE && corpse.health == corpse.maxHealth
+		result["npc_revive_keeps_nohunger"] = HAS_TRAIT(corpse, TRAIT_NOHUNGER) && corpse.nutrition == 0
+		result["npc_revive_sources"] = babylon_tutorial_test_immunity(corpse, "babylon_tutorial_npc")
+
+		spawner.set_setting("spawn_dead", 0)
+		spawner.set_setting("invulnerable", 0)
+		var/mob/living/ordinary = spawner.spawn_npc()
+		result["ordinary_partial_heal"] = babylon_tutorial_heal(ordinary, "type", "brute", 3) && ordinary.get_brute_loss() == 27 && ordinary.health == ordinary.maxHealth - 62 && !HAS_TRAIT(ordinary, TRAIT_GODMODE)
+		result["ordinary_full_heal"] = babylon_tutorial_heal(ordinary, "full") && ordinary.health == ordinary.maxHealth && !HAS_TRAIT(ordinary, TRAIT_GODMODE)
+
+		for(var/protected in list(FALSE, TRUE))
+			var/mob/living/carbon/human/player = new(base)
+			made += player
+			player.mind_initialize()
+			player.key = "babylontutorialimmunity"
+			var/player_key = player.ckey
+			var/datum/babylon_tutorial_run/run = new(TRUE)
+			made += run
+			run.add_player(player)
+			player.adjust_brute_loss(30)
+			ADD_TRAIT(player, TRAIT_DNR, "babylon_test")
+			player.set_nutrition(0)
+			player.death()
+			var/mob/dead/observer/ghost = player.ghostize(TRUE)
+			made += ghost
+			if(protected)
+				ADD_TRAIT(player, TRAIT_GODMODE, BABYLON_CREATIVE_TRAIT)
+				ADD_TRAIT(player, TRAIT_GODMODE, "babylon_test_other")
+				ADD_TRAIT(player, TRAIT_GODMODE, ROUNDSTART_TRAIT)
+			result["player_[protected]_dead_fixture"] = player.stat == DEAD && ghost?.ckey == player_key
+			result["player_[protected]_revived"] = run.revive_player(player_key) == player && player.stat == STABLE && player.health == player.maxHealth && player.ckey == player_key
+			result["player_[protected]_admin_flags"] = player.nutrition == NUTRITION_LEVEL_FED + 50
+			result["player_[protected]_sources"] = protected ? babylon_tutorial_test_immunity(player, BABYLON_CREATIVE_TRAIT) : !HAS_TRAIT(player, TRAIT_GODMODE)
+			player.key = null
+			if(!QDELETED(ghost))
+				ghost.key = null
+	catch(var/exception/error)
+		result["no_error"] = FALSE
+		log_world("test_tutorial_godmode_healing failed: [error] ([error.file]:[error.line])")
+	babylon_tutorial_test_cleanup(made)
+	return result
+
+/proc/babylon_tutorial_test_immunity(mob/living/body, primary_source)
+	return COUNT_TRAIT_SOURCES(body, TRAIT_GODMODE) == 3 && HAS_TRAIT_FROM(body, TRAIT_GODMODE, primary_source) \
+		&& HAS_TRAIT_FROM(body, TRAIT_GODMODE, "babylon_test_other") && HAS_TRAIT_FROM(body, TRAIT_GODMODE, ROUNDSTART_TRAIT)
 
 /// How often a step is in a run's history.
 /proc/babylon_tutorial_test_count(list/history, step)

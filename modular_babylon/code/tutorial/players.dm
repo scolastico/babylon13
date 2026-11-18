@@ -163,7 +163,7 @@
 		if(body.stat != DEAD && current == body)
 			return null
 		if(body.stat == DEAD)
-			body.revive(HEAL_ALL | HEAL_ADMIN)
+			babylon_creative_without_godmode(body, CALLBACK(body, TYPE_PROC_REF(/mob/living, revive), HEAL_ALL | HEAL_ADMIN))
 		babylon_tutorial_put_player_in(body, key, current)
 	else
 		body = rebuild_body(key)
