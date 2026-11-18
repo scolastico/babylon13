@@ -207,6 +207,16 @@
 		result["submit_shape"] = submit["action"] == "tutorial_submit" && submit["actor"] == "tutorialowner" && submit["title"] == "First aid" && submit["description"] == "Line one\nLine two" && istext(generation) && length(submit) == 5
 		var/list/state = fake.snapshots[generation]
 		result["snapshot_written"] = islist(state) && state["generation"] == generation
+#ifdef BABYLON_STATION
+		var/list/fixture_levels = list()
+		for(var/list/level in state?["levels"])
+			if(level["file"] != level_file(tutorial_test_z) && level["file"] != level_file(tutorial_test_z + 1))
+				continue
+			var/list/traits = level["traits"]
+			if(islist(traits) && traits[ZTRAIT_LINKAGE] == SELFLOOPING)
+				fixture_levels |= level["file"]
+		result["snapshot_preserves_fixture_traits"] = length(fixture_levels) == 2
+#endif
 		result["snapshot_has_no_characters"] = islist(state) && islist(state["characters"]) && !length(state["characters"])
 		// Per-player records (Task D2's "players") are left out too, where the build writes them.
 		result["snapshot_has_no_players"] = islist(state) && !length(state["players"])

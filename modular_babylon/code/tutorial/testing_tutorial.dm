@@ -17,8 +17,10 @@
 	if(world.maxx < 143 || world.maxy < 41)
 		CRASH("Tutorial test fixtures require at least 143 by 41 tiles")
 	tutorial_test_level_building = TRUE
-	var/datum/space_level/lower = SSmapping.add_new_zlevel("Tutorial test fixtures")
-	var/datum/space_level/upper = SSmapping.add_new_zlevel("Tutorial test fixtures upper")
+	// Explicit traits serialize as an object, as the real restore contract requires.
+	// Self-looping also keeps these decks out of the live map's cross-linked space pool.
+	var/datum/space_level/lower = SSmapping.add_new_zlevel("Tutorial test fixtures", list(ZTRAIT_LINKAGE = SELFLOOPING))
+	var/datum/space_level/upper = SSmapping.add_new_zlevel("Tutorial test fixtures upper", list(ZTRAIT_LINKAGE = SELFLOOPING))
 	if(upper.z_value != lower.z_value + 1)
 		CRASH("Tutorial test fixtures require adjacent controlled decks")
 	for(var/test_z in list(lower.z_value, upper.z_value))
