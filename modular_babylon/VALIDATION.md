@@ -415,11 +415,98 @@ the Linux host's published child port. Matching logs show the LAN endpoint
 being offered, supervisor admission and completed client.New. This confirms
 the actual remote-client failure boundary, rather than inferring it from link().
 
-The other four production worlds are ready on ports 15401–15404. Their Windows
-client windows and manual Return to lobby/rejoin remain unconfirmed at the time
-of this record. The user has been asked to open each through the test lobby and
-return through the Babylon tab between them. A repeatable manual check is:
+The other four production worlds were ready on ports 15401–15404. In follow-up,
+the user reported that the tested flow works and chose not to join every server,
+considering further manual repetition unnecessary. A full five-map Windows
+window/return matrix is therefore not claimed; the complete five-map coverage
+above is native/DM, and the specific observed Windows join is Creative S.
+No further user action is pending for that matrix. A repeatable manual check,
+if needed later, is:
 connect DreamSeeker from another machine to the host's LAN address on the test
 lobby port, create/join S, return/rejoin S, then join Babylon, M, L and MetaStation
 from Active worlds and return between them. Confirm each game window opens and
 match its offered host/port, TCP connection, admission and completed-client log.
+
+## Startup windows (2026-11-18)
+
+The standalone lobby only saved the previous window size/maximized state; it had
+no startup maximize hook. Game worlds already maximized after their main window
+became visible. The lifecycle audit found and addressed both startup paths:
+
+- Lobby: the browser document's `load` event now sends a generation-tagged
+  readiness notification. It bypasses page actions and their busy state, checks
+  ownership, page initialization and the current connection's generation, then
+  waits for `mainwindow` visibility. It maximizes and requests native window
+  focus once. The guard belongs to `/client`, so returning to a retained lobby
+  mob gets a fresh guard; stale/duplicate callbacks cannot reactivate it.
+- Both Babylon and station game builds share `code/interface.dm`: the existing
+  visible-window callback now has a per-client guard and requests top-level
+  focus after its maximize/viewport setup. A saved fullscreen preference still
+  skips maximization. Resize only schedules viewport fitting.
+
+Every modular `winset` and browser focus call was audited. Icon/top-bar writes,
+game splash/visibility handling, spectator/session title-browser visibility and
+the lobby's dialog keyboard-focus helpers remain separate from startup
+activation. No periodic refresh, heartbeat, resize, mob Login or later game
+event gains an activation call. No upstream skin/client file was changed:
+`toggle_fullscreen`, `set_fullscreen`, the preference application and the manual
+Fullscreen button keep their existing behavior. The shared connection/handoff
+router and existing hidden-window recovery path are unchanged.
+The wider source scan also found upstream input/keybinding/TGUI-say focus,
+modal focus restoration and saved skin size/maximized parameters; these are
+input/dialog/preference behavior, with no additional startup maximize path.
+
+Native API evidence and limits:
+
+- [BYOND skin parameters](https://www.byond.com/docs/ref/skinparams.html)
+  documents `focus=true` for all controls (including MAIN windows),
+  `is-maximized=true` for MAIN, and `is-default` as selection of default controls.
+  The requests use `winset(src, "mainwindow", "focus=true")`, targeting the
+  top-level window rather than `mainwindow.browser`, chat or map keyboard focus.
+  Maximization is a separate, preceding write; no new automatic fullscreen
+  setting is issued.
+- This is the supported native activation request. The reference does not
+  guarantee that a background DreamSeeker will appear above another application.
+  [Microsoft's foreground API documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+  describes OS restrictions on foreground changes; that is distinct from whether
+  BYOND accepts the parameter. The request is consumed once even if activation
+  is denied. There are no new OS utilities, reconnect workarounds or focus retries.
+- No Windows DreamSeeker/display is available in this worktree. Actual startup
+  maximization, activation while another application is foreground, manual
+  fullscreen toggling, and leave/reenter/no-later-focus-steal behavior were not
+  observed for this change. The earlier Windows Creative S join above does not
+  establish these window behaviors. A future real-client check should cover
+  initial lobby load, game load and Return to lobby, switching to another app
+  during each load, then resizing/refreshing and waiting after each activation.
+
+Automated checks:
+
+- `node tools/babylon/test_lobby_loading.cjs`: document readiness once, no
+  refresh/action-completion notification, no late activation during handoff or
+  disconnection, and a fresh notification for the next connection. Existing
+  loading/scroll/handoff tests and `test_lobby_ui.cjs` pass.
+- `test_window_startup.py`: native DreamMaker/DreamDaemon probe executes the
+  extracted production lobby/game hook bodies on headless test receivers, with
+  window I/O, preferences and client context supplied by the test harness.
+  It records one maximize/focus sequence per connection, visibility gating,
+  return-load behavior, duplicate/stale/uninitialized callbacks, no action
+  dispatch from readiness, continued viewport fitting and preserved fullscreen
+  preference. Static contracts check ownership, load/Topic/visibility/resize
+  bindings and inclusion in both game builds. This observes emitted settings,
+  not OS focus.
+  A mutation probe removing the game's startup guard fails on duplicate focus.
+- Tool checks: 63 Python tests pass with native BYOND available. Supervisor:
+  282 tests OK, 16 skipped without discord.py; existing fixtures emit background
+  `AttributeError` for a fake process missing `poll` and Python 3.14 unclosed
+  database ResourceWarnings. `node container/test_cleanup.cjs` passes.
+- The first compile passed lobby and both production games, then the drone test
+  build hit the documented BYOND 516.1686 slot quirk at `necropolis_gate.dm:54`
+  (`loc_connections: invalid variable`). One padding global was added only to
+  the drone test block in `code/world_flags.dm`, following the existing
+  [compiler workaround](UPSTREAM_HOOKS.md#byond-5161686-slot-quirk). No upstream
+  declaration or compiler warning gate was changed.
+- After that adjustment, `python3 tools/babylon/build_dme.py babylon-lobby.dme
+  babylon.dme babylon-station.dme babylon-test.dme babylon-station-test.dme`
+  passes on BYOND 516.1686: all five builds have zero errors and warnings.
+  The 63 tool tests and both lobby browser scripts pass again. No full gameplay
+  end-to-end suite was run; the story review owns that combined validation.

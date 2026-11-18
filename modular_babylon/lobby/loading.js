@@ -9,6 +9,15 @@ var lobbyLastAlive = new Date().getTime();
 var lobbyLost = false;
 // A link deliberately leaves this server. Its stale browser must not report an outage.
 var lobbyHandoff = false;
+var lobbyWindowNotified = false;
+
+// Only the document's load event calls this. Polls update the same document.
+function lobbyWindowReady(ref, generation) {
+  if (lobbyWindowNotified || lobbyHandoff || lobbyLost) return;
+  lobbyWindowNotified = true;
+  window.location.href = 'byond://?src=' + encodeURIComponent(ref) +
+    ';action=window_ready;generation=' + encodeURIComponent(generation);
+}
 
 function lobbyAlive() {
   lobbyLastAlive = new Date().getTime();
