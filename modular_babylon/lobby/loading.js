@@ -7,13 +7,15 @@ var lobbyRevision = -1;
 // restart): links would do nothing, so the page shows the reconnect screen instead.
 var lobbyLastAlive = new Date().getTime();
 var lobbyLost = false;
+// A link deliberately leaves this server. Its stale browser must not report an outage.
+var lobbyHandoff = false;
 
 function lobbyAlive() {
   lobbyLastAlive = new Date().getTime();
 }
 
 setInterval(function () {
-  if (lobbyLost || new Date().getTime() - lobbyLastAlive < 15000) return;
+  if (lobbyLost || lobbyHandoff || new Date().getTime() - lobbyLastAlive < 15000) return;
   lobbyLost = true;
   document.getElementById('browser-content').style.display = 'none';
   document.getElementById('action-loading').style.display = 'none';
@@ -37,7 +39,18 @@ function showLobbyLoading(name, stage) {
   document.getElementById('loading-stage').textContent = stage || 'Working...';
   document.getElementById('browser-content').style.display = 'none';
   document.getElementById('action-loading').style.display = 'block';
+  document.getElementById('handoff-return').style.display = 'none';
   window.scrollTo(0, 0);
+}
+
+function showLobbyHandoff(name, lobbyAddress) {
+  showLobbyLoading(name, 'Connection offered. If the world does not open, return to the lobby to try again.');
+  lobbyHandoff = true;
+  var back = document.getElementById('handoff-return');
+  if (lobbyAddress) {
+    back.href = lobbyAddress;
+    back.style.display = 'inline-block';
+  }
 }
 
 function beginAction(link) {
@@ -49,7 +62,7 @@ function beginAction(link) {
 
 function renderLobby(encoded) {
   var data = JSON.parse(encoded);
-  if (lobbyLost) return;
+  if (lobbyLost || lobbyHandoff) return;
   if (data.revision < lobbyRevision || (lobbyPending && !data.complete)) return;
   rememberLobbyScroll();
   lobbyRevision = data.revision;

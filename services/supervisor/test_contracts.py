@@ -30,6 +30,19 @@ def dm_sources():
     return {path: path.read_text(encoding="utf-8") for path in sorted(DM.rglob("*.dm"))}
 
 
+class ConnectionPaths(unittest.TestCase):
+    def test_lobby_destinations_go_through_the_client_router(self):
+        # Reading the configured lobby to test feature availability is fine. Using it as a
+        # destination must go through babylon_lobby_link(), including stop/AFK/rejoin/refusal.
+        for path, source in dm_sources().items():
+            owner = None
+            for line in source.splitlines():
+                if line.startswith('/'):
+                    owner = line.split('(')[0]
+                if 'world.params["babylon-lobby"]' in line and not line.lstrip().startswith('if('):
+                    self.assertEqual(owner, '/client/proc/babylon_lobby_link', path.name + ': ' + line)
+
+
 ACTION = re.compile(r'"action"\s*=\s*"([a-z_]+)"')
 
 

@@ -9,7 +9,7 @@ const path = require('node:path');
 
 const elements = {};
 const writes = {};
-for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost', 'modal-root', 'toast-root']) {
+for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost', 'modal-root', 'toast-root', 'handoff-return']) {
   const element = { id, style: {}, textContent: '', querySelectorAll: () => [], querySelector: () => null };
   writes[id] = 0;
   Object.defineProperty(element, 'innerHTML', {

@@ -12,6 +12,7 @@
 #define SKIP_LAVALAND
 #include "tgstation.dme"
 #include "modular_babylon/__DEFINES/babylon.dm"
+#include "modular_babylon/connection.dm"
 #include "modular_babylon/code/world_flags.dm"
 #include "modular_babylon/code/state.dm"
 #include "modular_babylon/code/rules.dm"

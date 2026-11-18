@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const elements = {};
-for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost']) {
+for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost', 'handoff-return']) {
   elements[id] = { style: {}, textContent: '', innerHTML: '' };
 }
 let paints = 0;
@@ -92,3 +92,24 @@ assert.equal(click(), false, 'links do nothing once the connection is lost');
 render('late list', 'mine', 9, true);
 assert.equal(elements['browser-content'].style.display, 'none', 'nothing replaces the reconnect screen');
 console.log('Lobby loading, cancellation, stale-poll, scroll and lost-connection checks passed.');
+
+// An intentional server handoff stops lobby heartbeats too. Keep its explanation and a
+// direct lobby recovery link, rather than claiming that the server restarted.
+intervals.length = 0;
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/loading.js'), 'utf8'), context);
+elements['handoff-return'] = { style: {}, href: '' };
+elements['connection-lost'].style.display = 'none';
+render('world list', 'mine', 0, true);
+assert.equal(typeof context.showLobbyHandoff, 'function', 'the lobby must distinguish handoff from connection loss');
+context.showLobbyHandoff('Test world', 'byond://192.0.2.10:1361');
+assert.equal(elements['loading-world'].textContent, 'Test world');
+assert.equal(elements['handoff-return'].href, 'byond://192.0.2.10:1361');
+assert.equal(elements['handoff-return'].style.display, 'inline-block');
+render('late completion', 'mine', 1, true);
+context.lobbyAlive();
+now += 60000;
+tick();
+assert.notEqual(elements['connection-lost'].style.display, 'block', 'handoff is not a lobby outage');
+assert.equal(elements['action-loading'].style.display, 'block', 'late polls cannot replace the handoff');
+assert.equal(click(), false, 'old lobby actions remain blocked after handoff');
+console.log('Intentional handoff and recovery-link checks passed.');
