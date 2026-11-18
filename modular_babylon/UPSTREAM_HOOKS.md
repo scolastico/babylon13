@@ -138,7 +138,8 @@ of pAI cards, AI cores and ghost-joinable silicons against it.
 `modular_babylon/code/interface.dm` trims the game window through overrides and
 runtime winsets (the shared `interface/skin.dmf` is unchanged): the top bar keeps
 Menu, Settings, Fullscreen and Reconnect in four evenly sized columns, measured again
-on window or pane resize; the station is named after the world
+on resize; world verbs appear in **World Controls**, directly after Status (including
+for non-admins). The station is named after the world
 (`babylon-name`, markup characters removed); the status tab drops the round ID;
 and verbs for systems Babylon lacks (antag tickets, OPFOR, round-end reports,
 votes, respawn, relays, forum/Discord-DB linking ...) are removed. After an
@@ -163,6 +164,7 @@ upstream merge, check new player verbs and the `infobuttons` controls.
 | `tgui/packages/tgui-panel/settings/atoms.ts`, `migration.ts` | Default the chat panel (and with it the window) to the dark theme, and apply the default theme on a player's first start. Players' saved choices are kept. |
 | `tgui/packages/tgui/interfaces/Techweb/Content.tsx`, `nodes/TechNode.tsx`, `types.ts` | When the server sends `babylon_research`, show the node being researched instead of point balances and the queue, a Research / Researching button instead of research and queue buttons, and progress only on that node. Without it, the upstream screens are unchanged. |
 | `tgui/packages/tgui-escape-menu/EscapeMenu.tsx`, `pages/PlayersPage.tsx` | When the server sends `babylon`, hide the Round ID line and the "No Admins Online!" heading. Unchanged otherwise. |
+| `html/statbrowser.js` | Place World Controls immediately after Status, before MC and Admin. Verb categories are defined in modular Babylon code. |
 | `code/modules/admin/sql_message_system.dm` | Without a database (`SQL_ENABLED` off), `get_message_output` returns quietly instead of telling every player at login that the database connection failed. |
 | `tgui/packages/tgui/interfaces/VaultController.tsx` | Render the Babylon generation interlock (live generation, ignored battery output, hold timer) when the controller sends those fields; the upstream charge view is unchanged otherwise. Rebuild the TGUI bundle after editing. |
 

@@ -357,7 +357,7 @@
 
 /client/proc/babylon_start_round_verb()
 	set name = "Start round"
-	set category = "Babylon"
+	set category = "World Controls"
 	set desc = "Start the round now (players who ticked READY get their jobs)."
 	babylon_start_round(mob)
 
@@ -491,7 +491,7 @@
 	if(tutorial_spawn_failures[player_key] >= BABYLON_TUTORIAL_SPAWN_TRIES)
 		log_world("Babylon: gave up spawning [player_key] in the tutorial after [BABYLON_TUTORIAL_SPAWN_TRIES] attempts.")
 		if(player)
-			to_chat(player, span_warning("Your tutorial character could not be created. Use <b>Return to Babylon lobby</b> (Babylon tab) and start the tutorial again; tell an admin if it keeps happening."))
+			to_chat(player, span_warning("Your tutorial character could not be created. Use <b>Return to Babylon lobby</b> (World Controls tab) and start the tutorial again; tell an admin if it keeps happening."))
 			var/mob/dead/new_player/menu = player.mob
 			if(istype(menu) && menu.title_screen_is_ready)
 				menu.update_title_screen() // offers RETRY TUTORIAL

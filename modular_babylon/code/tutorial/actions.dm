@@ -480,7 +480,7 @@
 		if("close")
 			ui.close()
 			if(!test_run)
-				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the Babylon tab."))
+				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the World Controls tab."))
 			return TRUE
 		if("again")
 			if(!test_run || preview || !isliving(usr))

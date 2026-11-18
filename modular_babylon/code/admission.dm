@@ -95,7 +95,7 @@
 
 /client/verb/babylon_return_lobby()
 	set name = "Return to Babylon lobby"
-	set category = "Babylon"
+	set category = "World Controls"
 	var/lobby = babylon_lobby_link()
 	if(lobby)
 		src << link(lobby)

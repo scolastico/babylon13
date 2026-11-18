@@ -335,7 +335,7 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   everyone is ready."; everyone else reads "Waiting for <owner> to start the round" (or
   that the owner is offline and only they or an admin can start it). The owner and
   server administrators get a **START ROUND (2 of 3 ready)** button at the top of the
-  menu (and a `Start round` verb in the Babylon tab); the server checks the
+  menu (and a `Start round` verb in the World Controls tab); the server checks the
   permission, so nobody else can start it. Members can start the *world*, but only
   the owner or an admin starts its *round*. The starter is marked READY so that they
   get a job too. The round then starts normally: roundstart jobs for players who are ready, the storyteller's roundstart
@@ -378,7 +378,7 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 Station worlds are saved like Babylon worlds: an autosave while players are connected
 (every `BABYLON_STATION_AUTOSAVE_MINUTES`, default 30; Babylon worlds keep 15), a final
 save when the world is stopped from the lobby, and the owner's **Save world** (at most
-once every 5 minutes) and **Save and stop world** verbs in the Babylon tab. The
+once every 5 minutes) and **Save and stop world** verbs in the World Controls tab. The
 30/10/5/1 second countdown says how long the world will pause (the last save's time),
 "Saving... the world is paused for about N seconds" appears when it starts and "Saved.
 Play resumes." when it is done. A stop while an autosave runs waits for it (up to two
@@ -471,7 +471,7 @@ saved either.
 ## Creative mode
 
 Worlds with the **Creative** flag (any map) give every player in a body a **Creative**
-action button and a **Creative panel** verb (Babylon tab). Showcase visitors, spectating
+action button and a **Creative panel** verb (World Controls tab). Showcase visitors, spectating
 admins, ghosts and the new-player lobby get neither. The panel's tabs:
 
 - **Self**: godmode, noclip (turning it off moves you out of any wall to the nearest

@@ -1,4 +1,4 @@
-// World owners (and server admins) manage who may play in their world from the Babylon tab:
+// World owners (and server admins) manage who may play in their world from the World Controls tab:
 // members, kicks and world bans. Bans are stored by the supervisor and apply to this world only.
 
 /client
@@ -72,7 +72,7 @@
 
 /client/proc/babylon_add_member()
 	set name = "Add member"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/target = tgui_input_text(mob, babylon_member_prompt(), "Add member", max_length = 30)
@@ -82,7 +82,7 @@
 
 /client/proc/babylon_remove_member()
 	set name = "Remove member"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/listing = babylon_world_request("list")
@@ -98,7 +98,7 @@
 
 /client/proc/babylon_kick_player()
 	set name = "Kick player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/players = babylon_kickable_players()
@@ -115,7 +115,7 @@
 
 /client/proc/babylon_ban_player()
 	set name = "Ban player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/players = babylon_kickable_players()
@@ -138,7 +138,7 @@
 
 /client/proc/babylon_unban_player()
 	set name = "Unban player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/listing = babylon_world_request("list")

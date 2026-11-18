@@ -156,7 +156,7 @@ GLOBAL_LIST_EMPTY(babylon_creative_buttons)
 
 /client/proc/babylon_creative_panel()
 	set name = "Creative panel"
-	set category = "Babylon"
+	set category = "World Controls"
 	set desc = "Godmode, noclip, X-ray, fullbright, spawning, teleporting, events and tools for this creative world."
 	babylon_creative_open(mob)
 
