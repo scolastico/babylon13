@@ -10,7 +10,8 @@
 	if(!timeout || idle < last_inactivity)
 		warned = FALSE
 		kick_pending = FALSE
-		paused_inactivity = 0
+		// Input during a pause resets BYOND's clock; its new idle interval was also paused.
+		paused_inactivity = was_paused && idle < last_inactivity ? idle : 0
 	if(paused || was_paused)
 		paused_inactivity += max(0, idle - last_inactivity)
 	last_inactivity = idle

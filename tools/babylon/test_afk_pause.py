@@ -28,6 +28,22 @@ class AfkPause(unittest.TestCase):
     results["kick_after_playable_idle"] = policy.update(2900 SECONDS, 900 SECONDS) == "kick"
     results["input_resets_credit"] = isnull(policy.update(1 SECONDS, 900 SECONDS))
     results["next_kick"] = policy.update(900 SECONDS, 900 SECONDS) == "kick"
+    for(var/still_paused in list(TRUE, FALSE))
+        var/datum/babylon_afk/reset_policy = new
+        reset_policy.update(2000 SECONDS, 900 SECONDS, TRUE)
+        results["paused_input_[still_paused]_safe"] = isnull(reset_policy.update(1500 SECONDS, 900 SECONDS, still_paused))
+        results["paused_input_[still_paused]_credited"] = reset_policy.paused_inactivity == 1500 SECONDS
+        var/resumed_idle = (still_paused ? 1501 : 1500) SECONDS
+        results["paused_input_[still_paused]_resumed"] = isnull(reset_policy.update(resumed_idle, 900 SECONDS))
+        results["paused_input_[still_paused]_fresh_grace"] = isnull(reset_policy.update(resumed_idle + 839 SECONDS, 900 SECONDS))
+        results["paused_input_[still_paused]_warn"] = reset_policy.update(resumed_idle + 840 SECONDS, 900 SECONDS) == "warn"
+        results["paused_input_[still_paused]_kick"] = reset_policy.update(resumed_idle + 900 SECONDS, 900 SECONDS) == "kick"
+    var/datum/babylon_afk/entering_pause = new
+    entering_pause.update(800 SECONDS, 900 SECONDS)
+    entering_pause.update(700 SECONDS, 900 SECONDS, TRUE)
+    results["input_before_pause_not_credited"] = entering_pause.paused_inactivity == 0
+    entering_pause.update(701 SECONDS, 900 SECONDS)
+    results["input_before_pause_keeps_playable_idle"] = entering_pause.update(841 SECONDS, 900 SECONDS) == "warn"
     text2file(json_encode(results), "results.json")
     shutdown()
 ''')
