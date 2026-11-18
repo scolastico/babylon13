@@ -54,7 +54,7 @@
 	var/window_id = href_list["window_id"]
 	if(babylon_showcase_window_allowed(usr, window_id))
 		return TRUE
-	if(!(window_id in list("browseroutput", "tgui_say")))
+	if(!(window_id in list("browseroutput", "tgui_say", "escape_menu")))
 		return FALSE
 	if(message_type in list("ready", "ping", "ping/set", "visible", "close", "suspend", "log", "chat/resend"))
 		return TRUE
@@ -67,6 +67,9 @@
 		return FALSE
 	if(!islist(payload))
 		return FALSE
+	if(window_id == "escape_menu")
+		// Visitors can open/resume the menu and return to the lobby; all other actions stay denied.
+		return message_type == "action" && (payload["action"] in list("opened", "closed", "quit"))
 	if(window_id == "browseroutput")
 		if(message_type == "verbs/invoke")
 			return text2path(payload["verb_type"]) in list(/mob/verb/say_verb, /mob/verb/whisper_verb, /client/verb/ooc)
