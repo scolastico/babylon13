@@ -56,7 +56,12 @@
 	result["floor_centred"] = low_x == start && low_y == start
 	// The ring cannot be breached (it would vent the whole plane); the utility room's walls can.
 	result["indestructible_ring"] = istype(locate(low_x - 1, low_y + 10, station_z), /turf/closed/indestructible/reinforced) && istype(locate(high_x + 1, high_y, station_z), /turf/closed/indestructible/reinforced) && istype(locate(low_x + 3, high_y + 1, station_z), /turf/closed/indestructible/reinforced)
-	result["room_walls_ordinary"] = istype(locate(low_x, low_y + 1, station_z), /turf/closed/wall)
+	result["room_walls_ordinary"] = istype(locate(low_x + 1, low_y + 1, station_z), /turf/closed/wall)
+	var/west_catwalk_open = TRUE
+	for(var/y in low_y to high_y)
+		if(!istype(locate(low_x, y, station_z), /turf/open/floor/catwalk_floor/iron))
+			west_catwalk_open = FALSE
+	result["west_catwalk_open"] = west_catwalk_open
 	result["utility_area"] = istype(GLOB.areas_by_type[/area/station/babylon/creative_plane/utilities], /area/station/babylon/creative_plane/utilities)
 	// Creative Plane machines run whatever the Creative flag; their settings stay Creative-only.
 	result["machines_active"] = babylon_creative_machines_active()
