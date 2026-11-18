@@ -101,27 +101,45 @@
 /client/verb/babylon_window_resized()
 	set name = "babylon-window-resized"
 	set hidden = TRUE
+	babylon_layout_top_bar()
 	addtimer(CALLBACK(src, PROC_REF(attempt_auto_fit_viewport)), 0.5 SECONDS, TIMER_UNIQUE | TIMER_OVERRIDE | TIMER_CLIENT_TIME)
 
-/// The top bar keeps Menu, Settings, Fullscreen and Reconnect in upstream's own button slots:
-/// Settings moves into Character's slot and Fullscreen into Settings', Reconnect stays at the
-/// right edge. The slots are read from the client (winget), so they are in its real pixels
-/// whatever its window size and display scaling; computed sizes overflowed narrow windows.
+/// Four controls share the current pane width. Reusing upstream's seven slots leaves
+/// hidden gaps and compresses the remaining buttons when the pane narrows.
 /client/proc/babylon_setup_top_bar()
 	set waitfor = FALSE
-	var/character_slot = winget(src, "infobuttons.hotkeys", "pos;size;anchor1;anchor2")
-	var/settings_slot = winget(src, "infobuttons.settings", "pos;size;anchor1;anchor2")
-	if(!src)
-		return
 	winset(src, null, "infobuttons.hotkeys.is-visible=false;infobuttons.relays.is-visible=false;infobuttons.wiki.is-visible=false")
-	if(character_slot && settings_slot)
-		winset(src, "infobuttons.settings", character_slot)
-		winset(src, "infobuttons.fullscreen-toggle", settings_slot)
-	// The game window (and the Windows taskbar) shows the Babylon drone instead of SPLURT's icon.
-	// The shared skin.dmf is not changed; the file reference compiles the icon into the .rsc.
-	// A call of its own, so an icon the client rejects cannot undo the top bar changes.
+	winset(src, "infobuttons", list("on-size" = "babylon-top-bar-resized"))
+	babylon_layout_top_bar()
+	// A separate write keeps an unsupported icon from undoing the layout.
 	var/static/window_icon = 'modular_babylon/icons/babylon13_64.png'
 	winset(src, "mainwindow", "icon=\ref[window_icon]")
+
+/// Use real client pixels, including display scaling. Re-measure after native resizing;
+/// fixed anchors avoid applying the old seven-column offsets a second time.
+/client/verb/babylon_layout_top_bar()
+	set name = "babylon-top-bar-resized"
+	set hidden = TRUE
+	set waitfor = FALSE
+	var/list/dimensions = splittext(winget(src, "infobuttons", "size"), "x")
+	if(!src || length(dimensions) != 2)
+		return
+	var/pane_width = text2num(dimensions[1])
+	var/pane_height = text2num(dimensions[2])
+	if(pane_width <= 13 || pane_height <= 4)
+		return
+	var/list/buttons = list("options", "settings", "fullscreen-toggle", "reconnect")
+	var/available_width = pane_width - 13 // two 2px margins and three 3px gaps
+	for(var/index in 1 to length(buttons))
+		var/left = 2 + round((index - 1) * available_width / 4) + (index - 1) * 3
+		var/button_width = round(index * available_width / 4) - round((index - 1) * available_width / 4)
+		winset(src, "infobuttons.[buttons[index]]", list(
+			"anchor1" = "0,0",
+			"anchor2" = "0,0",
+			"pos" = "[left],2",
+			"size" = "[button_width]x[pane_height - 4]",
+			"font-size" = min(10, max(6, round(button_width / 8))),
+		))
 
 /mob
 	/// Babylon: the mob's name without its player's key, so the key is only ever added once.

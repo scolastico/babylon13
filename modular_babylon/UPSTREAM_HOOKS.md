@@ -137,7 +137,8 @@ of pAI cards, AI cores and ghost-joinable silicons against it.
 
 `modular_babylon/code/interface.dm` trims the game window through overrides and
 runtime winsets (the shared `interface/skin.dmf` is unchanged): the top bar keeps
-Menu, Settings, Fullscreen and Reconnect; the station is named after the world
+Menu, Settings, Fullscreen and Reconnect in four evenly sized columns, measured again
+on window or pane resize; the station is named after the world
 (`babylon-name`, markup characters removed); the status tab drops the round ID;
 and verbs for systems Babylon lacks (antag tickets, OPFOR, round-end reports,
 votes, respawn, relays, forum/Discord-DB linking ...) are removed. After an
