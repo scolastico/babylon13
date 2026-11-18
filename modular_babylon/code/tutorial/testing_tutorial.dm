@@ -147,8 +147,8 @@
 		var/first_error
 		try
 			failed_fixture.tutorial_test_level()
-		catch(var/exception/error)
-			first_error = "[error]"
+		catch(var/exception/build_error)
+			first_error = "[build_error]"
 		result["fixture_construction_reports_failure"] = !!findtext(first_error, "deliberate tutorial fixture construction failure")
 		result["fixture_failure_releases_build_lock"] = !failed_fixture.tutorial_test_level_building
 		var/next_error
@@ -156,8 +156,8 @@
 		if(!failed_fixture.tutorial_test_level_building)
 			try
 				failed_fixture.tutorial_test_level()
-			catch(var/exception/error)
-				next_error = "[error]"
+			catch(var/exception/cached_error)
+				next_error = "[cached_error]"
 		result["fixture_failure_is_reported_to_later_callers"] = !!first_error && next_error == first_error
 		result["failed_fixture_is_not_built_again"] = failed_fixture.build_calls == 1
 		qdel(failed_fixture)
