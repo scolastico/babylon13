@@ -903,6 +903,8 @@ var/global/list/lobby_config
 	var/id = payload["tutorial"]
 	var/list/tutorial = istext(id) ? tutorial_cards[id] : null
 	if(!tutorial)
+		if(action == "tutorial_play" || action == "tutorial_edit")
+			client?.babylon_log_session("refused", "This tutorial is no longer available")
 		respond(request, list("error" = "This tutorial is no longer available. The list has been refreshed."))
 		return
 	var/title = tutorial["title"]
@@ -912,12 +914,15 @@ var/global/list/lobby_config
 		return
 	var/list/result = api(action, list("tutorial" = id, "confirm" = 1))
 	if(result["error"])
+		if(action == "tutorial_play" || action == "tutorial_edit")
+			client?.babylon_log_session("refused", result["error"], title)
 		respond(request, list("error" = result["error"]))
 		return
 	if(action == "tutorial_play" || action == "tutorial_edit")
 		var/static/regex/valid_world = regex(@"^[0-9a-f]{32}$")
 		var/world_id = result["world"]
 		if(!istext(world_id) || !valid_world.Find(world_id))
+			client?.babylon_log_session("refused", "The tutorial could not be started", title)
 			respond(request, list("error" = "The tutorial could not be started. Please try again."))
 			return
 		respond(request, list("ok" = 1))

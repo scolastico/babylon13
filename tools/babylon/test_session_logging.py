@@ -123,3 +123,57 @@ var/global/gate_result
         self.assertEqual([record['event'] for record in records], ['connect', 'refused'])
         self.assertEqual(records[-1]['reason'], 'Banned')
         self.assertEqual(records[-1]['ip'], '192.0.2.20')
+
+    def test_tutorial_entry_refusals_are_logged_before_a_world_exists(self):
+        from test_window_startup import procedure
+        shared = (ROOT / 'modular_babylon/connection.dm').read_text()
+        logger = shared[shared.index('/proc/babylon_session_log_line'):shared.index('/client/Del()')]
+        logger = logger.replace('/client', '/datum/session_probe')
+        action = procedure((ROOT / 'modular_babylon/lobby/lobby.dm').read_text(),
+                           '/mob/lobby/proc/tutorial_action(action, list/payload, request)')
+        action = action.replace('/mob/lobby/proc/', '/datum/tutorial_probe/proc/', 1)
+        harness = '''
+/datum/session_probe
+    var/ckey = "Test_User"
+    var/address = "192.0.2.20"
+/datum/tutorial_probe
+    var/datum/session_probe/client = new
+    var/list/tutorial_cards = list("test-id" = list("title" = "Test tutorial"))
+    var/list/api_result = list("error" = "Running world limit reached")
+    var/view_filter
+    var/joins = 0
+    proc/api(action, list/payload)
+        return api_result
+    proc/respond(request, list/data)
+        return
+    proc/show_loading(world_name, stage)
+        return
+    proc/join_world(id, world_name, list/join, request = 0, stage, retry)
+        joins++
+/world/New()
+    log = file("records.log")
+    var/datum/tutorial_probe/probe = new
+    probe.tutorial_action("tutorial_play", list("tutorial" = "test-id"), 1)
+    probe.tutorial_action("tutorial_edit", list("tutorial" = "test-id"), 2)
+    probe.api_result = list("ok" = 1, "world" = "malformed")
+    probe.tutorial_action("tutorial_play", list("tutorial" = "test-id"), 3)
+    text2file(json_encode(list("joins" = probe.joins)), "results.json")
+    shutdown()
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / 'probe.dme').write_text(logger + '\n' + harness + '\n' + action)
+            for command in (['DreamMaker', 'probe.dme'], ['DreamDaemon', 'probe.dmb', '-invisible', '-trusted']):
+                result = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads((folder / 'results.json').read_text()), {'joins': 0})
+            records = [json.loads(line.split('BABYLON_SESSION ', 1)[1])
+                       for line in (folder / 'records.log').read_text().splitlines() if 'BABYLON_SESSION ' in line]
+        self.assertEqual(len(records), 3)
+        self.assertEqual([record['reason'] for record in records[:2]], ['Running world limit reached'] * 2)
+        for record in records:
+            self.assertEqual(record['event'], 'refused')
+            self.assertEqual(record['ckey'], 'testuser')
+            self.assertEqual(record['ip'], '192.0.2.20')
+            self.assertEqual(record['world_name'], 'Test tutorial')
+            self.assertIsNone(record['world_id'])
