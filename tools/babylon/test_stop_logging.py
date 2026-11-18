@@ -85,6 +85,7 @@ var/global/datum/ticker_probe/SSticker = new
     var/save_calls = 0
     var/stop_calls = 0
     var/list/reasons_at_stop
+    var/stop_recorded = FALSE
     proc/await_save_idle(timeout)
         return idle
     proc/save_world()
@@ -97,6 +98,7 @@ var/global/datum/ticker_probe/SSticker = new
         reasons_at_stop = list()
         for(var/datum/player_probe/player in GLOB.clients)
             reasons_at_stop += list(player.babylon_session_leave_reason)
+        stop_recorded = TRUE
 /world/New()
     var/list/results = list()
     for(var/method in list("managed", "round"))
@@ -113,8 +115,9 @@ var/global/datum/ticker_probe/SSticker = new
                 outcome = probe.managed_stop_now()
             else
                 probe.end_world_without_save(0)
-            // Keep the production three-second delay and observe the real delayed stop boundary.
-            sleep(31)
+            // The recorder includes the final reasons, after the unchanged production delay.
+            while(!probe.stop_recorded)
+                sleep(1)
             var/list/row = list("reasons" = probe.reasons_at_stop, "stops" = probe.stop_calls,
                 "saves" = probe.save_calls, "draining" = probe.draining,
                 "round_ending" = probe.round_ending, "fresh_redirects" = fresh.redirects,
