@@ -423,3 +423,109 @@ connect DreamSeeker from another machine to the host's LAN address on the test
 lobby port, create/join S, return/rejoin S, then join Babylon, M, L and MetaStation
 from Active worlds and return between them. Confirm each game window opens and
 match its offered host/port, TCP connection, admission and completed-client log.
+
+## Lobby layout and responsive dialogs (2026-11-18)
+
+The reported card mismatch reproduced with the actual catalog, CSS and browser
+script. Separate group containers placed the Creative Plane preview about 22 px
+below Babylon and gave the cards heights of about 223 and 196 px. Group help and
+card descriptions now occupy shared grid rows. All map-pick buttons use a column
+layout, so stretching a card cannot vertically center its preview/text. A lone
+available group fills its row. Narrow screens stack each introduction with its
+card in reading order. These changes use the grid/flex features already present
+in the lobby; no subgrid, display:contents or new JavaScript syntax is required.
+
+Audit findings and every affected occurrence fixed:
+
+- Card sizing/alignment: single-card group introductions and cards share rows;
+  `.map-pick`, `.map-preview` and `.map-body` keep previews and text at the top
+  across both builder and station cards, even with unequal descriptions.
+- Selected Creative Plane: `.map-card.selected` paints the entire content area,
+  including the space between/around size buttons. Body bottom padding provides
+  at least 12 px between description and controls. Size focus is inset; card
+  focus is dashed and inset, separate from the outer selection border.
+- Narrow picker: map/tutorial grids use one shrinkable column below 641 px;
+  size buttons may wrap, and their intended 14 px font is no longer overwritten
+  by the later `font` shorthand.
+- Long unbroken text: inherited wrapping covers world names/descriptions,
+  notices, modal text/titles, errors, loading/reconnect messages and toasts.
+  Flex items that previously forced overflow now shrink: world-card headings
+  and errors, Discord bar spans, modal heading content and footer errors,
+  Discord command inputs, toggle text, chosen-map summaries, member names,
+  checkpoint dates and toast text. The modal close and member-remove buttons
+  keep their size and remain reachable.
+- Lobby header: the heading and New world action wrap with spacing instead of
+  compressing each other at narrow widths.
+- Chosen-map summary: preview/text retain usable widths, and Change map wraps
+  onto another line when needed. This also fixes the shared tutorial summary.
+- Details footer: smaller side padding/button margins fit its four actions into
+  two rows at 320 px, down from three rows (about 191 px high).
+  Long repeated footer errors scroll within three lines, keeping the form and
+  actions visible; the complete error also remains in the dialog body.
+- Checkpoint picker: dates, object counts and Current badges wrap within rows
+  rather than forcing the dialog wider.
+- Tutorial previews: map/review/play badges share a wrapping overlay container;
+  Pending review no longer overlaps Babylon at 320 px. Their existing colors
+  and preview style are preserved.
+- Toasts: the fixed container is bounded by both viewport edges and its text
+  can shrink/wrap; long errors no longer extend beyond the screen. A stack of
+  three long messages scrolls within half the viewport height. Loading,
+  intentional handoff and lost-connection screens clear stale toasts alongside
+  the modal, as `lobbyHideOverlays` promises.
+
+`tools/babylon/test_lobby_layout.cjs` serves a disposable HTTP fixture on a
+loopback port, uses the actual lobby CSS/JS/catalog/previews, and extracts the
+static page/loading/world-card/header/empty/Discord HTML from `lobby.dm`, replacing
+DM interpolations with fixture values. It does not execute DM or contact a game
+server. A small representative world-action row supplies controls. Single-line
+inputs may scroll their values and decorative preview art may clip intentionally;
+their element bounds must still fit. No mock DOM is used for geometry.
+
+Reproduce the focused browser checks with Node and Playwright (installed only
+in ignored runtime scratch space):
+
+```sh
+npm install --prefix data/babylon-supervisor/lobby-layout/browser --no-package-lock --no-audit --no-fund playwright@1.61.1
+data/babylon-supervisor/lobby-layout/browser/node_modules/.bin/playwright install chromium
+NODE_PATH="$PWD/data/babylon-supervisor/lobby-layout/browser/node_modules" \
+  LOBBY_SCREENSHOT_DIR=data/babylon-supervisor/lobby-layout/after \
+  node tools/babylon/test_lobby_layout.cjs
+```
+
+An existing Chromium executable can be supplied with `CHROMIUM_EXECUTABLE`;
+this host used `/home/jb/.cache/ms-playwright/chromium-1254/chrome-linux64/chrome`.
+The final run passed 159 checks at widths 320, 375, 640, 641, 768 and 1920 px
+(740 px tall below desktop; desktop 1920×1080). Checks cover neither/Babylon/
+Creative Plane S/M/L selection, equal preview/title/description tops and card
+heights, unequal help/description lengths, the selected background and spacing,
+inset keyboard focus, radio arrows, Tab/Shift+Tab containment, retained name and
+description across steps, world/empty lists, navigation tabs, Discord bar, both
+wizard steps, busy/error states, members, long Join titles, danger confirmations,
+Discord copy controls, checkpoint loading/list, tutorials/badges, toasts and
+loading/reconnect screens. The card/color/focus/overflow guards failed before
+the fixes; separate new guards also caught the badge overlap, footer height
+and lone-group sizing before those fixes.
+Vertical overflow guards also failed on oversized footer errors and toast
+stacks, and the DOM test caught stale toasts surviving overlay cleanup.
+
+Browser screenshots were inspected at desktop and narrow widths, including
+`desktop-map-unselected.png`, `desktop-map-selected.png`, `320-map.png`,
+`320-details.png`, `320-tutorials.png`, and the corresponding 375 px files.
+Before/after PNGs remain ignored under
+`data/babylon-supervisor/lobby-layout/{before,after}/`; representative final
+images accompany the review hand-in.
+
+Other verification:
+
+- `node tools/babylon/test_lobby_ui.cjs`: passed (including wizard payloads,
+  limits, accessibility attributes, confirmations and poll preservation).
+- `node tools/babylon/test_lobby_loading.cjs`: passed (including stale polls,
+  scroll preservation, outages and intentional handoff).
+- `python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v`: 60 tests,
+  OK; the one native BYOND connection-routing test skipped on this host.
+- `node --check modular_babylon/lobby/lobby.js` and `git diff --check`: passed.
+
+Limitations: rendering was verified in standalone Chromium, not the embedded
+DreamSeeker browser. No native game build or full game end-to-end suite ran for
+these browser-only changes. Window lifecycle hooks, DM markup and map catalog/
+PNG generation were left to their separate work streams.

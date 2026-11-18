@@ -258,6 +258,8 @@ function lobbyClose() {
 function lobbyHideOverlays() {
   lobbyModal = null;
   lobbyRenderModal();
+  lobbyToasts = [];
+  lobbyRenderToasts();
 }
 
 function lobbyBodyClass(open) {
@@ -814,49 +816,25 @@ function lobbyCreateMapHtml(modal) {
     body += '<div class="callout">This server needs a linked Discord account before you can create a world. ' +
       '<button type="button" class="button small" onclick="lobbyModal = null; return lobbyOpenDiscordLink()">Link Discord</button></div>';
   }
-  var inRow = false;
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
-    // Groups with a single card (Babylon, Creative Plane) share a row.
-    var single = group.cards.length === 1;
-    if (single && !inRow) {
-      body += '<div class="map-row">';
-      inRow = true;
-    } else if (!single && inRow) {
-      body += '</div>';
-      inRow = false;
-    }
-    body += '<section class="map-group" aria-label="' + lobbyEsc(group.label) + '"><h3>' + lobbyEsc(group.label) + '</h3>' +
-      (group.help ? '<p>' + lobbyEsc(group.help) + '</p>' : '') + '<div class="map-grid">';
-    for (var c = 0; c < group.cards.length; c++) {
-      var card = group.cards[c];
-      var selected = modal.fields.card === card.key;
-      var shown = selected ? lobbyFind(card.maps, 'id', modal.fields.map) || card.maps[0] : card.maps[0];
-      var description = card.maps.length > 1 && !selected ? 'Pick a size below.' : shown.description;
-      var autofocus = selected;
-      body += '<div class="map-card' + (selected ? ' selected' : '') + '">' +
-        '<button type="button" class="map-pick" id="map-' + lobbyEsc(card.key.replace(/[^a-z0-9_]/g, '-')) + '" data-card="' + lobbyEsc(card.key) +
-        '" aria-pressed="' + (selected ? 'true' : 'false') + '"' + (autofocus ? ' data-autofocus="1"' : '') +
-        ' onclick="return lobbyPickMap(this)" ondblclick="lobbyPickMap(this); return lobbyWizardStep(\'details\')">' +
-        lobbyPreviewHtml(card) + '<span class="map-body"><span class="map-name">' + lobbyEsc(card.name) + lobbyMultizBadge(card) + '</span>' +
-        '<span class="map-desc">' + lobbyEsc(description) + '</span></span></button>';
-      if (card.maps.length > 1) {
-        body += '<div class="sizes" role="radiogroup" aria-label="' + lobbyEsc(card.name) + ' size">';
-        var stop = selected ? modal.fields.map : card.maps[0].id;
-        for (var s = 0; s < card.maps.length; s++) {
-          var sized = card.maps[s];
-          var on = selected && sized.id === modal.fields.map;
-          body += '<button type="button" class="size' + (on ? ' selected' : '') + '" id="size-' + lobbyEsc(sized.id) + '" role="radio" aria-checked="' +
-            (on ? 'true' : 'false') + '" tabindex="' + (sized.id === stop ? '0' : '-1') + '" data-map="' + lobbyEsc(sized.id) + '" title="' + lobbyEsc(sized.description) +
-            '" onclick="return lobbyPickSize(this)" onkeydown="return lobbySizeKey(event, this)">' + lobbyEsc(lobbySizeLabel(sized)) + '</button>';
-        }
-        body += '</div>';
+    // Put introductions and cards in shared grid rows so different help/description
+    // lengths cannot move one preview down or leave the other card shorter.
+    if (group.cards.length === 1) {
+      var row = [group];
+      if (g + 1 < groups.length && groups[g + 1].cards.length === 1) row.push(groups[++g]);
+      body += '<div class="map-row' + (row.length === 1 ? ' single' : '') + '">';
+      for (var r = 0; r < row.length; r++) body += lobbyMapIntroHtml(row[r]);
+      for (r = 0; r < row.length; r++) {
+        body += '<div class="map-grid" role="group" aria-labelledby="map-group-' + lobbyEsc(row[r].id) + '">' +
+          lobbyMapCardsHtml(modal, row[r]) + '</div>';
       }
       body += '</div>';
+    } else {
+      body += '<section class="map-group" aria-label="' + lobbyEsc(group.label) + '">' + lobbyMapIntroHtml(group) +
+        '<div class="map-grid">' + lobbyMapCardsHtml(modal, group) + '</div></section>';
     }
-    body += '</div></section>';
   }
-  if (inRow) body += '</div>';
   if (!groups.length) body += '<div class="empty">No maps are available right now.</div>';
   return lobbyDialog(modal, {
     title: 'Choose a map', step: 'New world · step 1 of 2', wide: true, form: true,
@@ -867,6 +845,42 @@ function lobbyCreateMapHtml(modal) {
       { label: 'Next: details', kind: 'primary', submit: true, disabled: !modal.fields.map || info.totalFull }
     ])
   });
+}
+
+function lobbyMapIntroHtml(group) {
+  return '<div class="map-intro"><h3 id="map-group-' + lobbyEsc(group.id) + '">' + lobbyEsc(group.label) + '</h3>' +
+    (group.help ? '<p>' + lobbyEsc(group.help) + '</p>' : '') + '</div>';
+}
+
+function lobbyMapCardsHtml(modal, group) {
+  var body = '';
+  for (var c = 0; c < group.cards.length; c++) {
+    var card = group.cards[c];
+    var selected = modal.fields.card === card.key;
+    var shown = selected ? lobbyFind(card.maps, 'id', modal.fields.map) || card.maps[0] : card.maps[0];
+    var description = card.maps.length > 1 && !selected ? 'Pick a size below.' : shown.description;
+    var autofocus = selected;
+    body += '<div class="map-card' + (selected ? ' selected' : '') + '">' +
+      '<button type="button" class="map-pick" id="map-' + lobbyEsc(card.key.replace(/[^a-z0-9_]/g, '-')) + '" data-card="' + lobbyEsc(card.key) +
+      '" aria-pressed="' + (selected ? 'true' : 'false') + '"' + (autofocus ? ' data-autofocus="1"' : '') +
+      ' onclick="return lobbyPickMap(this)" ondblclick="lobbyPickMap(this); return lobbyWizardStep(\'details\')">' +
+      lobbyPreviewHtml(card) + '<span class="map-body"><span class="map-name">' + lobbyEsc(card.name) + lobbyMultizBadge(card) + '</span>' +
+      '<span class="map-desc">' + lobbyEsc(description) + '</span></span></button>';
+    if (card.maps.length > 1) {
+      body += '<div class="sizes" role="radiogroup" aria-label="' + lobbyEsc(card.name) + ' size">';
+      var stop = selected ? modal.fields.map : card.maps[0].id;
+      for (var s = 0; s < card.maps.length; s++) {
+        var sized = card.maps[s];
+        var on = selected && sized.id === modal.fields.map;
+        body += '<button type="button" class="size' + (on ? ' selected' : '') + '" id="size-' + lobbyEsc(sized.id) + '" role="radio" aria-checked="' +
+          (on ? 'true' : 'false') + '" tabindex="' + (sized.id === stop ? '0' : '-1') + '" data-map="' + lobbyEsc(sized.id) + '" title="' + lobbyEsc(sized.description) +
+          '" onclick="return lobbyPickSize(this)" onkeydown="return lobbySizeKey(event, this)">' + lobbyEsc(lobbySizeLabel(sized)) + '</button>';
+      }
+      body += '</div>';
+    }
+    body += '</div>';
+  }
+  return body;
 }
 
 function lobbyToggleHtml(id, name, title, help, checked, disabledReason, note) {
@@ -1196,14 +1210,14 @@ function lobbyTutorialCard(tutorial, admin) {
   var editing = pending && (tutorial.editing === 'running' || tutorial.editing === 'starting');
   var html = '<article class="tutorial-card' + (pending ? ' pending' : '') + '">' +
     '<div class="tutorial-preview">' + lobbyTutorialPreview(tutorial) +
-    '<span class="badge map">' + lobbyEsc(tutorial.map_name || tutorial.map) + '</span><span class="badges">' +
+    '<span class="tutorial-badges"><span class="badge map">' + lobbyEsc(tutorial.map_name || tutorial.map) + '</span><span class="badges">' +
     (editing ? '<span class="badge review" title="An administrator has an edit world of it open">Being edited</span>'
       : (pending ? '<span class="badge review">Pending review</span>' : '')) +
     (playing ? '<span class="badge running">' + (tutorial.playing === 'starting' ? 'Starting' : 'You are playing') + '</span>' : '') +
     // A run that is ending or broke refuses Play until it is gone: say so before the click.
     (tutorial.playing === 'stopping' ? '<span class="badge stopping">Ending</span>' : '') +
     (tutorial.playing === 'error' ? '<span class="badge error">Problem</span>' : '') +
-    '</span></div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
+    '</span></span></div><div class="tutorial-body"><h3>' + lobbyEsc(tutorial.title) + '</h3>' +
     '<div class="tutorial-meta">by <b>' + lobbyEsc(tutorial.author) + '</b>' +
     (tutorial.created ? '<span class="dot" aria-hidden="true">·</span>' + (pending ? 'Submitted ' : '') + lobbyEsc(lobbyDate(tutorial.created)) : '') + '</div>' +
     (pending && tutorial.based_on ? '<div class="tutorial-meta based-on">Based on <b>' + lobbyEsc(tutorial.based_on.title) + '</b> by <b>' +
