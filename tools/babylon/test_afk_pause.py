@@ -38,3 +38,60 @@ class AfkPause(unittest.TestCase):
             for name, passed in results.items():
                 with self.subTest(name=name):
                     self.assertTrue(passed)
+
+    def test_connecting_client_does_not_inherit_idle_time_from_loading(self):
+        source = (ROOT / 'modular_babylon/code/afk.dm').read_text().split('/// Inactive players', 1)[0]
+        source = source.replace('/client', '/datum/client_probe')
+        harness = '''
+#define FALSE 0
+#define TRUE 1
+#define SECONDS * 10
+#define PROC_REF(name) null
+#define INVOKE_ASYNC(target, ignored, timeout) target.babylon_disconnect_afk(timeout)
+/proc/span_userdanger(message)
+    return message
+/proc/DisplayTimeText(value)
+    return "[value]"
+/proc/to_chat(datum/client_probe/target, message)
+    target.warnings++
+/datum/client_probe
+    var/inactivity = 20000
+    var/fully_created = FALSE
+    var/warnings = 0
+    var/kicks = 0
+    proc/babylon_disconnect_afk(timeout)
+        kicks++
+/world/New()
+    var/datum/client_probe/player = new
+    var/list/results = list()
+    player.babylon_check_afk(900 SECONDS)
+    results["loading_safe"] = !player.kicks && !player.warnings
+    player.fully_created = TRUE
+    player.inactivity = 2100 SECONDS
+    player.babylon_check_afk(900 SECONDS)
+    results["ready_starts_fresh"] = !player.kicks && !player.warnings
+    player.inactivity = 2900 SECONDS
+    player.babylon_check_afk(900 SECONDS)
+    results["playable_idle_only"] = !player.kicks && !player.warnings
+    player.inactivity = 2940 SECONDS
+    player.babylon_check_afk(900 SECONDS)
+    results["warning_after_ready"] = player.warnings == 1 && !player.kicks
+    player.inactivity = 3000 SECONDS
+    player.babylon_check_afk(900 SECONDS)
+    results["kick_after_ready"] = player.kicks == 1
+    var/datum/client_probe/first_ready_check = new
+    first_ready_check.fully_created = TRUE
+    first_ready_check.babylon_check_afk(900 SECONDS)
+    results["first_check_after_loading_starts_fresh"] = !first_ready_check.kicks && !first_ready_check.warnings
+    text2file(json_encode(results), "results.json")
+    shutdown()
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / 'probe.dme').write_text(harness + '\n' + source)
+            for command in (['DreamMaker', 'probe.dme'], ['DreamDaemon', 'probe.dmb', '-invisible', '-trusted']):
+                result = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for name, passed in json.loads((folder / 'results.json').read_text()).items():
+                with self.subTest(name=name):
+                    self.assertTrue(passed)

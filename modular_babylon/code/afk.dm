@@ -37,6 +37,10 @@
 /client/proc/babylon_check_afk(timeout, paused = FALSE)
 	if(!babylon_afk)
 		babylon_afk = new
+		// Resource loading and client setup happened before the first playable check.
+		babylon_afk.paused_inactivity = inactivity
+		babylon_afk.last_inactivity = inactivity
+	paused = paused || !fully_created
 	switch(babylon_afk.update(inactivity, timeout, paused))
 		if("warn")
 			to_chat(src, span_userdanger("You are inactive. Babylon will send you back to the lobby in [DisplayTimeText(max(0, timeout - max(0, inactivity - babylon_afk.paused_inactivity)))]. Move or interact with the game to stay here."))
