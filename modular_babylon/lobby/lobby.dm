@@ -757,6 +757,8 @@ var/global/list/lobby_config
 	var/id = payload["world"]
 	var/list/card = istext(id) && world_id.Find(id) ? cards[id] : null
 	if(!card)
+		if(action == "join")
+			client?.babylon_log_session("refused", "This world is no longer available", null, istext(id) && world_id.Find(id) ? id : null)
 		respond(request, list("error" = "This world is no longer available. The list has been refreshed."))
 		return
 	if(action == "join")
@@ -766,6 +768,7 @@ var/global/list/lobby_config
 		if(!isnull(payload["password"]))
 			var/password = lobby_text(payload["password"], 128)
 			if(isnull(password))
+				client?.babylon_log_session("refused", "Use a password of at most 128 characters", card["name"], id)
 				respond(request, list("error" = "Use a password of at most 128 characters."))
 				return
 			join["password"] = password

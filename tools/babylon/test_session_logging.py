@@ -177,3 +177,58 @@ var/global/gate_result
             self.assertEqual(record['ip'], '192.0.2.20')
             self.assertEqual(record['world_name'], 'Test tutorial')
             self.assertIsNone(record['world_id'])
+
+    def test_world_card_refusals_log_without_passwords_or_management_noise(self):
+        from test_window_startup import procedure
+        shared = (ROOT / 'modular_babylon/connection.dm').read_text()
+        logger = shared[shared.index('/proc/babylon_session_log_line'):shared.index('/client/Del()')]
+        logger = logger.replace('/client', '/datum/session_probe')
+        lobby = (ROOT / 'modular_babylon/lobby/lobby.dm').read_text()
+        action = procedure(lobby, '/mob/lobby/proc/handle_action(action, list/payload, request)')
+        # Execute the actual card validation and join dispatcher; the rest handles unrelated actions.
+        action = '/datum/card_probe/proc/dispatch(action, list/payload, request)\n' + action[
+            action.index('\tvar/static/regex/world_id'):action.index('\tif(card["role"]')]
+        harness = '''
+/datum/session_probe
+    var/ckey = "Test_User"
+    var/address = "192.0.2.20"
+/datum/card_probe
+    var/datum/session_probe/client = new
+    var/list/cards = list()
+    var/joins = 0
+    proc/respond(request, list/data)
+        return
+    proc/join_world(id, world_name, list/join, request = 0, retry)
+        joins++
+/world/New()
+    log = file("records.log")
+    var/datum/card_probe/probe = new
+    var/id = "0123456789abcdef0123456789abcdef"
+    probe.dispatch("join", list("world" = id), 1)
+    probe.dispatch("join", list("world" = "invalid"), 2)
+    probe.dispatch("edit", list("world" = id), 3)
+    probe.cards[id] = list("name" = "Test world", "kind" = "creative")
+    probe.dispatch("join", list("world" = id, "password" = list("private")), 4)
+    probe.dispatch("join", list("world" = id), 5)
+    text2file(json_encode(list("joins" = probe.joins)), "results.json")
+    shutdown()
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / 'probe.dme').write_text(logger + '\n' + procedure(lobby, '/proc/lobby_text(value, max_length)')
+                                             + '\n' + harness + '\n' + action)
+            for command in (['DreamMaker', 'probe.dme'], ['DreamDaemon', 'probe.dmb', '-invisible', '-trusted']):
+                result = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads((folder / 'results.json').read_text()), {'joins': 1})
+            log = (folder / 'records.log').read_text()
+            self.assertNotIn('private', log)
+            records = [json.loads(line.split('BABYLON_SESSION ', 1)[1])
+                       for line in log.splitlines() if 'BABYLON_SESSION ' in line]
+        self.assertEqual(len(records), 3)
+        self.assertEqual([record['event'] for record in records], ['refused'] * 3)
+        self.assertEqual(records[0]['world_id'], '0123456789abcdef0123456789abcdef')
+        self.assertIsNone(records[0]['world_name'])
+        self.assertIsNone(records[1]['world_id'])
+        self.assertEqual(records[2]['world_name'], 'Test world')
+        self.assertEqual(records[2]['reason'], 'Use a password of at most 128 characters')

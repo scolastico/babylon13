@@ -59,7 +59,7 @@
 #ifdef BABYLON_BUILDER
 	if(!world_name)
 #else
-	if(world_id && !world_name)
+	if(world_id && world_id == world.params["babylon-world"] && !world_name)
 #endif
 		world_name = world.params["babylon-name"] || world.name
 	world.log << babylon_session_log_line(event, ckey, address, world_name, world_id, reason)
