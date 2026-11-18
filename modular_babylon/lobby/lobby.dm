@@ -102,6 +102,27 @@ var/global/list/lobby_config
 /world/Topic()
 	return null
 
+/client
+	/// Each connection (including a return to an existing lobby mob) activates only once.
+	var/lobby_window_started = FALSE
+
+/// The document loaded, but DreamSeeker may still be showing its start splash. Read visibility
+/// until the main window appears; only then write startup settings, once for this client.
+/client/proc/lobby_window_ready()
+	set waitfor = FALSE
+	if(lobby_window_started)
+		return
+	lobby_window_started = TRUE
+	for(var/attempt in 1 to 60)
+		if(!src)
+			return
+		if(winget(src, "mainwindow", "is-visible") == "true")
+			winset(src, "mainwindow", "is-maximized=true")
+			// Native top-level activation request; the OS may decline to foreground it.
+			winset(src, "mainwindow", "focus=true")
+			return
+		sleep(10)
+
 /client/New(TopicData)
 	// A world sends a player back with babylon_rejoin when its game window stayed hidden
 	// (DreamSeeker's start splash bug, see the world's interface.dm): join it again at once.
@@ -262,7 +283,7 @@ var/global/list/lobby_config
 	return result
 
 /mob/lobby/proc/page_start()
-	return "<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='X-UA-Compatible' content='IE=edge'><style>[file2text('modular_babylon/lobby/style.css')]</style><script>[file2text('modular_babylon/lobby/loading.js')]</script><script>[file2text('modular_babylon/lobby/lobby.js')]</script></head><body>"
+	return "<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='X-UA-Compatible' content='IE=edge'><style>[file2text('modular_babylon/lobby/style.css')]</style><script>[file2text('modular_babylon/lobby/loading.js')]</script><script>[file2text('modular_babylon/lobby/lobby.js')]</script></head><body onload='lobbyWindowReady(\"\ref[src]\", [poll_generation])'>"
 
 /// A number for the page; anything else from the supervisor becomes 0.
 /proc/lobby_number(value)
@@ -549,6 +570,12 @@ var/global/list/lobby_config
 
 /mob/lobby/Topic(href, list/params)
 	if(usr != src)
+		return
+	// A load notification is independent of the page's busy actions and never refreshes it.
+	// Ignore callbacks from the document of an earlier connection to this returning mob.
+	if(params["action"] == "window_ready")
+		if(client && browser_initialized && params["generation"] == "[poll_generation]")
+			client.lobby_window_ready()
 		return
 	var/action = params["action"]
 	if(!istext(action) || length(action) > 32)

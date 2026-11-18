@@ -209,6 +209,7 @@ var/global/babylon_byond_1686_slot_pad_shared
 // babylon-test.dme
 var/global/babylon_byond_1686_slot_pad_drone_test_1
 var/global/babylon_byond_1686_slot_pad_drone_test_2
+var/global/babylon_byond_1686_slot_pad_drone_test_3
 #elif defined(BABYLON_DRONE)
 // babylon.dme
 var/global/babylon_byond_1686_slot_pad_drone_1

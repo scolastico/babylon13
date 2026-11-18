@@ -70,7 +70,10 @@ const loading = fragment("return \"<div class='loading-shell'><section class='lo
 const restart = fragment("return \"<div class='loading-shell'><section class='loading' role='status' aria-live='polite'><div", {
   'html_encode(title)': 'Connection lost', 'html_encode(message)': longText,
 });
+// This HTTP geometry fixture has no native server. Mark its startup notification consumed
+// before body.onload; the loading/native tests cover that callback and its emitted request.
 const html = fragment('return "<!doctype html>', {
+  src: '', poll_generation: 1,
   "file2text('modular_babylon/lobby/style.css')": read('modular_babylon/lobby/style.css'),
   "file2text('modular_babylon/lobby/loading.js')": read('modular_babylon/lobby/loading.js'),
   "file2text('modular_babylon/lobby/lobby.js')": read('modular_babylon/lobby/lobby.js'),
@@ -78,7 +81,7 @@ const html = fragment('return "<!doctype html>', {
   '</div><div id="connection-lost" style="display:none">' + restart +
   '</div><div id="modal-root"></div><div id="toast-root" class="toasts" aria-live="polite"></div>' +
   '<script>window.fixture=' + JSON.stringify({ state, header, worldHtml, emptyHtml }) +
-  ';lobbyNavigate=function(url){window.lastNavigation=url;};setInterval(lobbyAlive,1000);</script></body></html>';
+  ';lobbyWindowNotified=true;lobbyNavigate=function(url){window.lastNavigation=url;};setInterval(lobbyAlive,1000);</script></body></html>';
 
 async function main() {
   const server = http.createServer((req, res) => {

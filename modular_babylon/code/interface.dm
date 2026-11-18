@@ -2,6 +2,8 @@
 // and no verbs for systems Babylon does not have (antags, OPFOR, round end, votes, jobs ...).
 
 /client
+	/// Startup window writes belong to this connection, never a later resize or mob Login.
+	var/babylon_window_started = FALSE
 	/// Resources load on demand instead of preloading the whole .rsc (over 300 MB) at login.
 	/// DreamSeeker keeps its "Your game will begin shortly" splash up until a preload finishes,
 	/// so the first join after every new build sat behind it for minutes (and the window
@@ -82,11 +84,17 @@
 /// fits the viewport again whenever the window's size changes. Window writes wait until the
 /// window is shown, so they cannot interfere with DreamSeeker's start splash.
 /client/proc/babylon_game_window_shown()
+	if(babylon_window_started)
+		return
+	babylon_window_started = TRUE
 	var/list/settings = list("on-size=babylon-window-resized")
 	if(!prefs?.read_preference(/datum/preference/toggle/fullscreen_mode))
 		settings += "is-maximized=true"
 	winset(src, "mainwindow", jointext(settings, ";"))
 	babylon_window_resized()
+	// Target the top-level window, not the map/chat control. Windows may refuse activation;
+	// consuming the guard first ensures we never retry and steal focus from a later action.
+	winset(src, "mainwindow", "focus=true")
 
 /// The game window's on-size command. Resizing sends it many times; the viewport is fitted
 /// once the size has settled (and only for players with auto-fit enabled, upstream's default).
