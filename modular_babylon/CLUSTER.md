@@ -169,8 +169,8 @@ running-world limit has been reached", "The server's running-world limit has bee
 Every lobby prompt is an in-page dialog (no BYOND system popups): the
 New world wizard (map cards grouped into Babylon, Creative Plane with an
 S/M/L size choice, and Stations, with a Multi-level badge for multi-z maps
-and a top-down preview rendered by `tools/babylon/render_map_previews.py`
-into `_maps/babylon/previews` (rerun it when a station map changes); then name, description, who can join, password, capacity and the Creative and
+and a top-down preview in `_maps/babylon/previews` (see regeneration below);
+then name, description, who can join, password, capacity and the Creative and
 Persistent switches, with the owner's saved/total world counters), world
 settings, members, saved checkpoints, the join password, Discord link/unlink
 and the stop/delete/reset/rollback confirmations. Delete and Reset need the
@@ -184,6 +184,54 @@ final save and process exit are confirmed, or an error or timeout is reported.
 Background status polls update the existing browser document only when its
 content changes; each tab keeps its scroll position. Late poll responses
 cannot overwrite an action's loading state.
+
+### Map catalog and preview regeneration
+
+`_maps/babylon/catalog.json` offers all sixteen shipped playable SPLURT station
+configs. Runtime Station, minimal runtime, multi-z debug and gateway test are
+excluded. Station configs retain their original case-sensitive `map_path` and
+`map_file` names: the native automapper matches those filenames. The supervisor
+stages the selected config unchanged in `data/next_map.json`. Multi-level badges
+reflect the source DMM levels and traits, rather than extra mining/ruin levels.
+Babylon fallback spawns and diagnostics use the same map-authored arrival
+override priority as normal job spawning (for example Moon Station cryopods).
+
+Station cards use the existing deterministic department-color map renderer;
+Creative Plane keeps its grid/pad palette. These are schematic top-down renders,
+not atlas sprites. It reads every `map_file` in order, stacks all their z levels
+with separate dictionaries, and previews the deck with the most non-maintenance
+station tiles. Invalid or missing inputs fail instead of silently skipping.
+
+```sh
+python3 tools/babylon/render_map_previews.py             # all stations and planes
+python3 tools/babylon/render_map_previews.py moonstation # one selected station
+```
+
+Babylon uses a **SPLURT sprite atlas** close-up, not the schematic renderer. On a
+Linux host with Docker:
+
+```sh
+python3 tools/babylon/render_babylon_preview.py
+```
+
+The script pins the atlas image by digest, prepares the same wreck/lore/vault
+annex as a fresh child world in a private source overlay, and mounts the checkout
+read-only. It composites full-resolution base/foreground strips and crops z1 to
+inclusive x33–52/y49–58, then downsamples the 20×10 tile region to 256×128. This
+frames the starting drone shell at (41,53), the generation controller at (42,55),
+and the outer vault doors at (41,56–57); it does not show the full 81×81 wreck.
+`babylon.render.json` records the source revision, prepared-map and PNG hashes,
+renderer digest, crop and layers. Babylon's build remains `babylon` and its
+catalog `map_json` remains null. Both commands update catalog preview paths;
+commit generated PNGs along with source/config changes.
+
+The atlas crop test needs the same container dependencies:
+
+```sh
+docker run --rm --network none -v "$PWD:/source:ro" --entrypoint node \
+  ghcr.io/scolastico/splurt-atlas@sha256:6f7f94eedd4a950f18294d8be0731ffcbfa97d078aabda3004029b0d00697148 \
+  --test /source/tools/babylon/test_atlas_preview.mjs
+```
 
 ## Deleting worlds
 

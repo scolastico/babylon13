@@ -8,7 +8,8 @@ to that path. Output is deterministic, so unchanged maps give byte-identical fil
     python3 tools/babylon/render_map_previews.py            # every station map in the catalog
     python3 tools/babylon/render_map_previews.py icebox     # selected maps
 
-Babylon has no .dmm in the catalog; entries without a map file are skipped. The Creative Plane
+Babylon uses render_babylon_preview.py for its atlas vault-start close-up.
+Station inputs must exist; all map_file entries participate in deck selection. The Creative Plane
 maps come from gen_creative_plane.py, which runs this script for them; their previews fill the
 card with the plane in their own palette (grid, bright ring, spawn pad and utility corner).
 """
@@ -302,20 +303,39 @@ def png(rows):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
 
 
-def map_file(entry):
-    """The .dmm of a catalog entry (its tg map json's first map_file), or None."""
-    if not entry.get("map_json"):
-        return None
-    config = ROOT / "_maps" / entry["map_json"]
-    if not config.is_file():
-        return None
-    data = json.loads(config.read_text(encoding="utf-8"))
-    files = data.get("map_file")
-    name = files[0] if isinstance(files, list) else files
-    path = ROOT / data.get("map_path", "") / name if name else None
-    if path and not path.is_file():
-        path = ROOT / "_maps" / data.get("map_path", "") / name
-    return path if path and path.is_file() else None
+def map_files(entry):
+    """All source DMMs, in config order; invalid/missing station inputs are errors."""
+    try:
+        maps = (ROOT / "_maps").resolve()
+        config = maps / entry["map_json"]
+        data = json.loads(config.read_text(encoding="utf-8"))
+        files = data["map_file"]
+        files = [files] if isinstance(files, str) else files
+        if not isinstance(files, list) or not files:
+            raise ValueError("map_file must be a name or nonempty list")
+        paths = []
+        for name in files:
+            if not isinstance(name, str) or not name:
+                raise ValueError("map_file names must be nonempty strings")
+            path = (maps / data["map_path"] / name).resolve()
+            if not path.is_relative_to(maps) or not path.is_file():
+                raise ValueError("missing or unsafe map source: " + name)
+            paths.append(path)
+        return paths
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise MapError("%s: %s" % (entry["id"], error)) from error
+
+
+def load_map(entry):
+    """Stack files along z, with separate dictionaries, just as the map loader does."""
+    keys, levels, offset = {}, {}, 0
+    for index, source in enumerate(map_files(entry)):
+        source_keys, source_levels = parse_dmm(source.read_text(encoding="utf-8"))
+        keys.update({(index, key): paths for key, paths in source_keys.items()})
+        for z, level in source_levels.items():
+            levels[offset + z] = {position: (index, key) for position, key in level.items()}
+        offset += max(source_levels)
+    return keys, levels
 
 
 def main(selected):
@@ -324,11 +344,10 @@ def main(selected):
     for entry in catalog["maps"]:
         if selected and entry["id"] not in selected:
             continue
-        source = map_file(entry)
-        if source is None:
-            print("%s: no map file, skipped" % entry["id"])
+        if entry["build"] == "babylon":
+            print("babylon: use render_babylon_preview.py for the atlas close-up")
             continue
-        keys, levels = parse_dmm(source.read_text(encoding="utf-8", errors="replace"))
+        keys, levels = load_map(entry)
         z = busiest_level(keys, levels)
         target = "%s/%s.png" % (PREVIEWS, entry["id"])
         creative_plane = entry.get("group") == "creative_plane"

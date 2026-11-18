@@ -155,8 +155,9 @@
 /// Where a returning body goes when its own place cannot hold it: a late-join point, else the
 /// observer start.
 /datum/babylon_save/proc/character_arrival_turf()
-	if(length(SSjob.latejoin_trackers))
-		return get_turf(pick(SSjob.latejoin_trackers))
+	var/list/points = babylon_latejoin_points()
+	if(length(points))
+		return get_turf(pick(points))
 	return respawn_turf
 
 // --- Saving ---------------------------------------------------------------------------------

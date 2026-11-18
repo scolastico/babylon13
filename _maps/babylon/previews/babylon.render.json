@@ -1,0 +1,27 @@
+{
+  "renderer": "ghcr.io/scolastico/splurt-atlas@sha256:6f7f94eedd4a950f18294d8be0731ffcbfa97d078aabda3004029b0d00697148",
+  "source_revision": "e868c9884a089197e5c17ea119c1fea7f4490c34",
+  "dme": "babylon.dme",
+  "source": "_maps/RandomRuins/SpaceRuins/skyrat/drones_derelict.dmm",
+  "overlays": [
+    "_maps/babylon/vault_annex.json",
+    "_maps/babylon/lore.json"
+  ],
+  "prepared_map_sha256": "1def325da60174420473452eff8f68b3d4cf22a679bd10e28bcb621aa423043c",
+  "z": 1,
+  "crop_inclusive": [
+    33,
+    49,
+    52,
+    58
+  ],
+  "channels": [
+    "base",
+    "foreground"
+  ],
+  "size": [
+    256,
+    128
+  ],
+  "png_sha256": "c5d40c5ee69c82d7b5b1ae734bab5531db3d91e756cc2c108cb697f04b3f3827"
+}

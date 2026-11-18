@@ -318,6 +318,163 @@ Not exercised (needs a real client): the Preview button's disabled state in game
 refusal with real players, Reboot World from the admin verb, a tutorial player actually
 spawning at the start marker from a snapshot instance.
 
+## Complete playable station catalog and vault preview (2026-11-18)
+
+The complete top-level config audit found exactly eight omitted playable stations.
+All eight now use the station build, their original JSON configs and committed
+256×128 previews. Existing BoxStation, MetaStation, DeltaStation, IceBox,
+Tramstation, KiloStation, North Star and PubbyStation remain available.
+Runtime Station, minimal runtime, multi-z debug and gateway test remain excluded;
+Babylon still uses the Babylon build with `map_json: null`.
+
+Paths below are relative to `_maps/`; preview filenames are under
+`_maps/babylon/previews/`. Level counts were checked against both the actual DMM
+grids and config traits, rather than inferred from names.
+
+| Added station / config | Source DMM | Levels / multiz | Preview |
+| --- | --- | --- | --- |
+| Biodome / `biodome.json` | `map_files/biodome/biodome.dmm` | 2 / yes | `biodome.png` |
+| Blueshift / `blueshift.json` | `map_files/Blueshift/Blueshift.dmm` | 2 / yes | `blueshift.png` |
+| Cardinal Station / `cardinalstation.json` | `map_files/CardinalStation/CardinalStation.dmm` | 1 / no | `cardinalstation.png` |
+| Catwalk Station / `catwalkstation.json` | `map_files/CatwalkStation/CatwalkStation_2023.dmm` | 2 / yes | `catwalkstation.png` |
+| Moon Station / `moonstation.json` | `map_files/moonstation/moonstation.dmm` | 3 / yes | `moonstation.png` |
+| Nebula Station / `nebulastation.json` | `map_files/NebulaStation/NebulaStation.dmm` | 2 / yes | `nebulastation.png` |
+| Ouroboros / `ouroboros.json` | `map_files/Ouroboros/Ouroboros.dmm` | 2 / yes | `ouroboros.png` |
+| Void Raptor / `voidraptor.json` | `map_files/VoidRaptor/VoidRaptor.dmm` | 1 / no | `voidraptor.png` |
+
+The source/config scan found no additional playable omissions. The prepare test
+checks **all sixteen** stations through the real driver's selection/build and
+`prepare_station` paths: `data/next_map.json` matches the shipped config byte for
+byte. That preserves case-sensitive automapper `required_map` matching, including
+Catwalk's `_2023` filename. No upstream map or automapper edits were necessary.
+
+The unsupported renderer-input class was the first-`map_file`-only resolver,
+combined with silent skips for missing configs/files. Its only implementation
+and its test consumer were replaced together. All files and all their levels
+now participate in deck selection; independent dictionaries prevent colliding
+keys in separate files from changing tiles. Fixtures cover mixed multi-z files,
+key collisions, missing second files, empty/invalid lists, case mismatches and
+unsafe source paths. Every catalog entry, including Babylon, must have a PNG.
+
+The native Moon run also exposed a related arrival-list assumption: its ten
+map-authored cryopod arrivals live in `SSjob.latejoin_override_trackers`.
+The existing late-join test counted only ordinary points and falsely failed
+capacity despite a valid assistant arrival. The whole-code scan found three
+Babylon production fallbacks with the same omission: `character_arrival_turf`
+(returning bodies), `babylon_tutorial_start_turf` (without a tutorial marker),
+and `station_spawn_turf` (without an observer landmark). They now share
+`babylon_latejoin_points`, which follows upstream job spawning's override-before-
+default priority. Observer landmarks and tutorial markers still have priority.
+`ensure_latejoin_points`, station info/capacity checks, restored-character
+arrival checks and Creative Plane arrival diagnostics use the same helper.
+Remaining direct writes intentionally populate the ordinary fallback list.
+
+Before the fix, the native `test_station_arrival_overrides` failed all three
+override cases while all three no-override cases passed. It restores the original
+lists after its synchronous probes. The final matrix below reruns that guard
+on each station, alongside real admission and the map's actual late-join checks.
+
+As clarified during the task, the new station cards retain the existing
+**department-color schematic** style; Creative Plane retains its special grid,
+ring and spawn palette. Regenerating every station/plane with
+`python3 tools/babylon/render_map_previews.py` leaves all twenty PNG hashes
+unchanged, including the separately generated Babylon preview.
+
+Babylon's former null preview/B13 fallback is now `babylon.png`: an actual
+SPLURT atlas sprite rendering of the prepared fresh wreck from
+`RandomRuins/SpaceRuins/skyrat/drones_derelict.dmm`, including both Babylon
+map overlays. `session.dm` selects the secure-engineering drone shell at
+(41,53), in front of the outer vault doors at (41,56–57) and the generation
+controller at (42,55). The crop is inclusive x33–52/y49–58/z1 (20×10 tiles),
+composited from full-resolution base/foreground strips and downsampled to
+256×128. It is a static atlas reconstruction, not a running-game screenshot.
+
+`python3 tools/babylon/render_babylon_preview.py` uses the pinned atlas image
+`ghcr.io/scolastico/splurt-atlas@sha256:6f7f94eedd4a950f18294d8be0731ffcbfa97d078aabda3004029b0d00697148`.
+It mounts the checkout read-only and stages the exact same fresh-map overlay as
+the supervisor. Two independent full atlas runs produced the same PNG SHA256
+`c5d40c5ee69c82d7b5b1ae734bab5531db3d91e756cc2c108cb697f04b3f3827`.
+`babylon.render.json` records source revision, renderer/crop/layers, prepared-map
+hash and image hash. The atlas reported zero missing icons and one missing
+`nun_hood` state while rendering the full wreck; that state is outside this crop.
+All nine new images were visually inspected. The crop fixture checks exact
+pixels across chunk boundaries, DMM y orientation, foreground composition,
+hidden utilities, deterministic output, resizing and out-of-range rejection.
+
+Checks run:
+
+- `python3 -m unittest discover -s services/supervisor -v`: 284 tests, passing;
+  16 optional Discord tests skipped without discord.py. This includes all six
+  catalog tests, the map-overlay test and all 22 driver/prepare tests.
+- `python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v`: 65 tests,
+  passing; one native BYOND routing test skips on the host (BYOND is in Docker).
+  The nine renderer tests parse every catalog station's actual source levels.
+  The skipped routing test was also run separately in the native Docker image
+  and passed (one test, no skips).
+- Pinned atlas container: `node --test /source/tools/babylon/test_atlas_preview.mjs`
+  passes. `CLUSTER.md` includes the complete Docker command.
+- `node tools/babylon/test_lobby_ui.cjs`: passing. The existing lobby already
+  sends every catalog PNG with `browse_rsc`; no JS/CSS changes were required.
+- `python3 tools/babylon/build_dme.py babylon-station.dme babylon-station-test.dme`
+  in the native image: both compile on BYOND 516.1686 with zero errors/warnings.
+- Independent read-only code review approved with no important/critical findings.
+
+The final focused native matrix passed for every addition on the rebuilt
+station-test binary. Both independent batches exited successfully after stopping
+each nonpersistent disposable world normally. Each row checked the actual loaded
+DM map name against its source config, native Topic readiness/run/world identity,
+a reachable child listener, the real DM routing helper, fresh and running DM
+HTTP ticket admission, replay rejection, effective arrival points and an Assistant
+spawn on a station level. All seven override/default regression checks passed
+on every map; Moon reports its ten actual map-authored cryopod arrival points.
+
+| Map | Ready after | Effective arrival points | Native admission / arrivals / override regression |
+| --- | ---: | ---: | --- |
+| Biodome | 102.2 s | 6 | pass / pass / 7 checks pass |
+| Blueshift | 112.2 s | 22 | pass / pass / 7 checks pass |
+| Cardinal Station | 90.2 s | 170 | pass / pass / 7 checks pass |
+| Catwalk Station | 112.2 s | 12 | pass / pass / 7 checks pass |
+| Moon Station | 116.2 s | 10 | pass / pass / 7 checks pass |
+| NebulaStation | 114.3 s | 8 | pass / pass / 7 checks pass |
+| Ouroboros | 106.2 s | 8 | pass / pass / 7 checks pass |
+| Void Raptor | 100.2 s | 91 | pass / pass / 7 checks pass |
+
+Reproduce from a source checkout with compiled test resources and native libraries
+available in the runtime template (use a new empty data directory):
+
+```sh
+python3 services/supervisor/smoke_handoff.py \
+  --dreamdaemon /opt/byond/bin/DreamDaemon \
+  --config-directory container/default-config \
+  --template-directory /path/to/staged-runtime-template \
+  --data-directory data/babylon-supervisor/catalog-smoke-new \
+  --maps biodome blueshift cardinalstation catwalkstation \
+         moonstation nebulastation ouroboros voidraptor
+```
+
+The recorded run used two independent containers from the local native runtime
+image, splitting the map list four/four. Runtime templates linked the current
+checkout's source assets/test binaries and the image's native libraries. Evidence
+is ignored under `data/babylon-supervisor/catalog-final-{a,b}/result.json`; compile
+and per-world logs are under `catalog-work/`. The live cluster and existing player
+data were not touched. This uses real Supervisor/Driver preparation and real
+DreamDaemon children; the driver subclass only stages the test build in place of
+the production executable. It is not fake-driver load evidence.
+
+Observed runtime caveats: all eight boots logged the upstream tracking-collar
+`Cannot read null.tracking` overlay error during preference asset generation.
+Moon also logged five ore-generation mineral-budget exhaustion errors. These
+were present before the arrival fix and did not prevent readiness, either native
+admission phase, or any required spawn check. Early emergency-shuttle lookup
+warnings and fixed arrivals rooms without a mobile arrivals shuttle also occur;
+station arrivals fallbacks were checked explicitly. Per supervisor direction,
+these upstream gameplay defects remain outside this catalog/arrival change.
+
+No full end-to-end suite or real DreamSeeker client was exercised by this task.
+The native matrix does not certify client.New, game-window readiness, long-round
+gameplay, or mining/ore-vent correctness. The story's review owns full E2E and
+real-client validation.
+
 ## Remote lobby/world routing (2026-11-18)
 
 The reported failed join was a destination error: a separate Windows DreamSeeker
