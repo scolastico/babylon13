@@ -8,7 +8,7 @@ centred in space, closed by a ring of indestructible reinforced walls so its air
 Along the south edge (local coordinates: u east, v north, 0,0 = the floor's south-west tile):
 
 - utility room (south-west corner, walls u 1..9, v 1..7, glass door south; area ".../utilities"
-  with its own APC, together with the SMES corner): a creative O2 source and a creative N2
+  with its own APC and SMES): a creative O2 source and a creative N2
   source canister on connector ports feed an air mixer, whose supply line runs two vents; two
   scrubbers drain into a creative void canister. Ordinary pipes: the supply network on layer 2,
   the scrubber network on layer 4 (so both can share one route). A plaque on its south wall
@@ -18,8 +18,9 @@ Along the south edge (local coordinates: u east, v north, 0,0 = the floor's sout
   (east column, north row, west column above the room), also catwalk. Supply vents and
   scrubbers stand one tile inside the ring, evenly spread over the four sides, each facing the
   ring pipe next to it.
-- creative SMES (source, full charge) at u 10 with an unwired terminal north of it; its cable
-  joins the main cable along the south edge (catwalk floor) and a spine up the middle column.
+- creative SMES (source, full charge) inside the utility room at u 8, v 2, with an unwired
+  terminal north of it; its cable joins the room's APC and door, then the main cable along
+  the south edge (catwalk floor) and a spine up the middle column.
 - the plane's APC on the south wall, on the main cable.
 - the spawn pad (dark floor, 5x5, centred on the spine): observer start in the middle, eight
   late-join points around it and eight Assistant start points on its rim.
@@ -124,8 +125,6 @@ def layout(size):
         put(u, 0, CABLE, turf=CATWALK)
     for v in range(1, size):
         put(middle, v, CABLE, turf=CATWALK)
-    put(10, 1, SMES, CABLE, area=UTILITY_AREA)
-    put(10, 2, TERMINAL, area=UTILITY_AREA)
     put(12, 0, APC)
 
     # Utility room: walls u 1..9, v 1..7; interior u 2..8, v 2..6 (local a = u - 2, b = v - 2).
@@ -145,6 +144,11 @@ def layout(size):
 
     def room(a, b, *objects):
         put(2 + a, 2 + b, *objects)
+
+    # The source SMES outputs on the room's cable; its unwired input terminal faces it.
+    room(5, 0, CABLE)
+    room(6, 0, SMES, CABLE)
+    room(6, 1, TERMINAL)
 
     # The air mixer takes N2 from the west (node 1), O2 from the south (node 2), outputs east.
     room(0, 1, port(EAST), N2_CANISTER)

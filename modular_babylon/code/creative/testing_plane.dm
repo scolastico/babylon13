@@ -95,6 +95,8 @@
 	var/obj/machinery/power/smes/babylon_creative/smes = length(smeses) == 1 ? smeses[1] : null
 	result["one_creative_smes"] = !!smes && babylon_on_plane(smes)
 	result["smes_source_with_terminal"] = !!smes && smes.creative_mode == "source" && !!smes.terminal && smes.output_attempt
+	result["smes_inside_utility_room"] = !!smes && smes.x >= low_x + 2 && smes.x <= low_x + 8 && smes.y >= low_y + 2 && smes.y <= low_y + 6
+	result["smes_terminal_inside_utility_room"] = !!smes?.terminal && smes.terminal.x >= low_x + 2 && smes.terminal.x <= low_x + 8 && smes.terminal.y >= low_y + 2 && smes.terminal.y <= low_y + 6
 	var/feeds = !!smes?.powernet && apcs_ok
 	for(var/obj/machinery/power/apc/apc as anything in apcs)
 		if(apc?.terminal?.powernet != smes?.powernet)

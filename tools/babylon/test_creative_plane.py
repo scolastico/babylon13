@@ -184,6 +184,20 @@ class CreativePlaneTest(unittest.TestCase):
                     else:
                         self.assertEqual(layer, 2, (path, x, y))
 
+    def test_smes_and_its_terminal_are_inside_the_utility_room(self):
+        # Assigning the utilities area to an outside SMES does not put it inside the walls.
+        for size_id, size in plane.SIZES.items():
+            with self.subTest(size_id):
+                keys, full, grid = self.maps[size_id]
+                x0, y0 = plane.floor_origin(size)
+                for path in ("/obj/machinery/power/smes/babylon_creative", "/obj/machinery/power/terminal"):
+                    (x, y, _), = find(full, grid, path)
+                    self.assertTrue(2 <= x - x0 <= 8 and 2 <= y - y0 <= 6, (path, x - x0, y - y0))
+                    self.assertIn(plane.FLOOR, keys[grid[(x, y)]])
+                    self.assertIn(plane.UTILITY_AREA, keys[grid[(x, y)]])
+                for u, v in ((10, 1), (10, 2)):
+                    self.assertEqual(keys[grid[(x0 + u, y0 + v)]], [plane.FLOOR, plane.AREA])
+
     def test_machine_settings_in_the_map(self):
         for size_id in plane.SIZES:
             with self.subTest(size_id):
