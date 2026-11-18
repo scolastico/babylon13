@@ -373,13 +373,20 @@
 
 // --- Late-join arrivals --------------------------------------------------------------------
 
+/// Arrival overrides (for example Moon's cryopods) precede ordinary late-join points,
+/// matching /datum/job/get_latejoin_spawn_point(). Callers must not mutate this list.
+/proc/babylon_latejoin_points()
+	if(length(SSjob.latejoin_override_trackers))
+		return SSjob.latejoin_override_trackers
+	return SSjob.latejoin_trackers
+
 /// SPLURT's late-joiners arrive at the Interlink (its own level, CentCom_bubber_z2.dmm, with the
 /// NTV Relay arrivals shuttle and all latejoin landmarks), which ABSOLUTE_MINIMUM does not load.
 /// The station maps' arrivals docks (Bubber's automapper templates) have no landmarks of their
 /// own, so late-joiners would land in tg's last-resort spawn. They arrive in the station's
 /// arrivals hallway instead, on its seats where it has any.
 /datum/babylon_save/proc/ensure_latejoin_points()
-	if(length(SSjob.latejoin_trackers) || length(SSjob.latejoin_override_trackers))
+	if(length(babylon_latejoin_points()))
 		latejoin_source = "map"
 		return
 	var/list/seats = list()
@@ -421,8 +428,9 @@
 	var/turf/marked = babylon_tutorial_marker_turf("start")
 	if(marked)
 		return marked
-	if(length(SSjob.latejoin_trackers))
-		return get_turf(pick(SSjob.latejoin_trackers))
+	var/list/points = babylon_latejoin_points()
+	if(length(points))
+		return get_turf(pick(points))
 	return GLOB.babylon_save.respawn_turf
 
 /datum/babylon_save/New()
@@ -563,8 +571,9 @@
 	while(SSticker.delay_end)
 		sleep(1 SECONDS)
 	for(var/client/player in GLOB.clients.Copy())
-		if(world.params["babylon-lobby"])
-			player << link(world.params["babylon-lobby"])
+		var/lobby = player.babylon_lobby_link()
+		if(lobby)
+			player << link(lobby)
 	// As managed_stop: plain BYOND sleeps, independent of the master's timers.
 	sleep(3 SECONDS)
 	stop_world()

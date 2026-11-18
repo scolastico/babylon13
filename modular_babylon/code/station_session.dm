@@ -67,8 +67,9 @@ SUBSYSTEM_DEF(babylon_station)
 	var/obj/effect/landmark/observer_start/start = locate() in GLOB.landmarks_list
 	if(start)
 		return get_turf(start)
-	if(length(SSjob.latejoin_trackers))
-		return get_turf(pick(SSjob.latejoin_trackers))
+	var/list/points = babylon_latejoin_points()
+	if(length(points))
+		return get_turf(pick(points))
 	return locate(round(world.maxx / 2), round(world.maxy / 2), station_z)
 
 /datum/babylon_save/tick_players()

@@ -57,7 +57,7 @@
 
 /// The lobby address a refused client is sent back to, with the refusal's notice if there is one.
 /client/proc/babylon_lobby_link()
-	var/lobby = world.params["babylon-lobby"]
+	var/lobby = babylon_server_link(world.params["babylon-lobby"])
 	if(!lobby || !babylon_admit_notice)
 		return lobby
 	return "[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(list("babylon_notice" = babylon_admit_notice))]"
@@ -96,8 +96,9 @@
 /client/verb/babylon_return_lobby()
 	set name = "Return to Babylon lobby"
 	set category = "Babylon"
-	if(world.params["babylon-lobby"])
-		src << link(world.params["babylon-lobby"])
+	var/lobby = babylon_lobby_link()
+	if(lobby)
+		src << link(lobby)
 
 /// The chat line players see when the world stops; says truthfully whether it is saved.
 /proc/babylon_stop_message(saves)
@@ -172,8 +173,9 @@
 		draining = FALSE
 		return result
 	for(var/client/player in GLOB.clients.Copy())
-		if(world.params["babylon-lobby"])
-			player << link(world.params["babylon-lobby"])
+		var/lobby = player.babylon_lobby_link()
+		if(lobby)
+			player << link(lobby)
 	// The master (including its timer subsystem) is paused after the snapshot.
 	// BYOND spawn still runs, so exit cannot depend on a subsystem timer here.
 	spawn(3 SECONDS)

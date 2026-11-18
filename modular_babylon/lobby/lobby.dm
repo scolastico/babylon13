@@ -102,6 +102,27 @@ var/global/list/lobby_config
 /world/Topic()
 	return null
 
+/client
+	/// Each connection (including a return to an existing lobby mob) activates only once.
+	var/lobby_window_started = FALSE
+
+/// The document loaded, but DreamSeeker may still be showing its start splash. Read visibility
+/// until the main window appears; only then write startup settings, once for this client.
+/client/proc/lobby_window_ready()
+	set waitfor = FALSE
+	if(lobby_window_started)
+		return
+	lobby_window_started = TRUE
+	for(var/attempt in 1 to 60)
+		if(!src)
+			return
+		if(winget(src, "mainwindow", "is-visible") == "true")
+			winset(src, "mainwindow", "is-maximized=true")
+			// Native top-level activation request; the OS may decline to foreground it.
+			winset(src, "mainwindow", "focus=true")
+			return
+		sleep(10)
+
 /client/New(TopicData)
 	// A world sends a player back with babylon_rejoin when its game window stayed hidden
 	// (DreamSeeker's start splash bug, see the world's interface.dm): join it again at once.
@@ -262,7 +283,7 @@ var/global/list/lobby_config
 	return result
 
 /mob/lobby/proc/page_start()
-	return "<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='X-UA-Compatible' content='IE=edge'><style>[file2text('modular_babylon/lobby/style.css')]</style><script>[file2text('modular_babylon/lobby/loading.js')]</script><script>[file2text('modular_babylon/lobby/lobby.js')]</script></head><body>"
+	return "<!doctype html><html><head><meta charset='utf-8'><meta http-equiv='X-UA-Compatible' content='IE=edge'><style>[file2text('modular_babylon/lobby/style.css')]</style><script>[file2text('modular_babylon/lobby/loading.js')]</script><script>[file2text('modular_babylon/lobby/lobby.js')]</script></head><body onload='lobbyWindowReady(\"\ref[src]\", [poll_generation])'>"
 
 /// A number for the page; anything else from the supervisor becomes 0.
 /proc/lobby_number(value)
@@ -300,7 +321,7 @@ var/global/list/lobby_config
 	return url_encode(json_encode(payload))
 
 /mob/lobby/proc/loading_panel(world_name, stage)
-	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite' aria-busy='true'><div class='spinner'></div><div class='brand'>BABYLON // WORLD MANAGEMENT</div><h1 id='loading-world'>[html_encode(world_name)]</h1><p id='loading-stage'>[html_encode(stage)]</p><small>Keep this client open while your request completes.</small></section></div>"
+	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite' aria-busy='true'><div class='spinner'></div><div class='brand'>BABYLON // WORLD MANAGEMENT</div><h1 id='loading-world'>[html_encode(world_name)]</h1><p id='loading-stage'>[html_encode(stage)]</p><small>Keep this client open while your request completes.</small><a id='handoff-return' class='button' style='display:none'>Return to lobby</a></section></div>"
 
 /// Shown instead of the world list while the server restarts (or its supervisor is
 /// unreachable). loading.js shows the same screen when the lobby connection itself is gone.
@@ -549,6 +570,12 @@ var/global/list/lobby_config
 
 /mob/lobby/Topic(href, list/params)
 	if(usr != src)
+		return
+	// A load notification is independent of the page's busy actions and never refreshes it.
+	// Ignore callbacks from the document of an earlier connection to this returning mob.
+	if(params["action"] == "window_ready")
+		if(client && browser_initialized && params["generation"] == "[poll_generation]")
+			client.lobby_window_ready()
 		return
 	var/action = params["action"]
 	if(!istext(action) || length(action) > 32)
@@ -919,9 +946,20 @@ var/global/list/lobby_config
 			respond(request, list("ok" = 1))
 			request = 0
 		if(result["address"])
-			world.log << "[ckey] sent to world [world_name] ([id])"
+			// BYOND reports the server the client reached, even behind Docker/NAT. Never use
+			// client.address here: that is the player's machine. Tickets stay server-to-client.
+			var/endpoint = winget(client, null, "url")
+			if(!client)
+				return
+			var/address = babylon_connection_address(result["address"], endpoint)
+			if(!address)
+				set_notice("The world's connection address is unavailable. Ask the host to set BABYLON_PUBLIC_HOST (public_host for a native cluster) to a reachable server address.", TRUE)
+				return
+			var/lobby = babylon_connection_address(lobby_config["address"] || "byond://[endpoint]", endpoint)
+			src << output(list2params(list(world_name, lobby)), "mainwindow.browser:showLobbyHandoff")
+			world.log << "[ckey] offered connection to world [world_name] ([id]) at [copytext(address, 1, findtext(address, "?"))]"
 			last_retry = retry
-			src << link(result["address"])
+			src << link(address)
 			set_notice(lobby_retry_notice("offered", retry))
 			return
 		show_loading(world_name, stage)

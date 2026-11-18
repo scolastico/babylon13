@@ -174,8 +174,8 @@
 	result["area_tools_leave_ring"] = ring_kept && counts["locked"] == 5 && !counts["changed"] && !length(journal["turfs"])
 
 	// Landmarks: late-join points (the B2 setup uses the map's own), Assistant starts, observer.
-	var/latejoins_on_plane = length(SSjob.latejoin_trackers) >= 4
-	for(var/turf/point as anything in SSjob.latejoin_trackers)
+	var/latejoins_on_plane = length(babylon_latejoin_points()) >= 4
+	for(var/turf/point as anything in babylon_latejoin_points())
 		if(get_area(point) != plane)
 			latejoins_on_plane = FALSE
 	result["latejoin_points_on_plane"] = latejoins_on_plane && latejoin_source == "map"
