@@ -1,9 +1,18 @@
 import json
 from pathlib import Path
 import tempfile
+import shutil
 import unittest
 
 from catalog import CatalogError, load_catalog, public_catalog
+
+PLAYABLE = {
+    "biodome": True, "blueshift": True, "boxstation": False, "cardinalstation": False,
+    "catwalkstation": True, "deltastation": False, "icebox": True, "kilostation": False,
+    "metastation": False, "moonstation": True, "nebulastation": True, "northstar": True,
+    "ouroboros": True, "pubbystation": False, "tramstation": True, "voidraptor": False,
+}
+EXCLUDED = {"babylon13", "runtimestation", "runtimestation_minimal", "multiz_debug", "gateway_test"}
 
 SHIPPED = Path(__file__).resolve().parents[2] / "_maps/babylon/catalog.json"
 
@@ -22,12 +31,51 @@ class Catalog(unittest.TestCase):
         for name in ("boxstation", "metastation", "deltastation", "icebox", "tramstation",
                      "kilostation", "northstar", "pubbystation"):
             self.assertEqual(catalog[name]["map_json"], name + ".json")
-        self.assertEqual({k for k, v in catalog.items() if v["multiz"]}, {"icebox", "tramstation", "northstar"})
+        self.assertEqual({k for k, v in catalog.items() if v["multiz"]}, {name for name, multiz in PLAYABLE.items() if multiz})
+
+    def test_complete_playable_station_inventory(self):
+        catalog = load_catalog(SHIPPED)
+        stations = {key: entry for key, entry in catalog.items() if entry["group"] == "station"}
+        self.assertEqual(set(stations), set(PLAYABLE))
+        # A newly shipped config must be classified, rather than silently omitted.
+        self.assertEqual({p.stem for p in SHIPPED.parents[1].glob("*.json")}, set(PLAYABLE) | EXCLUDED)
+        self.assertTrue(EXCLUDED.isdisjoint(catalog))
+        for name, multiz in PLAYABLE.items():
+            with self.subTest(name):
+                entry = stations[name]
+                self.assertEqual(entry["build"], "station")
+                self.assertEqual(entry["map_json"], name + ".json")
+                self.assertEqual(entry["multiz"], multiz)
+                config = json.loads((SHIPPED.parents[1] / entry["map_json"]).read_text())
+                self.assertEqual(len(config.get("traits", [{}])) > 1, multiz)
+                files = config["map_file"]
+                for filename in files if isinstance(files, list) else [files]:
+                    self.assertTrue((SHIPPED.parents[1] / config["map_path"] / filename).is_file())
 
     def test_station_map_jsons_exist(self):
         for entry in load_catalog(SHIPPED).values():
             if entry["build"] == "station":
                 self.assertTrue((SHIPPED.parents[1] / entry["map_json"]).is_file(), entry["id"])
+
+    def test_every_station_prepares_its_exact_config_for_automapper_selection(self):
+        from supervisor import Driver, Denied
+        driver = Driver({"map_catalog": str(SHIPPED)})
+        for name in PLAYABLE:
+            with self.subTest(name), tempfile.TemporaryDirectory() as temp:
+                entry = driver.catalog_entry(name)
+                self.assertEqual(driver.build_of({"map": name}), "station")
+                root = Path(temp)
+                (root / "_maps").mkdir()
+                source = SHIPPED.parents[1] / entry["map_json"]
+                shutil.copy2(source, root / "_maps" / entry["map_json"])
+                driver.prepare_station({"map": name}, root, entry, None)
+                # In particular preserve case-sensitive map_file names and traits.
+                # Automapper required_map matching uses these original filenames.
+                self.assertEqual((root / "data/next_map.json").read_bytes(), source.read_bytes())
+        for name in EXCLUDED:
+            with self.subTest(name), self.assertRaises(Denied):
+                driver.catalog_entry(name)
+        self.assertEqual(driver.build_of({"map": "babylon"}), "babylon")
 
     def test_public_catalog_hides_paths(self):
         public = public_catalog(load_catalog(SHIPPED))

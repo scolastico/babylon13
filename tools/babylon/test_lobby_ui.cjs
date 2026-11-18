@@ -116,9 +116,9 @@ for (const [size, area] of [['S', '50×50'], ['M', '100×100'], ['L', '200×200'
 }
 assert.match(modalHtml(), /Creative Plane<\/span><span class="map-desc">Pick a size below\.</, 'an unselected Creative Plane card asks for a size');
 assert.doesNotMatch(modalHtml(), /data-autofocus="1"[^>]*onclick="return lobbyPickMap/, 'no card is focused before one is chosen');
-assert.match(modalHtml(), /<div class="map-row"><section class="map-group" aria-label="Babylon">.*<\/section><section class="map-group" aria-label="Creative Plane">.*<\/section><\/div><section class="map-group" aria-label="Stations">/,
-  'single-card groups share a row');
-for (const label of ['Babylon', 'Creative Plane', 'Stations']) assert.match(modalHtml(), new RegExp('<h3>' + label + '</h3>'), label + ' group');
+assert.match(modalHtml(), /<div class="map-row"><div class="map-intro">.*<div class="map-intro">.*<div class="map-grid" role="group" aria-labelledby="map-heading-babylon" aria-describedby="map-help-babylon">.*<div class="map-grid" role="group" aria-labelledby="map-heading-creative_plane" aria-describedby="map-help-creative_plane">.*<section class="map-group" aria-label="Stations">/,
+  'single-card groups share introduction and card rows with labelled groups');
+for (const label of ['Babylon', 'Creative Plane', 'Stations']) assert.match(modalHtml(), new RegExp('<h3 id="[^"]+">' + label + '</h3>'), label + ' group');
 assert.match(modalHtml(), /IceBoxStation<span class="badge multiz">Multi-level<\/span>/, 'multi-z maps carry a badge');
 assert.doesNotMatch(modalHtml(), /MetaStation<span class="badge multiz">/);
 assert.match(modalHtml(), /<img src="babylon_map_icebox.png"/, 'a preview image is used when there is one');
@@ -725,7 +725,10 @@ context.lobbyClose();
 }
 
 // Losing the connection removes every dialog.
+context.lobbyToast('Previous action failed', 'error');
+assert.match(toastHtml(), /Previous action failed/);
 context.lobbyOpenCreate();
 context.lobbyHideOverlays();
+assert.equal(toastHtml(), '', 'loading and connection-loss screens remove stale toasts');
 assert.equal(modalHtml(), '');
 console.log('Lobby dialog, wizard payload, confirmation, escape, limit, poll-preservation and tutorial checks passed.');

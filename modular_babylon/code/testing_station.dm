@@ -119,7 +119,7 @@
 	result["storyteller"] = "[SSgamemode.storyteller?.type || SSgamemode.voted_storyteller]"
 	result["emergency_shuttle"] = !!SSshuttle.emergency
 	result["arrivals_shuttle"] = !!SSshuttle.arrivals
-	result["latejoin_spawns"] = length(SSjob.latejoin_trackers)
+	result["latejoin_spawns"] = length(babylon_latejoin_points())
 	result["respawn_turf"] = !!respawn_turf
 	result["latejoin_source"] = latejoin_source
 	result["round_mode"] = round_mode
@@ -131,10 +131,10 @@
 /// Late-joiners arrive on the station (station_round.dm), not in tg's last-resort spawn.
 /datum/babylon_save/proc/test_station_latejoin()
 	var/list/result = list()
-	result["latejoin_points"] = length(SSjob.latejoin_trackers) || length(SSjob.latejoin_override_trackers)
+	result["latejoin_points"] = length(babylon_latejoin_points())
 	result["source_known"] = latejoin_source in list("map", "arrivals chairs", "arrivals chairs and floor", "arrivals floor", "observer start")
 	// A few seats are padded with the hallway's free floor, so a group does not share one bench.
-	result["enough_arrival_points"] = length(SSjob.latejoin_trackers) >= 4 || latejoin_source == "observer start"
+	result["enough_arrival_points"] = length(babylon_latejoin_points()) >= 4 || latejoin_source == "observer start"
 	var/datum/job/assistant = SSjob.get_job_type(/datum/job/assistant)
 	var/atom/arrival = assistant.get_latejoin_spawn_point()
 	var/turf/arrival_turf = get_turf(arrival)
@@ -993,7 +993,7 @@
 	var/mob/living/carbon/human/passenger = player_sessions["smokepassenger"]?.character()
 	var/turf/passenger_tile = get_turf(passenger)
 	var/at_arrival_point = passenger_tile == respawn_turf
-	for(var/atom/point as anything in SSjob.latejoin_trackers)
+	for(var/atom/point as anything in babylon_latejoin_points())
 		if(get_turf(point) == passenger_tile)
 			at_arrival_point = TRUE
 	result["passenger_at_arrivals"] = passenger_tile && !isspaceturf(passenger_tile) && at_arrival_point
@@ -1001,7 +1001,7 @@
 	var/mob/living/carbon/human/traveller = player_sessions["smoketraveller"]?.character()
 	var/turf/traveller_tile = get_turf(traveller)
 	var/traveller_at_arrivals = !!traveller_tile && traveller_tile == respawn_turf
-	for(var/atom/point as anything in SSjob.latejoin_trackers)
+	for(var/atom/point as anything in babylon_latejoin_points())
 		if(get_turf(point) == traveller_tile)
 			traveller_at_arrivals = TRUE
 	result["off_level_body_at_arrivals"] = traveller_at_arrivals && istype(traveller?.back, /obj/item/storage/backpack) && !!(locate(/obj/item/wirecutters) in traveller.back)
@@ -1038,4 +1038,28 @@
 	result["no_players"] = islist(state["players"]) && !length(state["players"])
 	player_sessions -= "smoketutorial"
 	qdel(body)
+	return result
+
+/// Map-authored arrival overrides take precedence in every Babylon fallback as in job spawning.
+/datum/babylon_save/proc/test_station_arrival_overrides()
+	var/list/result = list()
+	var/list/real_points = SSjob.latejoin_trackers
+	var/list/real_overrides = SSjob.latejoin_override_trackers
+	var/list/real_landmarks = GLOB.landmarks_list
+	var/turf/default_point = respawn_turf
+	var/turf/override_point = locate(default_point.x + 1, default_point.y, default_point.z)
+	SSjob.latejoin_trackers = list(default_point)
+	SSjob.latejoin_override_trackers = list(override_point)
+	GLOB.landmarks_list = list()
+	result["character_uses_override"] = character_arrival_turf() == override_point
+	result["tutorial_uses_override"] = babylon_tutorial_start_turf() == override_point
+	result["observer_fallback_uses_override"] = station_spawn_turf() == override_point
+	SSjob.latejoin_override_trackers = list()
+	result["character_uses_default_without_override"] = character_arrival_turf() == default_point
+	result["tutorial_uses_default_without_override"] = babylon_tutorial_start_turf() == default_point
+	result["observer_fallback_uses_default_without_override"] = station_spawn_turf() == default_point
+	SSjob.latejoin_trackers = real_points
+	SSjob.latejoin_override_trackers = real_overrides
+	GLOB.landmarks_list = real_landmarks
+	result["arrival_lists_restored"] = SSjob.latejoin_trackers == real_points && SSjob.latejoin_override_trackers == real_overrides
 	return result

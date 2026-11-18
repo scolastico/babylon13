@@ -8,7 +8,7 @@
       "size": null,
       "build": "babylon",
       "map_json": null,
-      "preview": null,
+      "preview": "_maps/babylon/previews/babylon.png",
       "multiz": false
     },
     {
@@ -130,6 +130,94 @@
       "build": "station",
       "map_json": "pubbystation.json",
       "preview": "_maps/babylon/previews/pubbystation.png",
+      "multiz": false
+    },
+    {
+      "id": "biodome",
+      "name": "Biodome",
+      "description": "A two-level asteroid station beneath a biodome.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "biodome.json",
+      "preview": "_maps/babylon/previews/biodome.png",
+      "multiz": true
+    },
+    {
+      "id": "blueshift",
+      "name": "Blueshift",
+      "description": "A two-deck space station linked by stairs.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "blueshift.json",
+      "preview": "_maps/babylon/previews/blueshift.png",
+      "multiz": true
+    },
+    {
+      "id": "cardinalstation",
+      "name": "Cardinal Station",
+      "description": "A single-deck station with distinct department wings.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "cardinalstation.json",
+      "preview": "_maps/babylon/previews/cardinalstation.png",
+      "multiz": false
+    },
+    {
+      "id": "catwalkstation",
+      "name": "Catwalk Station",
+      "description": "Two station decks connected by catwalks and stairs.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "catwalkstation.json",
+      "preview": "_maps/babylon/previews/catwalkstation.png",
+      "multiz": true
+    },
+    {
+      "id": "moonstation",
+      "name": "Moon Station",
+      "description": "A three-level outpost on a volcanic moon.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "moonstation.json",
+      "preview": "_maps/babylon/previews/moonstation.png",
+      "multiz": true
+    },
+    {
+      "id": "nebulastation",
+      "name": "Nebula Station",
+      "description": "A two-deck station with broad central hallways.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "nebulastation.json",
+      "preview": "_maps/babylon/previews/nebulastation.png",
+      "multiz": true
+    },
+    {
+      "id": "ouroboros",
+      "name": "Ouroboros",
+      "description": "A two-level station built into an asteroid field.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "ouroboros.json",
+      "preview": "_maps/babylon/previews/ouroboros.png",
+      "multiz": true
+    },
+    {
+      "id": "voidraptor",
+      "name": "Void Raptor",
+      "description": "A single-deck ship with a forward bridge and aft engines.",
+      "group": "station",
+      "size": null,
+      "build": "station",
+      "map_json": "voidraptor.json",
+      "preview": "_maps/babylon/previews/voidraptor.png",
       "multiz": false
     }
   ]
