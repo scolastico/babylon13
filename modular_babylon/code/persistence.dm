@@ -457,6 +457,8 @@
 	// Everything between busy = TRUE and busy = FALSE runs inside the try: a runtime must never
 	// leave the world flagged busy (no save ever again) or the master paused.
 	try
+		for(var/client/student in GLOB.clients)
+			student.babylon_check_afk(afk_timeout, TRUE)
 		before_checkpoint()
 		// The chat subsystem stops with the master: these messages go out at once.
 		to_chat_immediate(world, span_notice("Saving... the world is paused for about [estimated_pause_seconds()] seconds."))
@@ -472,6 +474,8 @@
 		draining = FALSE
 	release_checkpoint()
 	busy = FALSE
+	for(var/client/student in GLOB.clients)
+		student.babylon_check_afk(afk_timeout, draining)
 	if(result["ok"])
 		if(!for_tutorial)
 			last_save_report = result

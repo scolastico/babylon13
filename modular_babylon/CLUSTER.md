@@ -137,6 +137,8 @@ running-world limit has been reached", "The server's running-world limit has bee
   must still be reachable and published with matching host/container numbers.
   Return to lobby, admission refusals, stops and rejoin use the same routing.
 - Empty worlds save and stop after a configurable grace period (default 120s).
+  This countdown starts only once loading is complete and the world accepts players;
+  it resets during saves, draining or unavailable status responses.
   Connected ghosts count; abandoned bodies do not. Pending tickets/admissions
   postpone empty shutdown. Normal physics and drone controls remain paused
   from final checkpoint through exit. Save failure keeps the child alive and
@@ -837,7 +839,8 @@ when a world next starts. Standalone worlds accept the world parameter
 
 Players receive one chat warning up to 60 seconds before that. Moving
 or interacting resets BYOND's inactivity counter and cancels the countdown.
-The policy includes ghosts, owners and admins, and replaces SPLURT's separate
+Time spent saving is excluded from player inactivity, including synchronous capture
+that blocks the world loop. The policy includes ghosts, owners and admins, and replaces SPLURT's separate
 `KICK_INACTIVE` setting in Babylon worlds. Bodies and equipment are preserved;
 players join the world again from the lobby (standalone worlds without a
 lobby disconnect them instead). Once everyone has left, the normal

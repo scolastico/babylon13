@@ -2057,26 +2057,20 @@ class Supervisor:
                     raise Denied("Child identity mismatch")
             except Exception:
                 if self.driver.alive(run) or not run["pid"]:
-                    timeout = self.startup_timeout(run)
-                    if self.clock() - run["started"] > timeout and run["state"] == "starting":
-                        if run["pid"]:
-                            with self.lock, self.db:
-                                self.db.execute("UPDATE runs SET state='error',error='Startup timed out; process retained' WHERE id=?", (run["id"],))
-                            log("%s did not start within %ss; process retained" % (self.describe(run["world"]), timeout))
-                        else:
-                            # Still preparing its files: there is no process. launch() sees the
-                            # error and cancels the start once the copy returns.
-                            with self.lock, self.db:
-                                self.db.execute("UPDATE runs SET state='error',error=? WHERE id=? AND pid IS NULL AND state='starting'",
-                                                ("Startup timed out while its files were being prepared", run["id"]))
-                            log("%s was still preparing its files after %ss; its start is cancelled"
-                                % (self.describe(run["world"]), timeout))
+                    if run["state"] == "starting":
+                        with self.lock, self.db:
+                            self.expire_startup(run)
+                    elif run["state"] == "running":
+                        # A synchronous snapshot may block status entirely. No playable idle
+                        # time can be measured until the child answers again.
+                        with self.lock, self.db:
+                            self.db.execute("UPDATE runs SET empty_since=NULL WHERE id=? AND state='running'", (run["id"],))
                     elif run["state"] == "error":
                         # It does not answer: whoever is still connected to it cannot play, so the
                         # grace period runs from the first silent tick even if the last answered
                         # status had players (reclaim_errored_instance tells them first).
-                        empty = run["empty_since"] or self.clock()
-                        if not run["empty_since"]:
+                        empty = run["empty_since"] if run["empty_since"] is not None else self.clock()
+                        if run["empty_since"] is None:
                             with self.lock, self.db:
                                 self.db.execute("UPDATE runs SET empty_since=? WHERE id=?", (empty, run["id"]))
                         self.reclaim_errored_instance(run, empty)
@@ -2091,8 +2085,12 @@ class Supervisor:
                 if players:
                     self.db.execute("UPDATE worlds SET last_used=? WHERE id=?", (self.clock(), run["world"]))
                 state = current["state"]
-                if state == "starting" and status.get("ready"):
-                    state = "running"
+                if state == "starting":
+                    if status.get("ready"):
+                        state = "running"
+                    elif self.expire_startup(current):
+                        state = "error"
+                        current = self.row("SELECT * FROM runs WHERE id=?", (run["id"],))
                 looks_stuck = (state == "stopping" and not had_stop_worker
                                and run["id"] not in self.stop_workers and not status.get("draining"))
                 # Only on two consecutive ticks: a single stale status must not turn a stop into an error.
@@ -2117,7 +2115,14 @@ class Supervisor:
                     if session[0] not in players and session[0] not in active:
                         self.db.execute("DELETE FROM sessions WHERE ckey=? AND run=?", (session[0], run["id"]))
                 pending = self.row("SELECT count(*) n FROM tickets WHERE run=?", (run["id"],))["n"]
-                empty = None if players or pending or active else (current["empty_since"] or self.clock())
+                # Loading, saves and draining are not time a player can use the world. Reset at
+                # readiness too, discarding a loading timestamp left by an older supervisor.
+                unavailable = (state == "starting" or
+                               (state == "running" and (status.get("busy") or status.get("draining"))))
+                reset_idle = current["state"] != state
+                empty = (None if unavailable or players or pending or active else
+                         self.clock() if reset_idle else
+                         (current["empty_since"] if current["empty_since"] is not None else self.clock()))
                 error = status.get("error") or current["error"]
                 if stuck:
                     error = "The stop did not complete; the world is still running. Press Stop again."
@@ -2125,10 +2130,26 @@ class Supervisor:
                                 (state, json.dumps(players), empty, status.get("last_save"), error, run["id"]))
                 if status.get("last_save") and not status.get("busy"):
                     self.maintain_checkpoints(run["world"], expected=status["last_save"])
-                if state == "running" and empty and self.clock() - empty >= self.config["empty_grace_seconds"]:
+                if state == "running" and empty is not None and self.clock() - empty >= self.config["empty_grace_seconds"]:
                     self.begin_stop(current)
-            if state == "error" and empty:
+            if state == "error" and empty is not None:
                 self.reclaim_errored_instance(run, empty)
+
+    def expire_startup(self, run):
+        """Bound loading even when a child answers status but never becomes ready. Keep live
+        processes for inspection; a file preparation without a process is cancelled by launch()."""
+        timeout = self.startup_timeout(run)
+        if run["state"] != "starting" or self.clock() - run["started"] <= timeout:
+            return False
+        error = ("Startup timed out; process retained" if run["pid"] else
+                 "Startup timed out while its files were being prepared")
+        changed = self.db.execute("UPDATE runs SET state='error',error=?,empty_since=NULL WHERE id=? AND state='starting'",
+                                  (error, run["id"]))
+        if not changed.rowcount:
+            return False
+        log("%s did not start within %ss; %s" %
+            (self.describe(run["world"]), timeout, "process retained" if run["pid"] else "its start is cancelled"))
+        return True
 
     def reclaim_errored_instance(self, run, empty_since):
         """A tutorial instance (play or edit) in error is killed and deleted (on_run_exited) once it

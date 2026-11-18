@@ -99,8 +99,7 @@
 					ensure_admin_spectator(student)
 				else
 					ensure_player(student.ckey)
-				if(!busy)
-					student.babylon_check_afk(afk_timeout)
+				student.babylon_check_afk(afk_timeout, busy)
 				student.babylon_update_music()
 			catch(var/exception/error)
 				babylon_loop_failed("player [student?.ckey]", error)
