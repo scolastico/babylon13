@@ -54,4 +54,4 @@
 		babylon_afk.kick_pending = FALSE
 		return
 	log_access("BABYLON AFK: [key_name(src)] returned to the lobby after [DisplayTimeText(timeout)].")
-	babylon_remove_from_world(src, "Returned to the lobby for inactivity. Your body and equipment remain in this world; join it again to continue.")
+	babylon_remove_from_world(src, "Returned to the lobby for inactivity. Your body and equipment remain in this world; join it again to continue.", "timeout")

@@ -49,6 +49,9 @@ SUBSYSTEM_DEF(maturity_guard)
 		return FALSE
 
 	if(!SSdbcore.Connect() && (user.ckey in blacklisted_cache))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+		user.client?.babylon_set_leave_reason("banned: maturity blacklist")
+#endif
 		qdel(user.client)
 		return FALSE
 
@@ -105,6 +108,9 @@ SUBSYSTEM_DEF(maturity_guard)
 				to_chat_immediate(user, span_warning("Invalid information entered. Please try again."))
 			if(AGE_CHECK_UNDERAGE)
 				to_chat_immediate(user, span_warning("You are under the age of 18. You cannot play on this server."))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+				user.client?.babylon_set_leave_reason("refused: minimum age requirement")
+#endif
 				qdel(user.client)
 				message_admins("[user.ckey] has FAILED THE AGE CHECK with DOB [prompt.year] [prompt.month] [prompt.day].")
 				//create_underage_ban(user) //Since it's kinda wonky we prefer to handle the banning manually
@@ -230,6 +236,9 @@ SUBSYSTEM_DEF(maturity_guard)
 		message_admins("[user.ckey] has FAILED THE AGE CHECK but couldn't be banned due to lack of database connection.")
 		blacklisted_cache |= user.ckey
 		to_chat(user, player_ban_notification)
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+		user.client?.babylon_set_leave_reason("refused: minimum age requirement")
+#endif
 		qdel(user.client)
 		return
 
@@ -282,6 +291,9 @@ SUBSYSTEM_DEF(maturity_guard)
 
 	to_chat(user, player_ban_notification)
 
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+	user.client?.babylon_set_leave_reason("refused: minimum age requirement")
+#endif
 	qdel(user.client)
 
 #undef AGE_TO_PLAY

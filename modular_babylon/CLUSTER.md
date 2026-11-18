@@ -1047,6 +1047,18 @@ handoffs to worlds, failed actions) and `[world <name> <id>]` (each child
 world's DreamDaemon output, including its round `dd.log` with runtime errors).
 The per-world files under `/data/worlds/<id>/` stay as before.
 
+Lobby and world lifecycle events use `BABYLON_SESSION` followed by one JSON object.
+Every record has `time` (server-local time), `event`, `ckey`, `ip`, `world_name`,
+`world_id` and `reason`; fields with no applicable value are null. Events include
+`connect`, `transfer_to_world`, `join_world`, `leave_world`, `return_to_lobby`,
+`disconnect` and `refused`. Return links carry the source world's identity and
+leave reason, so the lobby's arrival record can be followed back to that world.
+A redirect records intent; only the actual disconnect records departure, so a
+failed redirect does not create a false leave. Explicit quit, kicks, bans,
+inactivity, stops and admission/moderation refusals retain their known reasons.
+BYOND does not distinguish a lost connection from a closed client in its deletion
+callback; those causes are `unknown`. Tickets and credentials are never logged.
+
 ### Configuration
 
 The container reads only environment variables; it writes the supervisor's and the lobby's

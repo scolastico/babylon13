@@ -58,6 +58,9 @@
 		return
 	if(len > TGUI_TELEMETRY_MAX_CONNECTIONS)
 		message_admins("[key_name(client)] was kicked for sending a huge telemetry payload")
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+		client.babylon_set_leave_reason("kicked: oversized telemetry payload")
+#endif
 		qdel(client)
 		return
 

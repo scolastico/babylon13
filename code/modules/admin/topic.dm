@@ -242,6 +242,9 @@
 			to_chat(M, span_danger("You have been kicked from the server by [usr.client.holder.fakekey ? "an Administrator" : "[usr.client.key]"]."), confidential = TRUE)
 			log_admin("[key_name(usr)] kicked [key_name(M)].")
 			message_admins(span_adminnotice("[key_name_admin(usr)] kicked [key_name_admin(M)]."))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+			M.client.babylon_set_leave_reason("kicked")
+#endif
 			qdel(M.client)
 
 	else if(href_list["addmessage"])

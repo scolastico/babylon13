@@ -66,10 +66,11 @@
 /// Returns FALSE when it was tried already (or there is no lobby): then the window is forced.
 /client/proc/babylon_rejoin_once()
 	var/static/list/tried = list()
-	var/lobby = babylon_lobby_link()
+	var/lobby = babylon_lobby_link("window_rejoin")
 	var/world_id = world.params["babylon-world"]
 	if(!lobby || !world_id || (tried[ckey] && world.time < tried[ckey] + 10 MINUTES))
 		return FALSE
+	babylon_set_leave_reason("window_rejoin")
 	tried[ckey] = world.time
 	log_world("Babylon: [key]'s game window is still hidden after 5 seconds; rejoining through the lobby.")
 	var/list/query = list("babylon_rejoin" = world_id)

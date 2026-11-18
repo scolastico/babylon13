@@ -39,3 +39,47 @@
 	if(address)
 		return address
 	return babylon_connection_address(destination, winget(src, null, "url"))
+
+/// One record format for the standalone lobby and both world builds. JSON escapes player text,
+/// so names and refusal reasons cannot create forged log lines. Never pass tickets or URLs here.
+/proc/babylon_session_log_line(event, player_ckey, ip, world_name = null, world_id = null, reason = null)
+	return "BABYLON_SESSION [json_encode(list("time" = time2text(world.realtime, "YYYY-MM-DD hh:mm:ss"), "event" = event, "ckey" = ckey(player_ckey), "ip" = ip || "127.0.0.1", "world_name" = world_name, "world_id" = world_id, "reason" = reason))]"
+
+/client
+	var/babylon_session_connected = 0
+	var/babylon_session_joined = 0
+	var/babylon_session_left = 0
+	var/babylon_session_leave_reason
+	var/babylon_session_target_name
+	var/babylon_session_target_world
+
+/client/proc/babylon_log_session(event, reason = null, world_name = null, world_id = null)
+	if(!world_id)
+		world_id = world.params["babylon-world"]
+#ifdef BABYLON_BUILDER
+	if(!world_name)
+#else
+	if(world_id && !world_name)
+#endif
+		world_name = world.params["babylon-name"] || world.name
+	world.log << babylon_session_log_line(event, ckey, address, world_name, world_id, reason)
+
+/// A redirect may be declined or fail; only deletion confirms departure. A later kick/ban
+/// replaces an earlier return intent, retaining the actual final cause.
+/client/proc/babylon_set_leave_reason(reason)
+	if(!babylon_session_left)
+		babylon_session_leave_reason = reason
+
+/client/proc/babylon_log_leave(reason)
+	if(babylon_session_left)
+		return
+	babylon_session_leave_reason = reason || babylon_session_leave_reason || "unknown"
+	if(babylon_session_joined && !babylon_session_left)
+		babylon_session_left = 1
+		babylon_log_session("leave_world", babylon_session_leave_reason)
+
+/client/Del()
+	if(babylon_session_connected)
+		babylon_log_leave(babylon_session_leave_reason)
+		babylon_log_session("disconnect", babylon_session_leave_reason || "unknown", babylon_session_target_name, babylon_session_target_world)
+	return ..()

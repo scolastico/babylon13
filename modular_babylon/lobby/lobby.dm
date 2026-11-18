@@ -128,11 +128,18 @@ var/global/list/lobby_config
 	// (DreamSeeker's start splash bug, see the world's interface.dm): join it again at once.
 	var/list/query = istext(TopicData) ? params2list(TopicData) : list()
 	TopicData = null
+	babylon_session_connected = 1
+	babylon_log_session("connect")
 	if(!ckey || findtext(ckey, "guest") == 1 || connection != "seeker")
+		babylon_session_leave_reason = "A BYOND account and DreamSeeker are required"
+		babylon_log_session("refused", babylon_session_leave_reason)
 		return null
 	. = ..()
 	var/rejoin = query["babylon_rejoin"]
 	var/static/regex/world_id = regex(@"^[0-9a-f]{32}$")
+	var/from_world = query["babylon_from_world"]
+	if(istext(from_world) && world_id.Find(from_world))
+		babylon_log_session("return_to_lobby", copytext_char(query["babylon_leave_reason"] || "unknown", 1, 257), copytext_char(query["babylon_from_name"], 1, 129), from_world)
 	// A world sent the player back with a reason (only known codes: the text is the lobby's own,
 	// worded for the button that sent them there, which their returning mob remembers).
 	var/static/list/world_notices = list("admission_timeout" = "admission")
@@ -143,7 +150,6 @@ var/global/list/lobby_config
 				mob:set_notice(lobby_retry_notice(world_notice, mob:last_retry), TRUE)
 			mob:show_browser()
 			if(istext(rejoin) && world_id.Find(rejoin))
-				world.log << "[ckey] returned to rejoin world [rejoin]"
 				mob:run_action("join", list("world" = rejoin, "spectate" = query["spectate"] == "1" ? 1 : 0))
 
 
@@ -198,7 +204,6 @@ var/global/list/lobby_config
 	busy = 0
 	request_revision++
 	var/generation = ++poll_generation
-	world.log << "[ckey] connected to the lobby"
 	spawn(50)
 		while(client && generation == poll_generation)
 			// The page shows the restart screen when these stop: the server went away.
@@ -212,7 +217,6 @@ var/global/list/lobby_config
 			sleep(50)
 
 /mob/lobby/Logout()
-	world.log << "[ckey] left the lobby"
 	browser_initialized = 0
 	last_browser_content = ""
 	poll_generation++
@@ -940,6 +944,7 @@ var/global/list/lobby_config
 	while(client && world.time < deadline)
 		var/list/result = api("join", join)
 		if(result["error"])
+			client?.babylon_log_session("refused", result["error"], world_name, id)
 			respond(request, list("error" = result["error"]))
 			return
 		if(request)
@@ -953,17 +958,22 @@ var/global/list/lobby_config
 				return
 			var/address = babylon_connection_address(result["address"], endpoint)
 			if(!address)
+				client?.babylon_log_session("refused", "World connection address is unavailable", world_name, id)
 				set_notice("The world's connection address is unavailable. Ask the host to set BABYLON_PUBLIC_HOST (public_host for a native cluster) to a reachable server address.", TRUE)
 				return
 			var/lobby = babylon_connection_address(lobby_config["address"] || "byond://[endpoint]", endpoint)
 			src << output(list2params(list(world_name, lobby)), "mainwindow.browser:showLobbyHandoff")
-			world.log << "[ckey] offered connection to world [world_name] ([id]) at [copytext(address, 1, findtext(address, "?"))]"
+			client.babylon_session_target_name = world_name
+			client.babylon_session_target_world = id
+			client.babylon_session_leave_reason = "join_world"
+			client.babylon_log_session("transfer_to_world", "join_world", world_name, id)
 			last_retry = retry
 			src << link(address)
 			set_notice(lobby_retry_notice("offered", retry))
 			return
 		show_loading(world_name, stage)
 		sleep(20)
+	client?.babylon_log_session("refused", "World start timed out", world_name, id)
 	set_notice(lobby_retry_notice("timeout", retry), TRUE)
 
 /// A notice that sends the player back to a world, worded for the button that does it: Join on a

@@ -115,6 +115,16 @@ game's external admin PM (`TgsPm`). All through overrides. After an upstream
 merge, re-check `MessageNoRecipient`, `reply_to_admins_notification`,
 `receive_ahelp`, `TgsPm` and the Skyrat mentor module against it.
 
+`modular_babylon/connection.dm` is shared with the standalone lobby and owns the
+structured `BABYLON_SESSION` records and final client deletion hook. Admission,
+world joins, lobby transfers, shutdown and AFK returns supply their context and
+known reason; `moderation.dm` also wraps `/world/IsBanned` to record pre-client
+refusals. Small `BABYLON_BUILDER` hooks retain reasons before upstream disconnects
+in `client_procs.dm`, both admin player panels, admin/SQL bans, server maintenance,
+IP intelligence, TGUI telemetry, kick mines and the maturity subsystem. After an
+upstream merge, scan client deletions and delayed deletions for new known causes;
+ordinary builds compile without these hooks.
+
 `modular_babylon/code/research.dm` replaces the research point bank and queue:
 a techweb researches one selected node at a time, all income (through
 `add_point_list`) goes towards it capped at its price, `research_points` holds

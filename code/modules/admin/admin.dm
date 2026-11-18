@@ -124,6 +124,9 @@ ADMIN_VERB(create_or_modify_area, R_DEBUG, "Create Or Modify Area", "Create of m
 			if(message)
 				to_chat(C, message, confidential = TRUE)
 			kicked_client_names.Add("[C.key]")
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+			C.babylon_set_leave_reason(kick_only_afk ? "timeout" : "kicked")
+#endif
 			qdel(C)
 	return kicked_client_names
 

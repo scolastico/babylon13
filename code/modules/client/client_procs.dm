@@ -268,6 +268,11 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 	TopicData = null //Prevent calls to client.Topic from connect
 
 	if(connection != "seeker" && connection != "web")//Invalid connection type.
+#ifdef BABYLON_BUILDER // BABYLON13: this refusal precedes the normal admission log.
+		babylon_session_connected = TRUE
+		babylon_log_session("connect")
+		babylon_refuse_admission("Invalid connection type")
+#endif
 		return null
 
 #ifdef BABYLON_BUILDER // BABYLON13: admission precedes client registration/avatar creation.
@@ -398,6 +403,9 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 		connecting_admin = TRUE
 	//SKYRAT EDIT ADDITION //We will check the population here, because we need to know if the client is an admin or not.
 	if(!check_population(connecting_admin))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+		babylon_refuse_admission("World population limit")
+#endif
 		qdel(src)
 		return
 	// SKYRAT EDIT END
@@ -425,6 +433,9 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 		message_admins(span_adminnotice("[key_name(src)] has been detected as spoofing their BYOND version. Connection rejected."))
 		add_system_note("Spoofed-BYOND-Version", "Detected as using a spoofed BYOND version.")
 		log_suspicious_login("Failed Login: [key] - Spoofed BYOND version")
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+		babylon_refuse_admission("Spoofed BYOND version")
+#endif
 		qdel(src)
 		return
 
@@ -436,6 +447,9 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 		if(connecting_admin)
 			to_chat_immediate(src, "As an admin, you are being allowed to continue using this version, but please consider changing BYOND versions.")
 		else
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+			babylon_refuse_admission("Blacklisted BYOND version")
+#endif
 			qdel(src)
 			return
 
@@ -495,6 +509,9 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 		if (connecting_admin)
 			to_chat_immediate(src, "Because you are an admin, you are being allowed to walk past this limitation, But it is still STRONGLY suggested you upgrade")
 		else
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+			babylon_refuse_admission("Obsolete BYOND version")
+#endif
 			qdel(src)
 			return
 	else if (byond_version < warn_version || (byond_version == warn_version && byond_build < warn_build)) //We have words for this client.
@@ -515,10 +532,16 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 	if (connection == "web" && !connecting_admin)
 		if (!CONFIG_GET(flag/allow_webclient))
 			to_chat_immediate(src, "Web client is disabled")
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+			babylon_refuse_admission("Web client is disabled")
+#endif
 			qdel(src)
 			return
 		if (CONFIG_GET(flag/webclient_only_byond_members) && !IsByondMember())
 			to_chat_immediate(src, "Sorry, but the web client is restricted to byond members only.")
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+			babylon_refuse_admission("Web client requires BYOND membership")
+#endif
 			qdel(src)
 			return
 
@@ -773,6 +796,9 @@ GLOBAL_LIST_INIT(unrecommended_builds, list(
 				winset(src, null, "command=.options")
 				src << link("[panic_addr]?redirect=1")
 			qdel(query_client_in_db)
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known refusal cause.
+			babylon_refuse_admission("Account blocked by panic bunker")
+#endif
 			qdel(src)
 			return
 		//SKYRAT EDIT END

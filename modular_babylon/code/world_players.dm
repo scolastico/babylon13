@@ -28,6 +28,8 @@
 	. = ..()
 	// A rejected admission returns before the client is registered.
 	if(src && (src in GLOB.clients))
+		babylon_session_joined = TRUE
+		babylon_log_session("join_world")
 		babylon_announced = babylon_announce(babylon_showcase_visitor ? "[html_encode(key)] is visiting the world." : (babylon_admin_spectator ? "[html_encode(key)] is spectating the world." : "[html_encode(key)] joined the world."))
 	if(src && babylon_world_manager())
 		add_verb(src, list(/client/proc/babylon_add_member, /client/proc/babylon_remove_member,
@@ -53,11 +55,12 @@
 		players[player.key] = player
 	return players
 
-/proc/babylon_remove_from_world(client/player, message)
+/proc/babylon_remove_from_world(client/player, message, reason = "kicked")
 	if(!player)
 		return
 	to_chat(player, span_userdanger(message))
-	var/lobby = player.babylon_lobby_link()
+	var/lobby = player.babylon_lobby_link(reason)
+	player.babylon_set_leave_reason(reason)
 	if(lobby)
 		player << link(lobby)
 	// Let the notice and the lobby link reach the player before disconnecting.
@@ -133,7 +136,7 @@
 	log_admin("BABYLON WORLD: [key_name(src)] banned [target] from this world: [reason]")
 	var/client/player = GLOB.directory[ckey(target)]
 	if(player)
-		babylon_remove_from_world(player, "You were banned from this world by [key][reason ? ": [reason]" : ""].")
+		babylon_remove_from_world(player, "You were banned from this world by [key][reason ? ": [reason]" : ""].", "banned[reason ? ": [reason]" : ""]")
 	to_chat(src, span_notice("[html_encode(target)] is banned from this world."))
 
 /client/proc/babylon_unban_player()
