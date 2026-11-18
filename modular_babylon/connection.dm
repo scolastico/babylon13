@@ -78,8 +78,19 @@
 		babylon_session_left = 1
 		babylon_log_session("leave_world", babylon_session_leave_reason)
 
+/client/proc/babylon_log_disconnect(reason)
+	if(!babylon_session_connected)
+		return
+	babylon_log_leave(reason)
+	babylon_log_session("disconnect", babylon_session_leave_reason || "unknown", babylon_session_target_name, babylon_session_target_world)
+	babylon_session_connected = 0
+
 /client/Del()
-	if(babylon_session_connected)
-		babylon_log_leave(babylon_session_leave_reason)
-		babylon_log_session("disconnect", babylon_session_leave_reason || "unknown", babylon_session_target_name, babylon_session_target_world)
+	babylon_log_disconnect(babylon_session_leave_reason)
+	return ..()
+
+/// Flush before the engine destroys clients; their Del hooks need not run during shutdown.
+/world/Del()
+	for(var/client/player)
+		player.babylon_log_disconnect("world_stopped")
 	return ..()

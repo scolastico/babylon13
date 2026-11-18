@@ -571,9 +571,9 @@
 	while(SSticker.delay_end)
 		sleep(1 SECONDS)
 	for(var/client/player in GLOB.clients.Copy())
+		player.babylon_set_leave_reason("world_stopped")
 		var/lobby = player.babylon_lobby_link("world_stopped")
 		if(lobby)
-			player.babylon_set_leave_reason("world_stopped")
 			player << link(lobby)
 	// As managed_stop: plain BYOND sleeps, independent of the master's timers.
 	sleep(3 SECONDS)

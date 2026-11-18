@@ -192,9 +192,9 @@
 		draining = FALSE
 		return result
 	for(var/client/player in GLOB.clients.Copy())
+		player.babylon_set_leave_reason("world_stopped")
 		var/lobby = player.babylon_lobby_link("world_stopped")
 		if(lobby)
-			player.babylon_set_leave_reason("world_stopped")
 			player << link(lobby)
 	// The master (including its timer subsystem) is paused after the snapshot.
 	// BYOND spawn still runs, so exit cannot depend on a subsystem timer here.

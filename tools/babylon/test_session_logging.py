@@ -124,6 +124,64 @@ var/global/gate_result
         self.assertEqual(records[-1]['reason'], 'Banned')
         self.assertEqual(records[-1]['ip'], '192.0.2.20')
 
+    def test_world_shutdown_flushes_connected_sessions_without_duplicate_disconnects(self):
+        from test_window_startup import procedure
+        source = (ROOT / 'modular_babylon/connection.dm').read_text()
+        self.assertIn('/world/Del()', source, 'World shutdown must flush sessions before deleting the world')
+        helpers = source[source.index('/proc/babylon_session_log_line'):source.index('/client/Del()')]
+        helpers = helpers.replace('/client', '/datum/session_probe')
+        disconnect = procedure(source, '/client/Del()').replace('/client/Del()', '/datum/session_probe/proc/disconnect()')
+        disconnect = disconnect.replace('\treturn ..()\n', '')
+        # Native clients require DreamSeeker. Substitute only the client collection/receiver;
+        # execute the actual shutdown hook through world.Del(), including its parent shutdown.
+        world_hook = procedure(source, '/world/Del()').replace(
+            'for(var/client/player)', 'for(var/datum/session_probe/player in connected_probes)')
+        harness = '''
+var/global/list/connected_probes = list()
+/datum/session_probe
+    var/ckey
+    var/address = "192.0.2.20"
+/world/New()
+    log = file("records.log")
+    params["babylon-world"] = "world-id"
+    params["babylon-name"] = "Test world"
+    var/datum/session_probe/player = new
+    player.ckey = "Still_Here"
+    player.babylon_session_connected = 1
+    player.babylon_session_joined = 1
+    player.babylon_set_leave_reason("quit")
+    var/datum/session_probe/gone = new
+    gone.ckey = "Already_Gone"
+    gone.babylon_session_connected = 1
+    gone.babylon_session_joined = 1
+    gone.babylon_set_leave_reason("kicked")
+    gone.disconnect()
+    gone.disconnect()
+    var/datum/session_probe/flushed = new
+    flushed.ckey = "Already_Flushed"
+    flushed.babylon_session_connected = 1
+    flushed.babylon_session_joined = 1
+    flushed.babylon_log_disconnect("world_stopped")
+    flushed.disconnect()
+    var/datum/session_probe/loading = new
+    loading.ckey = "Loading"
+    loading.babylon_session_connected = 1
+    connected_probes = list(player, gone, loading, flushed)
+    Del()
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / 'probe.dme').write_text(helpers + '\n' + disconnect + '\n' + world_hook + '\n' + harness)
+            for command in (['DreamMaker', 'probe.dme'], ['DreamDaemon', 'probe.dmb', '-invisible', '-trusted']):
+                result = subprocess.run(command, cwd=folder, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            records = [json.loads(line.split('BABYLON_SESSION ', 1)[1])
+                       for line in (folder / 'records.log').read_text().splitlines() if 'BABYLON_SESSION ' in line]
+        self.assertEqual([r['event'] for r in records], ['leave_world', 'disconnect'] * 3 + ['disconnect'])
+        self.assertEqual([r['ckey'] for r in records], ['alreadygone', 'alreadygone', 'alreadyflushed', 'alreadyflushed', 'stillhere', 'stillhere', 'loading'])
+        self.assertEqual([r['reason'] for r in records], ['kicked', 'kicked'] + ['world_stopped'] * 5)
+        self.assertTrue(all(r['world_id'] == 'world-id' and r['world_name'] == 'Test world' for r in records))
+
     def test_tutorial_entry_refusals_are_logged_before_a_world_exists(self):
         from test_window_startup import procedure
         shared = (ROOT / 'modular_babylon/connection.dm').read_text()
