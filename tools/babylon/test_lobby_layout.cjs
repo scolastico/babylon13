@@ -170,7 +170,7 @@ async function main() {
         return { body: painted(body), sizes: painted(sizes), gap: sizes.firstChild.getBoundingClientRect().top - desc.getBoundingClientRect().bottom };
       });
       assert.equal(styles.body, styles.sizes, 'background continues through size row');
-      assert.ok(styles.gap >= 10, 'description has breathing room');
+      assert.ok(styles.gap >= 12, 'description has at least 12 px of breathing room');
     });
     await check('size focus is visible and contained', async () => {
       const focus = await page.locator('#size-creative_plane_l').evaluate(el => {
@@ -178,6 +178,37 @@ async function main() {
         return { outline: css.outlineStyle, width: parseFloat(css.outlineWidth), offset: parseFloat(css.outlineOffset), shadow: css.boxShadow };
       });
       assert.ok((focus.outline !== 'none' && focus.width > 0 && focus.offset <= -focus.width) || focus.shadow.includes('inset'), JSON.stringify(focus));
+    });
+    for (const id of ['map-babylon', 'map-group-creative_plane']) {
+      await page.focus('button#' + id);
+      await check(id + ' focus stays inside the card selection', async () => {
+        const focus = await page.locator('button#' + id).evaluate(el => {
+          const css = getComputedStyle(el), ring = getComputedStyle(el, '::after');
+          const card = getComputedStyle(el.closest('.map-card'));
+          return { outline: css.outlineStyle, shadow: css.boxShadow, ringShadow: ring.boxShadow,
+            ringBorder: parseFloat(ring.borderTopWidth), insets: [ring.top, ring.right, ring.bottom, ring.left].map(parseFloat),
+            cardOutline: card.outlineStyle, cardShadow: card.boxShadow, selected: el.closest('.map-card').classList.contains('selected') };
+        });
+        assert.equal(focus.outline, 'none');
+        assert.equal(focus.shadow, 'none');
+        assert.equal(focus.ringShadow, 'none');
+        assert.ok(focus.ringBorder > 0 && focus.insets.every(inset => inset > 0), JSON.stringify(focus));
+        assert.equal(focus.cardOutline, 'none');
+        assert.equal(focus.cardShadow === 'none', !focus.selected, 'only the selected card has an outer shadow');
+      });
+    }
+    await page.focus('#size-creative_plane_l');
+    await check('modal ids are unique for focus and accessible labels', async () => {
+      const ids = await page.locator('.modal [id]').evaluateAll(elements => elements.map(el => el.id));
+      assert.equal(new Set(ids).size, ids.length, 'duplicate modal ids');
+    });
+    await check('group help is associated with each builder card', async () => {
+      const descriptions = await page.locator('.map-row > .map-grid').evaluateAll(elements => elements.map(el => {
+        const help = document.getElementById(el.getAttribute('aria-describedby'));
+        return help ? help.textContent : '';
+      }));
+      assert.equal(descriptions.length, 2);
+      assert.ok(descriptions.every(Boolean), JSON.stringify(descriptions));
     });
     await check('keyboard sizes, focus trap and form values', async () => {
       await page.keyboard.press('ArrowRight');
@@ -224,7 +255,7 @@ async function main() {
       fixture.state.maps[0].description = window.layoutOriginalDescription;
     });
 
-    for (const width of [320, 375, 640, 641, 768, 1920]) {
+    for (const width of [320, 375, 600, 640, 641, 768, 1920]) {
       await page.setViewportSize({ width, height: width === 1920 ? 1080 : 740 });
       await render();
       await check(width + ' world list long names/descriptions/errors', () => contained('main'));
@@ -235,8 +266,17 @@ async function main() {
       await check(width + ' empty world list', () => contained('main'));
       await page.evaluate(() => lobbyOpenCreate());
       await check(width + ' map picker', () => contained('.modal'));
+      if (width <= 600) await check(width + ' station columns preserve the responsive grid', async () => {
+        const columns = await page.locator('.map-group .map-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+        assert.equal(columns, width < 400 ? 1 : 2);
+      });
       if (width > 640) await check(width + ' cards align', align);
       await snapshot(width + '-map');
+      if (width === 600) {
+        await page.locator('.map-group').evaluate(el => el.scrollIntoView());
+        await snapshot('600-stations');
+        await page.locator('#modal-backdrop').evaluate(el => { el.scrollTop = 0; });
+      }
       await page.evaluate(() => lobbyPickMap(document.querySelector('[data-card="babylon"]')));
       await check(width + ' selected Babylon fits', () => contained('.modal'));
       for (const size of ['s', 'm', 'l']) {
@@ -299,6 +339,14 @@ async function main() {
       await snapshot(width + '-tutorials');
       await page.evaluate(() => lobbyToast('Failure'.repeat(80), 'error'));
       await check(width + ' error toast', () => contained('.toasts'));
+      await check(width + ' toast shadows have space inside the scroll container', async () => {
+        const padding = await page.locator('.toasts').evaluate(el => {
+          const css = getComputedStyle(el);
+          return [css.paddingLeft, css.paddingRight, css.paddingBottom].map(parseFloat);
+        });
+        assert.ok(padding.every(value => value >= 12), JSON.stringify(padding));
+      });
+      if (width === 600 || width === 320) await snapshot(width + '-toast');
       await page.evaluate(() => { lobbyToast('Failure'.repeat(80), 'error'); lobbyToast('Failure'.repeat(80), 'error'); });
       await check(width + ' toast stack fits the viewport', async () => {
         const box = await page.locator('.toasts').boundingBox();

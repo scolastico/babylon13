@@ -826,7 +826,8 @@ function lobbyCreateMapHtml(modal) {
       body += '<div class="map-row' + (row.length === 1 ? ' single' : '') + '">';
       for (var r = 0; r < row.length; r++) body += lobbyMapIntroHtml(row[r]);
       for (r = 0; r < row.length; r++) {
-        body += '<div class="map-grid" role="group" aria-labelledby="map-group-' + lobbyEsc(row[r].id) + '">' +
+        body += '<div class="map-grid" role="group" aria-labelledby="map-heading-' + lobbyEsc(row[r].id) + '"' +
+          (row[r].help ? ' aria-describedby="map-help-' + lobbyEsc(row[r].id) + '"' : '') + '>' +
           lobbyMapCardsHtml(modal, row[r]) + '</div>';
       }
       body += '</div>';
@@ -848,8 +849,8 @@ function lobbyCreateMapHtml(modal) {
 }
 
 function lobbyMapIntroHtml(group) {
-  return '<div class="map-intro"><h3 id="map-group-' + lobbyEsc(group.id) + '">' + lobbyEsc(group.label) + '</h3>' +
-    (group.help ? '<p>' + lobbyEsc(group.help) + '</p>' : '') + '</div>';
+  return '<div class="map-intro"><h3 id="map-heading-' + lobbyEsc(group.id) + '">' + lobbyEsc(group.label) + '</h3>' +
+    (group.help ? '<p id="map-help-' + lobbyEsc(group.id) + '">' + lobbyEsc(group.help) + '</p>' : '') + '</div>';
 }
 
 function lobbyMapCardsHtml(modal, group) {

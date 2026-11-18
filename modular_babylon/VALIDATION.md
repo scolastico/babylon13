@@ -431,8 +431,11 @@ script. Separate group containers placed the Creative Plane preview about 22 px
 below Babylon and gave the cards heights of about 223 and 196 px. Group help and
 card descriptions now occupy shared grid rows. All map-pick buttons use a column
 layout, so stretching a card cannot vertically center its preview/text. A lone
-available group fills its row. Narrow screens stack each introduction with its
-card in reading order. These changes use the grid/flex features already present
+available group fills its row. Narrow screens visually stack each introduction
+with its card. The DOM retains both introductions before the cards, and each
+card group references its help paragraph through `aria-describedby`. Heading
+IDs use a separate namespace from card-button IDs so labels and focus targets
+remain unique. These changes use the grid/flex features already present
 in the lobby; no subgrid, display:contents or new JavaScript syntax is required.
 
 Audit findings and every affected occurrence fixed:
@@ -444,8 +447,10 @@ Audit findings and every affected occurrence fixed:
   including the space between/around size buttons. Body bottom padding provides
   at least 12 px between description and controls. Size focus is inset; card
   focus is dashed and inset, separate from the outer selection border.
-- Narrow picker: map/tutorial grids use one shrinkable column below 641 px;
-  size buttons may wrap, and their intended 14 px font is no longer overwritten
+- Narrow picker: Stations retains its existing auto-fill columns, including two
+  columns at 600 px and one at 320–375 px. Tutorial grids use one shrinkable
+  column only at 400 px and below, where their 340 px minimum may not fit.
+  Size buttons may wrap, and their intended 14 px font is no longer overwritten
   by the later `font` shorthand.
 - Long unbroken text: inherited wrapping covers world names/descriptions,
   notices, modal text/titles, errors, loading/reconnect messages and toasts.
@@ -469,7 +474,8 @@ Audit findings and every affected occurrence fixed:
   and preview style are preserved.
 - Toasts: the fixed container is bounded by both viewport edges and its text
   can shrink/wrap; long errors no longer extend beyond the screen. A stack of
-  three long messages scrolls within half the viewport height. Loading,
+  three long messages scrolls within half the viewport height. Padding leaves
+  room for toast shadows inside that scrolling container. Loading,
   intentional handoff and lost-connection screens clear stale toasts alongside
   the modal, as `lobbyHideOverlays` promises.
 
@@ -492,13 +498,14 @@ NODE_PATH="$PWD/data/babylon-supervisor/lobby-layout/browser/node_modules" \
   node tools/babylon/test_lobby_layout.cjs
 ```
 
-An existing Chromium executable can be supplied with `CHROMIUM_EXECUTABLE`;
-this host used `/home/jb/.cache/ms-playwright/chromium-1254/chrome-linux64/chrome`.
-The final run passed 159 checks at widths 320, 375, 640, 641, 768 and 1920 px
+An existing Chromium executable can be supplied with `CHROMIUM_EXECUTABLE`,
+for example the Playwright Chromium path on the test host.
+The final run passed 197 checks at widths 320, 375, 600, 640, 641, 768 and 1920 px
 (740 px tall below desktop; desktop 1920×1080). Checks cover neither/Babylon/
 Creative Plane S/M/L selection, equal preview/title/description tops and card
 heights, unequal help/description lengths, the selected background and spacing,
-inset keyboard focus, radio arrows, Tab/Shift+Tab containment, retained name and
+inset keyboard focus on both card buttons and sizes, unique modal IDs and
+associated group help, radio arrows, Tab/Shift+Tab containment, retained name and
 description across steps, world/empty lists, navigation tabs, Discord bar, both
 wizard steps, busy/error states, members, long Join titles, danger confirmations,
 Discord copy controls, checkpoint loading/list, tutorials/badges, toasts and
@@ -506,13 +513,18 @@ loading/reconnect screens. The card/color/focus/overflow guards failed before
 the fixes; separate new guards also caught the badge overlap, footer height
 and lone-group sizing before those fixes.
 Vertical overflow guards also failed on oversized footer errors and toast
-stacks, and the DOM test caught stale toasts surviving overlay cleanup.
+stacks, and the DOM test caught stale toasts surviving overlay cleanup. Review
+guards also reproduced lost Stations columns at 600 px, missing shadow space
+and the colliding Creative Plane heading/button IDs before their fixes. The
+spacing assertion requires at least 12 px, matching the intended padding.
 
 Browser screenshots were inspected at desktop and narrow widths, including
 `desktop-map-unselected.png`, `desktop-map-selected.png`, `320-map.png`,
 `320-details.png`, `320-tutorials.png`, and the corresponding 375 px files.
+Review follow-up evidence includes `600-stations.png` (two columns) and
+`600-toast.png`/`320-toast.png` (shadows with room inside the container).
 Before/after PNGs remain ignored under
-`data/babylon-supervisor/lobby-layout/{before,after}/`; representative final
+`data/babylon-supervisor/lobby-layout/{before,after,review}/`; representative final
 images accompany the review hand-in.
 
 Other verification:

@@ -116,7 +116,7 @@ for (const [size, area] of [['S', '50×50'], ['M', '100×100'], ['L', '200×200'
 }
 assert.match(modalHtml(), /Creative Plane<\/span><span class="map-desc">Pick a size below\.</, 'an unselected Creative Plane card asks for a size');
 assert.doesNotMatch(modalHtml(), /data-autofocus="1"[^>]*onclick="return lobbyPickMap/, 'no card is focused before one is chosen');
-assert.match(modalHtml(), /<div class="map-row"><div class="map-intro">.*<div class="map-intro">.*<div class="map-grid" role="group" aria-labelledby="map-group-babylon">.*<div class="map-grid" role="group" aria-labelledby="map-group-creative_plane">.*<section class="map-group" aria-label="Stations">/,
+assert.match(modalHtml(), /<div class="map-row"><div class="map-intro">.*<div class="map-intro">.*<div class="map-grid" role="group" aria-labelledby="map-heading-babylon" aria-describedby="map-help-babylon">.*<div class="map-grid" role="group" aria-labelledby="map-heading-creative_plane" aria-describedby="map-help-creative_plane">.*<section class="map-group" aria-label="Stations">/,
   'single-card groups share introduction and card rows with labelled groups');
 for (const label of ['Babylon', 'Creative Plane', 'Stations']) assert.match(modalHtml(), new RegExp('<h3 id="[^"]+">' + label + '</h3>'), label + ' group');
 assert.match(modalHtml(), /IceBoxStation<span class="badge multiz">Multi-level<\/span>/, 'multi-z maps carry a badge');
