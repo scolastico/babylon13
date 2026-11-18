@@ -4,6 +4,7 @@ import { Tooltip } from 'tgui-core/components';
 import type { ResourceLink } from '../EscapeMenu';
 
 type ServerState = {
+  canReturnToLobby?: boolean;
   stationName: string;
   canLeaveBody: boolean;
   canAdminHelp: boolean;
@@ -92,7 +93,9 @@ export function HomePage({
           >
             Leave Body
           </MenuButton>
-          <MenuButton onClick={() => onNavigate('quit')}>Quit</MenuButton>
+          <MenuButton onClick={() => onNavigate('quit')}>
+            {serverState.canReturnToLobby ? 'Return to lobby' : 'Quit'}
+          </MenuButton>
         </div>
       </div>
       <div className="escape-menu__resources">

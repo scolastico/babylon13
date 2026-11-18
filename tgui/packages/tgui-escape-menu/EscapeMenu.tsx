@@ -25,6 +25,8 @@ export type PlayerInfo = {
 export type ServerState = {
   /** BABYLON13: set by Babylon worlds, which have no rounds and rarely an admin online. */
   babylon?: boolean;
+  /** A connected game world can return to its Babylon lobby. */
+  canReturnToLobby?: boolean;
   stationName: string;
   roundId: string;
   mapName: string;
@@ -194,7 +196,11 @@ export function EscapeMenu() {
           />
         )}
         {state.page === 'quit' && (
-          <QuitPage onNavigate={navigate} onAction={handleAction} />
+          <QuitPage
+            canReturnToLobby={state.serverState.canReturnToLobby}
+            onNavigate={navigate}
+            onAction={handleAction}
+          />
         )}
       </div>
     </div>

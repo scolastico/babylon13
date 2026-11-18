@@ -205,11 +205,6 @@
 		"other_str" = target.mob?.get_status_tab_items(),
 	))
 
-/// Tells the pause screen it is a Babylon world: no round ID, no "No Admins Online!".
-/datum/escape_menu/send_init()
-	. = ..()
-	send_update(list("babylon" = TRUE))
-
 /// The image has no .git, so rust-g returns "failed to open repository" text for every git
 /// lookup. The revision comes from the image instead (BABYLON_COMMIT and friends, set by CI),
 /// and anything that is not a commit hash is dropped rather than shown as one.
