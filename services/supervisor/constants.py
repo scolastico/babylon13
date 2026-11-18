@@ -37,6 +37,7 @@ def world_policy(build, persistent, creative, kind, map_id):
         "creative_machines_active": creative or tutorial or plane,
         "delam_contained": creative or tutorial or plane,
         "storyteller_inert": build == "babylon" or tutorial or plane,
+        "startup_decay_enabled": not plane,
         "saves": saves,
         "stop_saves": saves,
         "round_starts_at_once": tutorial,

@@ -46,11 +46,14 @@
 	var/low_y = world.maxy
 	var/high_x = 0
 	var/high_y = 0
+	var/floors_intact = TRUE
 	for(var/turf/open/floor in get_area_turfs(/area/station/babylon/creative_plane, station_z, TRUE))
 		low_x = min(low_x, floor.x)
 		low_y = min(low_y, floor.y)
 		high_x = max(high_x, floor.x)
 		high_y = max(high_y, floor.y)
+		if(istype(floor, /turf/open/floor/plating))
+			floors_intact = FALSE
 	var/start = round((255 - size) / 2) + 1
 	result["floor_size"] = high_x - low_x + 1 == size && high_y - low_y + 1 == size
 	result["floor_centred"] = low_x == start && low_y == start
@@ -62,6 +65,10 @@
 		if(!istype(locate(low_x, y, station_z), /turf/open/floor/catwalk_floor/iron))
 			west_catwalk_open = FALSE
 	result["west_catwalk_open"] = west_catwalk_open
+	result["fresh_floors_intact"] = floors_intact
+	// The initializer must stand back on every plane, even if random decay would happen to
+	// leave the sampled catwalk intact. Calling it again must not change this fresh map.
+	result["plane_decay_refused"] = SSdecay.Initialize() == SS_INIT_NO_NEED && !length(SSdecay.possible_turfs)
 	result["utility_area"] = istype(GLOB.areas_by_type[/area/station/babylon/creative_plane/utilities], /area/station/babylon/creative_plane/utilities)
 	// Creative Plane machines run whatever the Creative flag; their settings stay Creative-only.
 	result["machines_active"] = babylon_creative_machines_active()

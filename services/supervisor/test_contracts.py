@@ -203,6 +203,22 @@ class WorldPolicy(unittest.TestCase):
         self.assertTrue(SAVES_CHARACTERS["world"])
         self.assertFalse(SAVES_CHARACTERS["tutorial"] or SAVES_CHARACTERS["tutorial_edit"])
 
+    def test_startup_decay_preserves_planes_and_keeps_ordinary_map_rolls(self):
+        policy = dm_policy()
+        cases = (
+            ("station", 1, 0, "world", "creative_plane_s", False),
+            ("station", 1, 1, "world", "creative_plane_m", False),
+            ("station", 0, 1, "world", "creative_plane_l", False),
+            ("station", 1, 1, "world", "metastation", True),
+            ("station", 1, 1, "tutorial", "metastation", True),
+            ("babylon", 1, 1, "world", "babylon", True),
+        )
+        for build, persistent, creative, kind, map_id, want in cases:
+            with self.subTest(map_id=map_id, kind=kind):
+                self.assertEqual(world_policy(build, persistent, creative, kind, map_id)["startup_decay_enabled"], want)
+                world = dict(build=build, persistent=persistent, creative=creative, kind=kind, map_id=map_id)
+                self.assertEqual(dm_evaluate(policy, "startup_decay_enabled", world), want)
+
     def test_station_save_asks_whether_it_saves_characters(self):
         # arch-review M1: the station checkpoint writes "characters" only where the policy allows
         # (never a tutorial world, never a tutorial snapshot): the snapshot flag reaches both captures.

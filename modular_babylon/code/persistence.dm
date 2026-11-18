@@ -1548,8 +1548,12 @@
 
 // Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and
 // rat or spider nests into maintenance. A saved world keeps its own decay; decaying it again on
-// every restart piled up dirt, webs and nests.
+// every restart piled up dirt, webs and nests. Fresh Creative Planes keep their authored floor
+// and utility layout, including the continuous perimeter catwalk.
 /datum/controller/subsystem/decay/Initialize()
+	if(!babylon_startup_decay_enabled())
+		log_world("SSDecay skipped: Creative Plane layout stays intact.")
+		return SS_INIT_NO_NEED
 	if(babylon_world_resumes_save())
 		log_world("SSDecay skipped: this world resumes a save.")
 		return SS_INIT_NO_NEED

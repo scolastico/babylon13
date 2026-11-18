@@ -20,6 +20,11 @@
 	result["unsafe_ids_rejected"] = !babylon_safe_id("../x") && !babylon_safe_id("") && babylon_safe_id("creative_plane_m")
 	result["ready"] = babylon_world_ready() && ready
 	result["map_loaded"] = SSmapping.current_map?.map_name == "MetaStation" || flags.map_id != "metastation"
+	// Fresh ordinary stations still take their configured decay rolls; planes and resumes
+	// stand back. Explicit upstream/config exclusions keep their existing behavior.
+	result["ordinary_station_decay_kept"] = flags.is_creative_plane() || babylon_world_resumes_save() \
+		|| CONFIG_GET(flag/ssdecay_disabled) || (SSmapping.current_map?.map_name in SSdecay.station_filter) \
+		|| length(SSdecay.possible_turfs) > 0
 	// The Babylon rules (rules.dm) are not compiled in: normal tg rounds.
 	result["events_fire"] = !(SSevents.ss_flags & SS_NO_FIRE) && !(SSgamemode.ss_flags & SS_NO_FIRE)
 	result["several_levels"] = world.maxz > 1

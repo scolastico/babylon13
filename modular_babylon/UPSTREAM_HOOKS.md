@@ -231,7 +231,8 @@ into them and re-check what each one relies on after every upstream merge):
   - `/datum/controller/subsystem/mapping/LoadGroup` (saved levels instead of the fresh map).
   - `/turf/open/floor/MakeDirty`, `/datum/controller/subsystem/processing/station/SetupTraits`,
     `/datum/controller/subsystem/decay/Initialize` and `/datum/controller/subsystem/area_spawn/Initialize`
-    (fresh-map rolls that stand back for a resumed world).
+    (fresh-map rolls that stand back for a resumed world; decay also stands back on Creative
+    Planes so their authored floors and perimeter catwalk remain intact).
   - Mapload defaults that stand back while a save loads (`babylon_loading_saved_map()`):
     `/obj/structure/closet/emcloset/Initialize`, `/obj/item/stack/merge_with_loc` (no stack
     merging while a save loads), `/obj/machinery/disposal/bin/spawn_contained_animal`,
