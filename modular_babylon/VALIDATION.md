@@ -317,3 +317,109 @@ restart).
 Not exercised (needs a real client): the Preview button's disabled state in game, the cryo
 refusal with real players, Reboot World from the admin verb, a tutorial player actually
 spawning at the start marker from a snapshot instance.
+
+## Remote lobby/world routing (2026-11-18)
+
+The reported failed join was a destination error: a separate Windows DreamSeeker
+reached the Linux host's lobby over the LAN, but the supervisor's default
+`public_host=127.0.0.1` sent it to its own machine for the child connection.
+The original child reached ready, remained alive and saved/stopped normally;
+there was no admission. The quoted restart message came from the stale lobby
+browser's 15-second heartbeat watchdog after the intentional disconnect.
+
+`modular_babylon/connection.dm`, included by the lobby and both game builds,
+validates destinations and routes default loopback links through the server
+IP:port returned by BYOND's `winget(client, null, "url")`. It preserves the
+configured target port and ticket query. Non-loopback public addresses remain
+authoritative. Invalid endpoints fail closed. This uses the connected server
+address, never `client.address` (the player's address). BYOND documents the
+special call in <https://www.byond.com/docs/ref/skinparams.html>.
+
+Every shared occurrence found is covered:
+
+- Lobby `join_world`: ordinary Join/Create, tutorial Play/Edit, admin
+  spectating and the existing rejoin flow all use this common handoff. Tutorial
+  copies use ordinary Join from My worlds.
+- `babylon_lobby_link`: admission refusal and timeout notices.
+- The explicit Return to Babylon lobby verb and the drone/ghost HUD return action.
+- Managed save/stop and the station round-end return loop.
+- Moderation removal and the AFK path that calls it.
+- The existing hidden-window rejoin path, including its spectator query.
+
+The lobby logs the offered endpoint without its ticket, rather than claiming
+that sending `link()` was a successful join. Its browser now has an explicit
+handoff state and a direct return-to-lobby link; late polls and missing lobby
+heartbeats cannot replace this with the restart error. Real outages still show
+the existing reconnect screen.
+
+Regression and build checks:
+
+- `python3 -m unittest discover -s services/supervisor -v`: 282 tests, passing;
+  16 Discord tests skipped without discord.py. The new contract guard caught
+  direct loopback return paths before they were changed.
+- `python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v`: 60 tests,
+  passing in the native BYOND environment. On the host, the one native-only
+  routing test skips because BYOND is supplied in Docker.
+- `node tools/babylon/test_lobby_loading.cjs`,
+  `node tools/babylon/test_lobby_ui.cjs` and `node container/test_cleanup.cjs`:
+  passing. The handoff test failed before the new browser state existed.
+- `python3 tools/babylon/build_dme.py babylon-lobby.dme babylon.dme
+  babylon-station.dme babylon-test.dme babylon-station-test.dme`: all five
+  compile on BYOND 516.1686 with zero errors and warnings.
+- `tools/babylon/test_connection_routes.py` executes the actual shared DM
+  helper in a disposable native world. Cases cover LAN/local routing, explicit
+  public hosts, target ports, unchanged ticket/notice/rejoin queries and invalid
+  destinations/endpoints, including unusable ports and injected URL syntax.
+
+Native and real-client evidence are recorded separately below. Test data,
+compiled resources and packet summaries stay ignored under
+`data/babylon-supervisor/handoff-diagnosis/`; no credentials, ticket values or
+private LAN address are committed. The existing live cluster was not modified.
+
+The focused `services/supervisor/smoke_handoff.py` passed on the rebuilt test
+binaries with the real supervisor, native Topic readiness/listeners, shared DM
+router, and each world's DM HTTP redemption procedure. It checked both the
+first ready join and another join of the running world, unchanged ticket and
+port, reachable routed hostname, child identity, and refused ticket replay:
+
+| Map | Ready after | Fresh DM admission | Running DM admission |
+| --- | ---: | --- | --- |
+| Babylon | 22.3 s | pass | pass |
+| Creative Plane S | 26.1 s | pass | pass |
+| Creative Plane M | 28.1 s | pass | pass |
+| Creative Plane L | 30.2 s | pass | pass |
+| MetaStation | 80.2 s | pass | pass |
+
+Reproduce in a source tree with the native/runtime assets and both test builds:
+
+```sh
+python3 services/supervisor/smoke_handoff.py \
+  --dreamdaemon /opt/byond/bin/DreamDaemon \
+  --config-directory container/default-config \
+  --data-directory data/babylon-supervisor/handoff-new
+```
+
+The run used `--template-directory /opt/babylon` for the staged runtime assets
+and `--client-endpoint handoff-smoke:15561` inside a container with that hostname.
+The source remained mounted read-only. Evidence is the ignored
+`focused-smoke-2/result.json`. An earlier attempt to probe the host's LAN
+endpoint from inside Docker timed out on that container-to-host hairpin route;
+it stopped its disposable child normally. It is not counted as a passing LAN
+check. No full gameplay end-to-end suite was run.
+
+A separate Windows DreamSeeker did successfully create and join Creative Plane S
+on an isolated patched cluster (test lobby 15361, child 15400). The user confirmed
+that the game connected without issues. Header-only tcpdump summaries show the
+lobby TCP close followed by a successful TCP handshake and resource traffic to
+the Linux host's published child port. Matching logs show the LAN endpoint
+being offered, supervisor admission and completed client.New. This confirms
+the actual remote-client failure boundary, rather than inferring it from link().
+
+The other four production worlds are ready on ports 15401–15404. Their Windows
+client windows and manual Return to lobby/rejoin remain unconfirmed at the time
+of this record. The user has been asked to open each through the test lobby and
+return through the Babylon tab between them. A repeatable manual check is:
+connect DreamSeeker from another machine to the host's LAN address on the test
+lobby port, create/join S, return/rejoin S, then join Babylon, M, L and MetaStation
+from Active worlds and return between them. Confirm each game window opens and
+match its offered host/port, TCP connection, admission and completed-client log.

@@ -64,7 +64,7 @@
 /// Returns FALSE when it was tried already (or there is no lobby): then the window is forced.
 /client/proc/babylon_rejoin_once()
 	var/static/list/tried = list()
-	var/lobby = world.params["babylon-lobby"]
+	var/lobby = babylon_lobby_link()
 	var/world_id = world.params["babylon-world"]
 	if(!lobby || !world_id || (tried[ckey] && world.time < tried[ckey] + 10 MINUTES))
 		return FALSE
@@ -73,7 +73,7 @@
 	var/list/query = list("babylon_rejoin" = world_id)
 	if(babylon_admin_spectator)
 		query["spectate"] = "1"
-	src << link("[lobby]?[list2params(query)]")
+	src << link("[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(query)]")
 	return TRUE
 
 /// Runs once the game window is visible. Coming from the lobby, the window opens at the skin's

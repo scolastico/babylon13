@@ -300,7 +300,7 @@ var/global/list/lobby_config
 	return url_encode(json_encode(payload))
 
 /mob/lobby/proc/loading_panel(world_name, stage)
-	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite' aria-busy='true'><div class='spinner'></div><div class='brand'>BABYLON // WORLD MANAGEMENT</div><h1 id='loading-world'>[html_encode(world_name)]</h1><p id='loading-stage'>[html_encode(stage)]</p><small>Keep this client open while your request completes.</small></section></div>"
+	return "<div class='loading-shell'><section class='loading' role='status' aria-live='polite' aria-busy='true'><div class='spinner'></div><div class='brand'>BABYLON // WORLD MANAGEMENT</div><h1 id='loading-world'>[html_encode(world_name)]</h1><p id='loading-stage'>[html_encode(stage)]</p><small>Keep this client open while your request completes.</small><a id='handoff-return' class='button' style='display:none'>Return to lobby</a></section></div>"
 
 /// Shown instead of the world list while the server restarts (or its supervisor is
 /// unreachable). loading.js shows the same screen when the lobby connection itself is gone.
@@ -919,9 +919,20 @@ var/global/list/lobby_config
 			respond(request, list("ok" = 1))
 			request = 0
 		if(result["address"])
-			world.log << "[ckey] sent to world [world_name] ([id])"
+			// BYOND reports the server the client reached, even behind Docker/NAT. Never use
+			// client.address here: that is the player's machine. Tickets stay server-to-client.
+			var/endpoint = winget(client, null, "url")
+			if(!client)
+				return
+			var/address = babylon_connection_address(result["address"], endpoint)
+			if(!address)
+				set_notice("The world's connection address is unavailable. Ask the host to set BABYLON_PUBLIC_HOST (public_host for a native cluster) to a reachable server address.", TRUE)
+				return
+			var/lobby = babylon_connection_address(lobby_config["address"] || "byond://[endpoint]", endpoint)
+			src << output(list2params(list(world_name, lobby)), "mainwindow.browser:showLobbyHandoff")
+			world.log << "[ckey] offered connection to world [world_name] ([id]) at [copytext(address, 1, findtext(address, "?"))]"
 			last_retry = retry
-			src << link(result["address"])
+			src << link(address)
 			set_notice(lobby_retry_notice("offered", retry))
 			return
 		show_loading(world_name, stage)

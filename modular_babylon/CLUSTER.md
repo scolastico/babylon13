@@ -128,6 +128,14 @@ running-world limit has been reached", "The server's running-world limit has bee
   includes pending tickets and recently redeemed admissions. Access is checked
   again at redemption. Direct connections without a ticket fail before normal
   client setup. A disconnected player obtains a new ticket through the lobby.
+- **Connection addresses.** With the default loopback public host, the lobby and
+  game clients route links through the server IP reported by BYOND's
+  `winget(client, null, "url")`. A LAN player therefore keeps the laptop/server
+  address they reached instead of being sent to their own machine. The target
+  port and ticket query are preserved. A configured non-loopback public host
+  remains authoritative; set it explicitly for a public deployment. Game ports
+  must still be reachable and published with matching host/container numbers.
+  Return to lobby, admission refusals, stops and rejoin use the same routing.
 - Empty worlds save and stop after a configurable grace period (default 120s).
   Connected ghosts count; abandoned bodies do not. Pending tickets/admissions
   postpone empty shutdown. Normal physics and drone controls remain paused

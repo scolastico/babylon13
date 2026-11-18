@@ -57,7 +57,7 @@
 	if(!player)
 		return
 	to_chat(player, span_userdanger(message))
-	var/lobby = world.params["babylon-lobby"]
+	var/lobby = player.babylon_lobby_link()
 	if(lobby)
 		player << link(lobby)
 	// Let the notice and the lobby link reach the player before disconnecting.
