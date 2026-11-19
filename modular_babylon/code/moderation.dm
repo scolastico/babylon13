@@ -146,3 +146,10 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	if(ticket.initiator)
 		to_chat(ticket.initiator, span_notice("Your adminhelp has been closed by an admin."), confidential = TRUE)
 	return list("ok" = TRUE, "result" = "Closed")
+
+/// Engine/SQL/whitelist refusals happen before /client/New and admission can log them.
+/world/IsBanned(key, address, computer_id, type, real_bans_only = FALSE)
+	. = ..()
+	if(!real_bans_only && type != "world" && islist(.) && .["reason"])
+		world.log << babylon_session_log_line("connect", key, address, world.params["babylon-name"] || world.name, world.params["babylon-world"])
+		world.log << babylon_session_log_line("refused", key, address, world.params["babylon-name"] || world.name, world.params["babylon-world"], .["reason"])

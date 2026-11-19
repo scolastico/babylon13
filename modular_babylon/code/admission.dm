@@ -56,33 +56,51 @@
 	var/babylon_admit_notice
 
 /// The lobby address a refused client is sent back to, with the refusal's notice if there is one.
-/client/proc/babylon_lobby_link()
+/client/proc/babylon_lobby_link(reason = null)
 	var/lobby = babylon_server_link(world.params["babylon-lobby"])
-	if(!lobby || !babylon_admit_notice)
-		return lobby
-	return "[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(list("babylon_notice" = babylon_admit_notice))]"
+	if(!lobby)
+		return null
+	var/list/query = list("babylon_from_world" = world.params["babylon-world"], "babylon_from_name" = world.params["babylon-name"] || world.name,
+		"babylon_leave_reason" = reason || babylon_session_leave_reason || "unknown")
+	if(babylon_admit_notice)
+		query["babylon_notice"] = babylon_admit_notice
+	return "[lobby][findtext(lobby, "?") ? "&" : "?"][list2params(query)]"
+
+/// Every refusal records its actual reason without exposing the admission credential.
+/client/proc/babylon_refuse_admission(reason)
+	babylon_session_leave_reason = reason
+	babylon_log_session("refused", reason)
+	return FALSE
 
 /client/proc/babylon_admit(topic_data)
+	babylon_session_connected = TRUE
+	babylon_log_session("connect")
 	if(!world.params["babylon-world"])
-		return ckey == ckey(world.params["babylon-owner"])
-	if(!babylon_world_ready() || GLOB.babylon_save.draining || !ckey || findtext(ckey, "guest") == 1)
-		return FALSE
+		return ckey == ckey(world.params["babylon-owner"]) || babylon_refuse_admission("Only the local world owner may connect")
+	if(!babylon_world_ready())
+		return babylon_refuse_admission("World is still loading")
+	if(GLOB.babylon_save.draining)
+		return babylon_refuse_admission("World is stopping")
+	if(!ckey || findtext(ckey, "guest") == 1)
+		return babylon_refuse_admission("A BYOND account is required")
 	var/list/params = params2list(topic_data)
 	var/ticket = params["babylon_ticket"]
 	if(!istext(ticket) || length(ticket) > 128)
-		return FALSE
+		return babylon_refuse_admission("Missing or invalid admission ticket")
 	// The supervisor refuses a redeem it only reaches after this wait, without spending the ticket
 	// (wait_seconds). Either way the player goes back to the lobby, which says why.
 	var/list/result = babylon_supervisor_request_within(list("action" = "redeem", "ticket" = ticket, "actor" = ckey, "wait_seconds" = BABYLON_SUPERVISOR_TIMEOUT / (1 SECONDS)))
 	if(result["timeout"] || result["code"] == "admission_timeout")
 		babylon_admit_notice = "admission_timeout"
-		log_world("Babylon: admitting [ckey] timed out; sent back to the lobby.")
-	if(!result?["ok"] || result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))
-		return FALSE
+
+	if(!result?["ok"])
+		return babylon_refuse_admission(result?["error"] || "Admission failed")
+	if(result["world"] != world.params["babylon-world"] || result["run"] != world.params["babylon-run"] || !(result["mode"] in list("player", "showcase", "spectator")))
+		return babylon_refuse_admission("Admission identity or mode mismatch")
 	// The redemption blocks; the world may have begun stopping (a round's end) meanwhile. Refused,
 	// the client is sent to the lobby (client_procs.dm) instead of being dropped by the exit.
 	if(GLOB.babylon_save.draining || GLOB.babylon_save.round_ending)
-		return FALSE
+		return babylon_refuse_admission("World stopped during admission")
 	// Only the authenticated supervisor response can grant a play mode.
 	babylon_showcase_visitor = result["mode"] == "showcase"
 	babylon_admin_spectator = result["mode"] == "spectator" && result["role"] == "admin"
@@ -95,9 +113,10 @@
 
 /client/verb/babylon_return_lobby()
 	set name = "Return to Babylon lobby"
-	set category = "Babylon"
-	var/lobby = babylon_lobby_link()
+	set category = "World Controls"
+	var/lobby = babylon_lobby_link("quit")
 	if(lobby)
+		babylon_set_leave_reason("quit")
 		src << link(lobby)
 
 /// The chat line players see when the world stops; says truthfully whether it is saved.
@@ -173,7 +192,8 @@
 		draining = FALSE
 		return result
 	for(var/client/player in GLOB.clients.Copy())
-		var/lobby = player.babylon_lobby_link()
+		player.babylon_set_leave_reason("world_stopped")
+		var/lobby = player.babylon_lobby_link("world_stopped")
 		if(lobby)
 			player << link(lobby)
 	// The master (including its timer subsystem) is paused after the snapshot.

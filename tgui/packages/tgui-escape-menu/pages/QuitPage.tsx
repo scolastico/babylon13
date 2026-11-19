@@ -1,26 +1,29 @@
 type Props = {
+  canReturnToLobby?: boolean;
   onNavigate: (page: 'home') => void;
   onAction: (action: string) => void;
 };
 
-export function QuitPage({ onNavigate, onAction }: Props) {
+export function QuitPage({ canReturnToLobby, onNavigate, onAction }: Props) {
   return (
     <div className="escape-menu__quit">
       <div className="escape-menu__quit-prompt">
-        Are you sure you wish to quit?
+        {canReturnToLobby
+          ? 'Return to the Babylon lobby?'
+          : 'Are you sure you wish to quit?'}
       </div>
       <div className="escape-menu__quit-buttons">
         <button
           className="escape-menu__menu-button"
           onClick={() => onAction('quit')}
         >
-          Yes
+          {canReturnToLobby ? 'Return to lobby' : 'Yes'}
         </button>
         <button
           className="escape-menu__menu-button"
           onClick={() => onNavigate('home')}
         >
-          No
+          {canReturnToLobby ? 'Stay in world' : 'No'}
         </button>
       </div>
     </div>

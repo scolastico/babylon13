@@ -20,30 +20,55 @@
 	on_answer?.Invoke(answer)
 	return answer || list("ok" = FALSE, "error" = "The server could not be reached")
 
-/// A supervisor call that answers a second late (the timeout path of babylon_supervisor_request_within()).
+/// A supervisor call held until the test explicitly releases it after observing the timeout.
 /datum/babylon_supervisor_call/test_late
 
+/datum/babylon_supervisor_call/test_late/New(list/query, datum/callback/on_answer)
+	..()
+	if(istype(on_answer?.object, /datum/babylon_tutorial_submissions/test_late_copy))
+		var/datum/babylon_tutorial_submissions/test_late_copy/copy = on_answer.object
+		copy.pending = src
+	else if(istype(on_answer?.object, /datum/babylon_test_answers))
+		var/datum/babylon_test_answers/receiver = on_answer.object
+		receiver.pending = src
+
 /datum/babylon_supervisor_call/test_late/perform()
-	sleep(1 SECONDS)
+	return
+
+/datum/babylon_supervisor_call/test_late/proc/release()
+	set waitfor = FALSE
 	finish(list("ok" = TRUE, "tutorial" = "0123456789abcdef0123456789abcdef", "late" = TRUE))
 
 /// Records late answers for the timeout tests.
 /datum/babylon_test_answers
 	var/list/answers = list()
+	var/datum/babylon_supervisor_call/test_late/pending
 
 /datum/babylon_test_answers/proc/record(list/answer)
 	answers += list(answer)
+
+/datum/babylon_test_answers/proc/received()
+	return length(answers) > 0
 
 /// The cooldown check answers at once; the copy answers after the world stopped waiting.
 /datum/babylon_tutorial_submissions/test_late_copy
 	copy_timeout = 2
 	var/list/generations = list()
+	var/datum/babylon_supervisor_call/test_late/pending
+	var/answer_count = 0
 
 /datum/babylon_tutorial_submissions/test_late_copy/request(list/query, timeout, datum/callback/on_answer)
 	if(query["action"] == "tutorial_submit_check")
 		return list("ok" = TRUE, "wait_seconds" = 0, "cooldown_hours" = 6)
 	generations += query["generation"]
 	return babylon_supervisor_request_within(query, timeout, on_answer, /datum/babylon_supervisor_call/test_late)
+
+/datum/babylon_tutorial_submissions/test_late_copy/submission_answered(generation, ckey)
+	..()
+	answer_count++
+
+/datum/babylon_tutorial_submissions/test_late_copy/proc/answered_and_cleaned(generation)
+	return answer_count > 0 && !fexists("data/babylon/saves/[generation]/state.json")
 
 /// Swaps the fake in; returns the real one to put back.
 /proc/babylon_tutorial_test_fake_submissions(datum/babylon_tutorial_submissions/test_fake/fake)
@@ -182,6 +207,16 @@
 		result["submit_shape"] = submit["action"] == "tutorial_submit" && submit["actor"] == "tutorialowner" && submit["title"] == "First aid" && submit["description"] == "Line one\nLine two" && istext(generation) && length(submit) == 5
 		var/list/state = fake.snapshots[generation]
 		result["snapshot_written"] = islist(state) && state["generation"] == generation
+#ifdef BABYLON_STATION
+		var/list/fixture_levels = list()
+		for(var/list/level in state?["levels"])
+			if(level["file"] != level_file(tutorial_test_z) && level["file"] != level_file(tutorial_test_z + 1))
+				continue
+			var/list/traits = level["traits"]
+			if(islist(traits) && traits[ZTRAIT_LINKAGE] == SELFLOOPING)
+				fixture_levels |= level["file"]
+		result["snapshot_preserves_fixture_traits"] = length(fixture_levels) == 2
+#endif
 		result["snapshot_has_no_characters"] = islist(state) && islist(state["characters"]) && !length(state["characters"])
 		// Per-player records (Task D2's "players") are left out too, where the build writes them.
 		result["snapshot_has_no_players"] = islist(state) && !length(state["players"])
@@ -238,21 +273,30 @@
 		// the slot is free again, and the late answer still deletes the snapshot.
 		flags.kind = "world"
 		var/datum/babylon_tutorial_submissions/test_late_copy/late = new
+		made += late
 		GLOB.babylon_tutorial_submissions = late
 		late.begin("tutorialowner")
 		var/list/timed_out = late.submit("tutorialowner", "First aid", "")
 		var/late_generation = length(late.generations) ? late.generations[1] : null
 		result["timeout_reported"] = !timed_out["ok"] && findtext(timed_out["text"], "did not confirm the submission in time") && !late.busy_ckey
 		result["timeout_snapshot_written"] = istext(late_generation) && fexists("data/babylon/saves/[late_generation]/tutorial-snapshot")
-		sleep(2 SECONDS)
-		result["late_answer_deletes_snapshot"] = istext(late_generation) && !fexists("data/babylon/saves/[late_generation]/state.json")
+		made += late.pending
+		result["late_copy_waits_for_release"] = late.pending && !late.pending.done && late.answer_count == 0
+		late.pending.release()
+		var/copy_finished = babylon_tutorial_test_wait_for(CALLBACK(late, TYPE_PROC_REF(/datum/babylon_tutorial_submissions/test_late_copy, answered_and_cleaned), late_generation))
+		result["late_answer_deletes_snapshot"] = copy_finished && istext(late_generation) && !fexists("data/babylon/saves/[late_generation]/state.json")
+		result["late_copy_callback_once"] = late.answer_count == 1
 		GLOB.babylon_tutorial_submissions = fake
 		// The timeout helper itself: a timeout answer at once, the real answer to on_answer later.
 		var/datum/babylon_test_answers/answers = new
 		var/list/quick = babylon_supervisor_request_within(list("action" = "tutorial_submit_check"), 2, CALLBACK(answers, TYPE_PROC_REF(/datum/babylon_test_answers, record)), /datum/babylon_supervisor_call/test_late)
 		result["helper_times_out"] = quick["timeout"] && !quick["ok"] && !length(answers.answers)
-		sleep(2 SECONDS)
-		result["helper_answers_late"] = length(answers.answers) == 1 && answers.answers[1]["late"]
+		made += answers
+		made += answers.pending
+		result["late_helper_waits_for_release"] = answers.pending && !answers.pending.done
+		answers.pending.release()
+		var/answer_received = babylon_tutorial_test_wait_for(CALLBACK(answers, TYPE_PROC_REF(/datum/babylon_test_answers, received)))
+		result["helper_answers_late"] = answer_received && length(answers.answers) == 1 && answers.answers[1]["late"]
 	catch(var/exception/error)
 		result["error_[error]"] = FALSE
 	flags.build = was[1]

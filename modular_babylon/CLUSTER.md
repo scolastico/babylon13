@@ -137,6 +137,8 @@ running-world limit has been reached", "The server's running-world limit has bee
   must still be reachable and published with matching host/container numbers.
   Return to lobby, admission refusals, stops and rejoin use the same routing.
 - Empty worlds save and stop after a configurable grace period (default 120s).
+  This countdown starts only once loading is complete and the world accepts players;
+  it resets during saves, draining or unavailable status responses.
   Connected ghosts count; abandoned bodies do not. Pending tickets/admissions
   postpone empty shutdown. Normal physics and drone controls remain paused
   from final checkpoint through exit. Save failure keeps the child alive and
@@ -333,7 +335,7 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
   everyone is ready."; everyone else reads "Waiting for <owner> to start the round" (or
   that the owner is offline and only they or an admin can start it). The owner and
   server administrators get a **START ROUND (2 of 3 ready)** button at the top of the
-  menu (and a `Start round` verb in the Babylon tab); the server checks the
+  menu (and a `Start round` verb in the World Controls tab); the server checks the
   permission, so nobody else can start it. Members can start the *world*, but only
   the owner or an admin starts its *round*. The starter is marked READY so that they
   get a job too. The round then starts normally: roundstart jobs for players who are ready, the storyteller's roundstart
@@ -376,7 +378,7 @@ Worlds on station maps run normal tg rounds, with Babylon's round control:
 Station worlds are saved like Babylon worlds: an autosave while players are connected
 (every `BABYLON_STATION_AUTOSAVE_MINUTES`, default 30; Babylon worlds keep 15), a final
 save when the world is stopped from the lobby, and the owner's **Save world** (at most
-once every 5 minutes) and **Save and stop world** verbs in the Babylon tab. The
+once every 5 minutes) and **Save and stop world** verbs in the World Controls tab. The
 30/10/5/1 second countdown says how long the world will pause (the last save's time),
 "Saving... the world is paused for about N seconds" appears when it starts and "Saved.
 Play resumes." when it is done. A stop while an autosave runs waits for it (up to two
@@ -469,7 +471,7 @@ saved either.
 ## Creative mode
 
 Worlds with the **Creative** flag (any map) give every player in a body a **Creative**
-action button and a **Creative panel** verb (Babylon tab). Showcase visitors, spectating
+action button and a **Creative panel** verb (World Controls tab). Showcase visitors, spectating
 admins, ghosts and the new-player lobby get neither. The panel's tabs:
 
 - **Self**: godmode, noclip (turning it off moves you out of any wall to the nearest
@@ -837,7 +839,8 @@ when a world next starts. Standalone worlds accept the world parameter
 
 Players receive one chat warning up to 60 seconds before that. Moving
 or interacting resets BYOND's inactivity counter and cancels the countdown.
-The policy includes ghosts, owners and admins, and replaces SPLURT's separate
+Time spent saving is excluded from player inactivity, including synchronous capture
+that blocks the world loop. The policy includes ghosts, owners and admins, and replaces SPLURT's separate
 `KICK_INACTIVE` setting in Babylon worlds. Bodies and equipment are preserved;
 players join the world again from the lobby (standalone worlds without a
 lobby disconnect them instead). Once everyone has left, the normal
@@ -1043,6 +1046,18 @@ lobby action, plus errors), `[lobby]` (the lobby's DreamDaemon: connects,
 handoffs to worlds, failed actions) and `[world <name> <id>]` (each child
 world's DreamDaemon output, including its round `dd.log` with runtime errors).
 The per-world files under `/data/worlds/<id>/` stay as before.
+
+Lobby and world lifecycle events use `BABYLON_SESSION` followed by one JSON object.
+Every record has `time` (server-local time), `event`, `ckey`, `ip`, `world_name`,
+`world_id` and `reason`; fields with no applicable value are null. Events include
+`connect`, `transfer_to_world`, `join_world`, `leave_world`, `return_to_lobby`,
+`disconnect` and `refused`. Return links carry the source world's identity and
+leave reason, so the lobby's arrival record can be followed back to that world.
+A redirect records intent; only the actual disconnect records departure, so a
+failed redirect does not create a false leave. Explicit quit, kicks, bans,
+inactivity, stops and admission/moderation refusals retain their known reasons.
+BYOND does not distinguish a lost connection from a closed client in its deletion
+callback; those causes are `unknown`. Tickets and credentials are never logged.
 
 ### Configuration
 

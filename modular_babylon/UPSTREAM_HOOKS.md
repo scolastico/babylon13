@@ -115,6 +115,16 @@ game's external admin PM (`TgsPm`). All through overrides. After an upstream
 merge, re-check `MessageNoRecipient`, `reply_to_admins_notification`,
 `receive_ahelp`, `TgsPm` and the Skyrat mentor module against it.
 
+`modular_babylon/connection.dm` is shared with the standalone lobby and owns the
+structured `BABYLON_SESSION` records and final client deletion hook. Admission,
+world joins, lobby transfers, shutdown and AFK returns supply their context and
+known reason; `moderation.dm` also wraps `/world/IsBanned` to record pre-client
+refusals. Small `BABYLON_BUILDER` hooks retain reasons before upstream disconnects
+in `client_procs.dm`, both admin player panels, admin/SQL bans, server maintenance,
+IP intelligence, TGUI telemetry, kick mines and the maturity subsystem. After an
+upstream merge, scan client deletions and delayed deletions for new known causes;
+ordinary builds compile without these hooks.
+
 `modular_babylon/code/research.dm` replaces the research point bank and queue:
 a techweb researches one selected node at a time, all income (through
 `add_point_list`) goes towards it capped at its price, `research_points` holds
@@ -137,7 +147,9 @@ of pAI cards, AI cores and ghost-joinable silicons against it.
 
 `modular_babylon/code/interface.dm` trims the game window through overrides and
 runtime winsets (the shared `interface/skin.dmf` is unchanged): the top bar keeps
-Menu, Settings, Fullscreen and Reconnect; the station is named after the world
+Menu, Settings, Fullscreen and Reconnect in four evenly sized columns, measured again
+on resize; world verbs appear in **World Controls**, directly after Status (including
+for non-admins). The station is named after the world
 (`babylon-name`, markup characters removed); the status tab drops the round ID;
 and verbs for systems Babylon lacks (antag tickets, OPFOR, round-end reports,
 votes, respawn, relays, forum/Discord-DB linking ...) are removed. After an
@@ -162,6 +174,8 @@ upstream merge, check new player verbs and the `infobuttons` controls.
 | `tgui/packages/tgui-panel/settings/atoms.ts`, `migration.ts` | Default the chat panel (and with it the window) to the dark theme, and apply the default theme on a player's first start. Players' saved choices are kept. |
 | `tgui/packages/tgui/interfaces/Techweb/Content.tsx`, `nodes/TechNode.tsx`, `types.ts` | When the server sends `babylon_research`, show the node being researched instead of point balances and the queue, a Research / Researching button instead of research and queue buttons, and progress only on that node. Without it, the upstream screens are unchanged. |
 | `tgui/packages/tgui-escape-menu/EscapeMenu.tsx`, `pages/PlayersPage.tsx` | When the server sends `babylon`, hide the Round ID line and the "No Admins Online!" heading. Unchanged otherwise. |
+| `html/statbrowser.js` | Place World Controls immediately after Status, before MC and Admin. Verb categories are defined in modular Babylon code. |
+| `tgui/packages/tgui-escape-menu/pages/HomePage.tsx`, `pages/QuitPage.tsx` | Label game-world departure **Return to lobby** when `canReturnToLobby` is set. `modular_babylon/code/escape_menu.dm` intercepts the existing quit message and calls the established return verb; the separate lobby and standalone client quit still exit. |
 | `code/modules/admin/sql_message_system.dm` | Without a database (`SQL_ENABLED` off), `get_message_output` returns quietly instead of telling every player at login that the database connection failed. |
 | `tgui/packages/tgui/interfaces/VaultController.tsx` | Render the Babylon generation interlock (live generation, ignored battery output, hold timer) when the controller sends those fields; the upstream charge view is unchanged otherwise. Rebuild the TGUI bundle after editing. |
 
@@ -217,7 +231,8 @@ into them and re-check what each one relies on after every upstream merge):
   - `/datum/controller/subsystem/mapping/LoadGroup` (saved levels instead of the fresh map).
   - `/turf/open/floor/MakeDirty`, `/datum/controller/subsystem/processing/station/SetupTraits`,
     `/datum/controller/subsystem/decay/Initialize` and `/datum/controller/subsystem/area_spawn/Initialize`
-    (fresh-map rolls that stand back for a resumed world).
+    (fresh-map rolls that stand back for a resumed world; decay also stands back on Creative
+    Planes so their authored floors and perimeter catwalk remain intact).
   - Mapload defaults that stand back while a save loads (`babylon_loading_saved_map()`):
     `/obj/structure/closet/emcloset/Initialize`, `/obj/item/stack/merge_with_loc` (no stack
     merging while a save loads), `/obj/machinery/disposal/bin/spawn_contained_animal`,
@@ -251,10 +266,11 @@ change can break one build and not the other three. Treat a build that shows it 
 possibly miscompiled, not as noise: the slot is used for code generation too, and a
 clean build only means that whichever variable holds the slot now gives no diagnostic.
 A local that really is never read is an ordinary warning, not the quirk.
-It can also miscompile with no diagnostic at all: in the final review (H2) a clean
-`babylon-station-test.dme` build failed one tutorial test (an NPC's "All doors" walk)
-three times in a row, and the same code passed once a padding global moved the slot. A
-test that fails for no visible reason after an unrelated change is worth one pad move.
+Investigate a failing runtime test and prove its cause independently of this compiler
+workaround. The earlier "All doors" NPC test failure was traced to live-map AI turrets
+adding stamina damage to the walker, together with timing-dependent completion checks.
+Tutorial and area-tool tests now use isolated fixtures and exact completion conditions.
+Moving a padding global until a runtime test passes does not establish a fix.
 
 Recipe: add or remove one padding global (`var/global/babylon_byond_1686_slot_pad_<n>`)
 in the block for the affected build at the end of `modular_babylon/code/world_flags.dm`,

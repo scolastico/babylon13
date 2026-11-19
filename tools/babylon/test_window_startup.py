@@ -82,11 +82,20 @@ class WindowStartup(unittest.TestCase):
     var/visible = TRUE
     var/reads = 0
     var/fits = 0
+    var/activation_recorded = FALSE
+    var/hidden_reads_allowed = 0
+    var/hidden_read_pending = 0
     proc/read_window(control, setting)
         reads++
+        if(!visible)
+            hidden_read_pending++
+            while(hidden_read_pending > hidden_reads_allowed)
+                sleep(1)
         return visible && reads > 1 ? "true" : "false"
     proc/record_window(control, settings)
         writes += list(list("control" = control, "settings" = settings, "reads" = reads))
+        if("focus=true" in splittext(settings, ";"))
+            activation_recorded = TRUE
     proc/babylon_window_resized()
         fits++
 /datum/topic_probe
@@ -125,6 +134,9 @@ class WindowStartup(unittest.TestCase):
     var/datum/window_probe/hidden = new
     hidden.visible = FALSE
     hidden.lobby_window_ready()
+    // Consume four false visibility answers, then hold the next read until shutdown.
+    // This observes repeated hidden checks without waiting for an arbitrary time interval.
+    hidden.hidden_reads_allowed = 4
     results["hidden"] = hidden.writes
     var/datum/topic_probe/page = new
     page.Topic(null, list("action" = "window_ready", "generation" = "6"))
@@ -137,7 +149,9 @@ class WindowStartup(unittest.TestCase):
     page.Topic(null, list("action" = "window_ready", "generation" = "7"))
     results["callback"] = page.client.writes
     results["actions"] = page.actions
-    sleep(30)
+    while(!lobby.activation_recorded || !returned.activation_recorded || !game.activation_recorded || !fullscreen.activation_recorded || !page.client.activation_recorded || hidden.hidden_read_pending < 5)
+        sleep(1)
+    results["hidden_observations"] = hidden.hidden_read_pending - 1
     text2file(json_encode(results), "results.json")
     shutdown()
 '''
@@ -165,6 +179,7 @@ class WindowStartup(unittest.TestCase):
                 self.assertTrue(all(write['reads'] >= 2 for write in writes), 'Wait for visibility')
         self.assertEqual(results['fits'], 2, 'Startup fits once; a later resize still fits')
         self.assertEqual(results['hidden'], [], 'A hidden window must never activate')
+        self.assertEqual(results['hidden_observations'], 4, 'Observe four false visibility answers before holding the next read')
         self.assertEqual(results['stale_started'], 0, 'A previous connection cannot start activation')
         self.assertEqual(results['uninitialized_started'], 0, 'Wait for the document to exist')
         self.assertEqual(results['actions'], 0, 'Readiness must not enter or refresh page actions')

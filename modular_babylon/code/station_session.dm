@@ -86,8 +86,7 @@ SUBSYSTEM_DEF(babylon_station)
 				ensure_admin_spectator(student)
 			else
 				ensure_station_player(student.ckey)
-			if(!busy)
-				student.babylon_check_afk(afk_timeout)
+			student.babylon_check_afk(afk_timeout, busy)
 			student.babylon_update_music()
 			student.babylon_update_save_verbs()
 		catch(var/exception/error)
@@ -124,7 +123,7 @@ SUBSYSTEM_DEF(babylon_station)
 
 /client/proc/babylon_save_world_verb()
 	set name = "Save world"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(ckey != GLOB.babylon_world.owner_ckey)
 		return
 	GLOB.babylon_save.request_manual_save(src)
@@ -151,7 +150,7 @@ SUBSYSTEM_DEF(babylon_station)
 
 /client/proc/babylon_save_stop_world_verb()
 	set name = "Save and stop world"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(ckey != GLOB.babylon_world.owner_ckey)
 		return
 	var/list/result = GLOB.babylon_save.managed_stop()

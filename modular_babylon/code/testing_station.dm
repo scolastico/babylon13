@@ -20,6 +20,11 @@
 	result["unsafe_ids_rejected"] = !babylon_safe_id("../x") && !babylon_safe_id("") && babylon_safe_id("creative_plane_m")
 	result["ready"] = babylon_world_ready() && ready
 	result["map_loaded"] = SSmapping.current_map?.map_name == "MetaStation" || flags.map_id != "metastation"
+	// Fresh ordinary stations still take their configured decay rolls; planes and resumes
+	// stand back. Explicit upstream/config exclusions keep their existing behavior.
+	result["ordinary_station_decay_kept"] = flags.is_creative_plane() || babylon_world_resumes_save() \
+		|| CONFIG_GET(flag/ssdecay_disabled) || (SSmapping.current_map?.map_name in SSdecay.station_filter) \
+		|| length(SSdecay.possible_turfs) > 0
 	// The Babylon rules (rules.dm) are not compiled in: normal tg rounds.
 	result["events_fire"] = !(SSevents.ss_flags & SS_NO_FIRE) && !(SSgamemode.ss_flags & SS_NO_FIRE)
 	result["several_levels"] = world.maxz > 1
@@ -633,7 +638,35 @@
 	result["lift_buttons"] = "[buttons]"
 	return result
 
-/// Sends the map's tram towards another platform and stops it on the line a few seconds later
+/// Stop on the exact movement event, before another transport subsystem tick can move it.
+/datum/babylon_test_tram_stop
+	var/datum/transport_controller/linear/tram/tram
+	var/obj/effect/landmark/transport/nav_beacon/tram/platform/start
+	var/stop_requested = FALSE
+
+/datum/babylon_test_tram_stop/New(datum/transport_controller/linear/tram/tram, obj/effect/landmark/transport/nav_beacon/tram/platform/start)
+	. = ..()
+	src.tram = tram
+	src.start = start
+	RegisterSignal(tram.nav_beacon, COMSIG_MOVABLE_MOVED, PROC_REF(on_moved))
+
+/datum/babylon_test_tram_stop/Destroy()
+	UnregisterSignal(tram.nav_beacon, COMSIG_MOVABLE_MOVED)
+	tram = null
+	start = null
+	return ..()
+
+/datum/babylon_test_tram_stop/proc/on_moved(datum/source)
+	SIGNAL_HANDLER
+	if(!stop_requested && get_dist(tram.nav_beacon, start) >= 8)
+		stop_requested = TRUE
+		tram.estop()
+
+/datum/babylon_test_tram_stop/proc/complete()
+	// unlock_controls clears active only after halt_and_catch_fire has stopped the tram.
+	return stop_requested && !tram.controller_active && !tram.travel_remaining
+
+/// Sends the map's tram towards another platform and stops it on the line
 /// (an emergency stop): the next save catches it between stations. The restore must drive it
 /// back to a platform (reset_stray_trams()).
 /datum/babylon_save/proc/test_tram_mid_trip()
@@ -668,17 +701,15 @@
 	// Off the line (a row or column with no platform): no reset, which the restore reports.
 	var/turf/off_line = locate(1, 1, tram.nav_beacon.z)
 	result["reset_off_line_is_refused"] = isnull(babylon_tram_reset_direction(tram, off_line))
+	var/datum/babylon_test_tram_stop/stop = new(tram, start)
 	// As the tram's own call buttons and console ask for it.
 	SStransport.incoming_request(tram.paired_cabinet, tram.specific_transport_id, destination.platform_code, NONE)
-	// Stopped once it is clearly off its platform (and before it reaches the next one).
-	var/waited = 0
-	while(waited < 20 SECONDS && get_dist(tram.nav_beacon, start) < 8)
-		sleep(2)
-		waited += 2
-	tram.estop()
+	// The signal stops at the first qualifying tile; wait for the actual halt to finish.
+	babylon_tutorial_test_wait_for(CALLBACK(stop, TYPE_PROC_REF(/datum/babylon_test_tram_stop, complete)))
 	result["stopped_between_stations"] = get_dist(tram.nav_beacon, start) >= 8 && get_dist(tram.nav_beacon, destination) >= 8
 	if(!result["stopped_between_stations"])
 		result["tram_state"] = "operational [tram.controller_operational], cabinet [!!tram.paired_cabinet], status [tram.controller_status], active [tram.controller_active], moved [get_dist(tram.nav_beacon, start)], trip [get_dist(start, destination)]"
+	qdel(stop)
 	return result
 
 // --- Characters (station_characters.dm) -----------------------------------------------------

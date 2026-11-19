@@ -119,6 +119,11 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 /datum/babylon_world/proc/storyteller_inert()
 	return build == "babylon" || is_tutorial() || is_creative_plane()
 
+/// Fresh Creative Planes preserve their authored floors and continuous perimeter catwalk.
+/// Ordinary maps keep Skyrat's configured startup decay, including in Creative worlds.
+/datum/babylon_world/proc/startup_decay_enabled()
+	return !is_creative_plane()
+
 /// Checkpoints are written (autosaves, the owner's save, a save on stop): persistent worlds that
 /// are not tutorial instances. A forced save (a tutorial submission) ignores it.
 /datum/babylon_world/proc/saves()
@@ -167,6 +172,9 @@ GLOBAL_DATUM_INIT(babylon_world, /datum/babylon_world, new)
 
 /proc/babylon_storyteller_inert()
 	return !!GLOB.babylon_world?.storyteller_inert()
+
+/proc/babylon_startup_decay_enabled()
+	return !!GLOB.babylon_world?.startup_decay_enabled()
 
 /proc/babylon_world_saves()
 	return !!GLOB.babylon_world?.saves()
@@ -234,6 +242,8 @@ var/global/babylon_byond_1686_slot_pad_station_test_15
 var/global/babylon_byond_1686_slot_pad_station_test_16
 var/global/babylon_byond_1686_slot_pad_station_test_17
 var/global/babylon_byond_1686_slot_pad_station_test_18
+var/global/babylon_byond_1686_slot_pad_station_test_19
+var/global/babylon_byond_1686_slot_pad_station_test_20
 #elif defined(BABYLON_STATION)
 // babylon-station.dme
 var/global/babylon_byond_1686_slot_pad_station_1

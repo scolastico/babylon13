@@ -480,7 +480,7 @@
 		if("close")
 			ui.close()
 			if(!test_run)
-				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the Babylon tab."))
+				to_chat(usr, span_notice("Look around as long as you like. To leave, use <b>Return to Babylon lobby</b> in the World Controls tab."))
 			return TRUE
 		if("again")
 			if(!test_run || preview || !isliving(usr))
@@ -667,7 +667,7 @@
 			return
 		if(mode == "revive")
 			if(npc.stat == DEAD)
-				npc.revive(HEAL_ALL | HEAL_ADMIN)
+				babylon_creative_without_godmode(npc, CALLBACK(npc, TYPE_PROC_REF(/mob/living, revive), HEAL_ALL | HEAL_ADMIN))
 			return
 		babylon_tutorial_heal(npc, mode, setting("damage_type"), setting("amount"))
 		return
@@ -697,7 +697,7 @@
 		var/static/list/types = list("brute" = BRUTE, "burn" = BURN, "tox" = TOX, "oxy" = OXY)
 		if(!types[damage_type])
 			return FALSE
-		target.heal_damage_type(clamp(text2num("[amount]") || 0, 0, 500), types[damage_type])
+		babylon_creative_without_godmode(target, CALLBACK(target, TYPE_PROC_REF(/mob/living, heal_damage_type), clamp(text2num("[amount]") || 0, 0, 500), types[damage_type]))
 		return TRUE
-	target.fully_heal(HEAL_ALL)
+	babylon_creative_without_godmode(target, CALLBACK(target, TYPE_PROC_REF(/mob/living, fully_heal), HEAL_ALL))
 	return TRUE

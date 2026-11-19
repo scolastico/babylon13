@@ -46,17 +46,29 @@
 	var/low_y = world.maxy
 	var/high_x = 0
 	var/high_y = 0
+	var/floors_intact = TRUE
 	for(var/turf/open/floor in get_area_turfs(/area/station/babylon/creative_plane, station_z, TRUE))
 		low_x = min(low_x, floor.x)
 		low_y = min(low_y, floor.y)
 		high_x = max(high_x, floor.x)
 		high_y = max(high_y, floor.y)
+		if(istype(floor, /turf/open/floor/plating))
+			floors_intact = FALSE
 	var/start = round((255 - size) / 2) + 1
 	result["floor_size"] = high_x - low_x + 1 == size && high_y - low_y + 1 == size
 	result["floor_centred"] = low_x == start && low_y == start
 	// The ring cannot be breached (it would vent the whole plane); the utility room's walls can.
 	result["indestructible_ring"] = istype(locate(low_x - 1, low_y + 10, station_z), /turf/closed/indestructible/reinforced) && istype(locate(high_x + 1, high_y, station_z), /turf/closed/indestructible/reinforced) && istype(locate(low_x + 3, high_y + 1, station_z), /turf/closed/indestructible/reinforced)
-	result["room_walls_ordinary"] = istype(locate(low_x, low_y + 1, station_z), /turf/closed/wall)
+	result["room_walls_ordinary"] = istype(locate(low_x + 1, low_y + 1, station_z), /turf/closed/wall)
+	var/west_catwalk_open = TRUE
+	for(var/y in low_y to high_y)
+		if(!istype(locate(low_x, y, station_z), /turf/open/floor/catwalk_floor/iron))
+			west_catwalk_open = FALSE
+	result["west_catwalk_open"] = west_catwalk_open
+	result["fresh_floors_intact"] = floors_intact
+	// The initializer must stand back on every plane, even if random decay would happen to
+	// leave the sampled catwalk intact. Calling it again must not change this fresh map.
+	result["plane_decay_refused"] = SSdecay.Initialize() == SS_INIT_NO_NEED && !length(SSdecay.possible_turfs)
 	result["utility_area"] = istype(GLOB.areas_by_type[/area/station/babylon/creative_plane/utilities], /area/station/babylon/creative_plane/utilities)
 	// Creative Plane machines run whatever the Creative flag; their settings stay Creative-only.
 	result["machines_active"] = babylon_creative_machines_active()
@@ -90,6 +102,8 @@
 	var/obj/machinery/power/smes/babylon_creative/smes = length(smeses) == 1 ? smeses[1] : null
 	result["one_creative_smes"] = !!smes && babylon_on_plane(smes)
 	result["smes_source_with_terminal"] = !!smes && smes.creative_mode == "source" && !!smes.terminal && smes.output_attempt
+	result["smes_inside_utility_room"] = !!smes && smes.x >= low_x + 2 && smes.x <= low_x + 8 && smes.y >= low_y + 2 && smes.y <= low_y + 6
+	result["smes_terminal_inside_utility_room"] = !!smes?.terminal && smes.terminal.x >= low_x + 2 && smes.terminal.x <= low_x + 8 && smes.terminal.y >= low_y + 2 && smes.terminal.y <= low_y + 6
 	var/feeds = !!smes?.powernet && apcs_ok
 	for(var/obj/machinery/power/apc/apc as anything in apcs)
 		if(apc?.terminal?.powernet != smes?.powernet)

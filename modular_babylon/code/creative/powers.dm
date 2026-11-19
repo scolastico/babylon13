@@ -145,7 +145,20 @@ GLOBAL_LIST_EMPTY(babylon_creative_powered)
 
 /// Full heal; revives a dead body.
 /proc/babylon_creative_heal(mob/living/user)
-	return user.revive(HEAL_ALL)
+	return babylon_creative_without_godmode(user, CALLBACK(user, TYPE_PROC_REF(/mob/living, revive), HEAL_ALL))
+
+/// Runs one synchronous authoring operation, retaining every original source of immunity.
+/proc/babylon_creative_without_godmode(mob/living/user, datum/callback/operation)
+	// Godmode also blocks updatehealth(), even when fully_heal forcibly clears the damage.
+	// Suspend every source for the operation so health, stat and HUDs recompute, then
+	// restore the original protection, including sources outside the Creative panel.
+	var/list/godmode_sources = GET_TRAIT_SOURCES(user, TRAIT_GODMODE)
+	godmode_sources = godmode_sources.Copy()
+	if(length(godmode_sources))
+		REMOVE_TRAIT(user, TRAIT_GODMODE, godmode_sources)
+	. = operation.Invoke()
+	for(var/source in godmode_sources)
+		ADD_TRAIT(user, TRAIT_GODMODE, source)
 
 /// Takes back every creative power from every body (Creative switched off at runtime).
 /proc/babylon_creative_revoke_powers()

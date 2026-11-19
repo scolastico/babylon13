@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CODE = "modular_babylon/code/"
 
 SHARED = {"world_flags", "state", "persistence", "afk", "control", "admission", "showcase", "spectator",
-          "sfw", "links", "storyteller", "moderation", "world_players", "interface", "music",
+          "sfw", "links", "storyteller", "moderation", "world_players", "interface", "escape_menu", "music",
           "music_loops", "play_time", "testing_common", "creative/machines", "creative/testing_machines",
           "creative/powers", "creative/spawning", "creative/teleport",
           "creative/events", "creative/supermatter", "creative/panel", "creative/testing_creative",

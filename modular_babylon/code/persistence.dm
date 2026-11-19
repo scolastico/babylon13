@@ -457,6 +457,8 @@
 	// Everything between busy = TRUE and busy = FALSE runs inside the try: a runtime must never
 	// leave the world flagged busy (no save ever again) or the master paused.
 	try
+		for(var/client/student in GLOB.clients)
+			student.babylon_check_afk(afk_timeout, TRUE)
 		before_checkpoint()
 		// The chat subsystem stops with the master: these messages go out at once.
 		to_chat_immediate(world, span_notice("Saving... the world is paused for about [estimated_pause_seconds()] seconds."))
@@ -472,6 +474,8 @@
 		draining = FALSE
 	release_checkpoint()
 	busy = FALSE
+	for(var/client/student in GLOB.clients)
+		student.babylon_check_afk(afk_timeout, draining)
 	if(result["ok"])
 		if(!for_tutorial)
 			last_save_report = result
@@ -1544,8 +1548,12 @@
 
 // Skyrat's decay: at round start it dirties floors, breaks tiles, rusts walls and puts webs and
 // rat or spider nests into maintenance. A saved world keeps its own decay; decaying it again on
-// every restart piled up dirt, webs and nests.
+// every restart piled up dirt, webs and nests. Fresh Creative Planes keep their authored floor
+// and utility layout, including the continuous perimeter catwalk.
 /datum/controller/subsystem/decay/Initialize()
+	if(!babylon_startup_decay_enabled())
+		log_world("SSDecay skipped: Creative Plane layout stays intact.")
+		return SS_INIT_NO_NEED
 	if(babylon_world_resumes_save())
 		log_world("SSDecay skipped: this world resumes a save.")
 		return SS_INIT_NO_NEED

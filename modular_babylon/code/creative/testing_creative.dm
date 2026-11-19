@@ -51,6 +51,9 @@
 	var/hurt = body.health < body.maxHealth
 	panel.handle_action(body, "heal")
 	result["heal"] = hurt && body.health >= body.maxHealth
+	result += test_creative_heal()
+	// Exercise the other actions with godmode held throughout: powers must not block each other.
+	panel.handle_action(body, "godmode")
 
 	// Spawn: at the feet, stacks clamped, blocked paths refused, rate limit.
 	var/wrenches = babylon_creative_test_count(start, /obj/item/wrench)
@@ -285,7 +288,7 @@
 	result["panel_offers_world_edit"] = !!panel.ui_static_data(body)["world_edit_available"]
 
 	// Creative switched off at runtime: the world tick takes everything back.
-	panel.handle_action(body, "godmode")
+	result["godmode_survives_other_actions"] = babylon_creative_godmode(body)
 	panel.handle_action(body, "noclip")
 	panel.handle_action(body, "xray")
 	panel.handle_action(body, "fullbright")
@@ -325,6 +328,71 @@
 	for(var/datum/thing as anything in cleanup)
 		if(thing && !QDELETED(thing))
 			qdel(thing)
+	return result
+
+/// Real panel healing on a human (station) or drone (Babylon), plus a non-carbon animal.
+/// Catches a full heal that clears damage but leaves health/stat frozen by godmode, or loses
+/// another source's protection while bypassing it. Every returned check must be TRUE.
+/datum/babylon_save/proc/test_creative_heal()
+	var/list/result = list()
+	var/datum/babylon_world/flags = GLOB.babylon_world
+	var/was_creative = flags.creative
+	flags.creative = TRUE
+	var/turf/start = babylon_creative_free_turf(respawn_turf)
+	var/body_type = babylon_is_station_build() ? /mob/living/carbon/human : text2path("/mob/living/basic/drone/babylon/replacement")
+	var/list/types = list("player_body" = body_type, "animal" = /mob/living/basic/pet/dog/corgi)
+	for(var/body_name in types)
+		var/path = types[body_name]
+		var/mob/living/body = new path(start)
+		var/list/cleanup = body.get_all_contents()
+		cleanup += body
+		body.ckey = "babylonsmokeheal"
+		var/datum/babylon_creative_panel/panel = babylon_creative_panel_for(body.ckey)
+		var/list/checks = babylon_creative_test_heal(panel, body)
+		for(var/check in checks)
+			result["heal_[body_name]_[check]"] = checks[check]
+		GLOB.babylon_creative_panels -= body.ckey
+		body.ckey = null
+		for(var/datum/thing as anything in cleanup)
+			if(!QDELETED(thing))
+				qdel(thing)
+	flags.creative = was_creative
+	return result
+
+/proc/babylon_creative_test_heal(datum/babylon_creative_panel/panel, mob/living/body)
+	var/list/result = list()
+	var/list/scenarios = list(
+		"ordinary" = list(),
+		"creative" = list(BABYLON_CREATIVE_TRAIT),
+		"external" = list("babylon_test_other", ROUNDSTART_TRAIT),
+		"combined" = list(BABYLON_CREATIVE_TRAIT, "babylon_test_other", ROUNDSTART_TRAIT),
+	)
+	for(var/scenario in scenarios)
+		var/list/sources = scenarios[scenario]
+		for(var/dead in list(FALSE, TRUE))
+			var/check = "[scenario]_[dead ? "dead" : "alive"]"
+			// Damage comes before immunity, as when a player enables godmode after an injury.
+			body.adjust_brute_loss(20)
+			body.adjust_fire_loss(10)
+			body.adjust_oxy_loss(5)
+			body.adjust_tox_loss(5)
+			body.adjust_stamina_loss(20)
+			if(dead)
+				body.death()
+			result["[check]_injured"] = body.health < body.maxHealth && (!dead || body.stat == DEAD)
+			for(var/source in sources)
+				ADD_TRAIT(body, TRAIT_GODMODE, source)
+			panel.handle_action(body, "heal")
+			result["[check]_healed"] = panel.notice_ok && body.health == body.maxHealth && body.stat == STABLE \
+				&& !body.get_brute_loss() && !body.get_fire_loss() && !body.get_oxy_loss() && !body.get_tox_loss() && !body.get_stamina_loss()
+			var/sources_kept = COUNT_TRAIT_SOURCES(body, TRAIT_GODMODE) == length(sources)
+			for(var/source in sources)
+				sources_kept = sources_kept && HAS_TRAIT_FROM(body, TRAIT_GODMODE, source)
+			result["[check]_sources_kept"] = sources_kept
+			for(var/source in sources)
+				REMOVE_TRAIT(body, TRAIT_GODMODE, source)
+			// Recompute before seeding the next case, even when the regression leaves health stale.
+			body.updatehealth()
 	return result
 
 /// X-ray and fullbright through the panel on one body: sight flags and cutoff change, other trait sources

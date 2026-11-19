@@ -200,6 +200,39 @@
 	fdel(music.root)
 	return result
 
+/// Capture the crossing in the movement callback, rather than polling a transient position.
+/datum/babylon_test_drift_crossing
+	var/atom/movable/drifter
+	var/target_z
+	var/crossed = FALSE
+	var/datum/drift_handler/crossing_handler
+	var/kept_momentum = FALSE
+
+/datum/babylon_test_drift_crossing/New(atom/movable/drifter, target_z)
+	. = ..()
+	src.drifter = drifter
+	src.target_z = target_z
+	RegisterSignal(drifter, COMSIG_MOVABLE_MOVED, PROC_REF(on_moved))
+
+/datum/babylon_test_drift_crossing/Destroy()
+	UnregisterSignal(drifter, COMSIG_MOVABLE_MOVED)
+	drifter = null
+	crossing_handler = null
+	return ..()
+
+/datum/babylon_test_drift_crossing/proc/on_moved(atom/movable/source, atom/old_loc)
+	SIGNAL_HANDLER
+	if(!crossed && source.z == target_z && source.x > world.maxx / 2)
+		crossed = TRUE
+		crossing_handler = source.drift_handler
+		return
+	// A subsequent westward step proves the crossing did not cancel its original drift.
+	if(crossed && old_loc?.z == target_z && old_loc.x > world.maxx / 2 && source.z == target_z && source.x < old_loc.x && !QDELETED(crossing_handler) && source.drift_handler == crossing_handler)
+		kept_momentum = TRUE
+
+/datum/babylon_test_drift_crossing/proc/complete()
+	return crossed && kept_momentum
+
 /datum/babylon_save/proc/test_space_wrap()
 	var/list/result = list()
 	var/middle = round(world.maxy / 2)
@@ -211,13 +244,12 @@
 	result["north_edge_leads_south"] = istype(north) && north.destination_z == station_z && north.destination_y < world.maxy / 2
 	// Drift west into the border: arrive on the east side, still drifting.
 	var/obj/item/stack/rods/drifter = new(locate(TRANSITIONEDGE + 3, middle, station_z))
+	var/datum/babylon_test_drift_crossing/crossing = new(drifter, station_z)
 	drifter.newtonian_move(dir2angle(WEST), drift_force = 5 NEWTONS)
-	for(var/attempt in 1 to 20)
-		sleep(5)
-		if(drifter.x > world.maxx / 2)
-			break
-	result["drift_wraps_to_the_other_side"] = drifter.z == station_z && drifter.x > world.maxx / 2
-	result["drift_keeps_momentum"] = !!drifter.drift_handler
+	babylon_tutorial_test_wait_for(CALLBACK(crossing, TYPE_PROC_REF(/datum/babylon_test_drift_crossing, complete)))
+	result["drift_wraps_to_the_other_side"] = crossing.crossed
+	result["drift_keeps_momentum"] = crossing.kept_momentum
+	qdel(crossing)
 	qdel(drifter)
 	return result
 

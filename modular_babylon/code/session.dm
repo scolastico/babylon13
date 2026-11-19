@@ -99,8 +99,7 @@
 					ensure_admin_spectator(student)
 				else
 					ensure_player(student.ckey)
-				if(!busy)
-					student.babylon_check_afk(afk_timeout)
+				student.babylon_check_afk(afk_timeout, busy)
 				student.babylon_update_music()
 			catch(var/exception/error)
 				babylon_loop_failed("player [student?.ckey]", error)
@@ -209,13 +208,13 @@ SUBSYSTEM_DEF(babylon_builder)
 
 /mob/living/basic/drone/babylon/verb/save_babylon()
 	set name = "Save Babylon"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(ckey == GLOB.babylon_save.owner_ckey)
 		GLOB.babylon_save.save_world()
 
 /mob/living/basic/drone/babylon/verb/save_stop_babylon()
 	set name = "Save and Stop Babylon"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(ckey != GLOB.babylon_save.owner_ckey)
 		return
 	GLOB.babylon_save.managed_stop()

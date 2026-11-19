@@ -7,10 +7,10 @@ centred in space, closed by a ring of indestructible reinforced walls so its air
 (modular_babylon/code/creative/plane.dm): fullbright, standard gravity, powered by one APC.
 Along the south edge (local coordinates: u east, v north, 0,0 = the floor's south-west tile):
 
-- utility room (south-west corner, walls u 0..8, v 1..7, glass door south; area ".../utilities"
-  with its own APC, together with the SMES corner): a creative O2 source and a creative N2
+- utility room (south-west corner, walls u 1..9, v 1..7, glass door south; area ".../utilities"
+  with its own APC and SMES): a creative O2 source and a creative N2
   source canister on connector ports feed an air mixer, whose supply line runs two vents; two
-  scrubbers drain into a creative void canister. Ordinary pipes: the supply network on layer 3,
+  scrubbers drain into a creative void canister. Ordinary pipes: the supply network on layer 2,
   the scrubber network on layer 4 (so both can share one route). A plaque on its south wall
   explains the machines.
 - air distribution: both networks leave the room through its door and follow the main cable
@@ -18,8 +18,9 @@ Along the south edge (local coordinates: u east, v north, 0,0 = the floor's sout
   (east column, north row, west column above the room), also catwalk. Supply vents and
   scrubbers stand one tile inside the ring, evenly spread over the four sides, each facing the
   ring pipe next to it.
-- creative SMES (source, full charge) at u 10 with an unwired terminal north of it; its cable
-  joins the main cable along the south edge (catwalk floor) and a spine up the middle column.
+- creative SMES (source, full charge) inside the utility room at u 8, v 2, with an unwired
+  terminal north of it; its cable joins the room's APC and door, then the main cable along
+  the south edge (catwalk floor) and a spine up the middle column.
 - the plane's APC on the south wall, on the main cable.
 - the spawn pad (dark floor, 5x5, centred on the spine): observer start in the middle, eight
   late-join points around it and eight Assistant start points on its rim.
@@ -62,13 +63,13 @@ O2_CANISTER = ('/obj/machinery/portable_atmospherics/canister/babylon_creative{\
 N2_CANISTER = ('/obj/machinery/portable_atmospherics/canister/babylon_creative/nitrogen{\n\tcreative_gas = /datum/gas/nitrogen;\n'
                '\tcreative_mode = "source";\n\tcreative_pressure = 4500\n\t}')
 VOID_CANISTER = '/obj/machinery/portable_atmospherics/canister/babylon_creative/void{\n\tcreative_mode = "void"\n\t}'
-MIXER = "/obj/machinery/atmospherics/components/trinary/mixer/airmix{\n\tdir = %d\n\t}" % EAST
-SUPPLY = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/visible"
+MIXER = "/obj/machinery/atmospherics/components/trinary/mixer/airmix{\n\tdir = %d;\n\tpiping_layer = 2\n\t}" % EAST
+SUPPLY = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/visible/layer2"
 SCRUBBERS = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/visible/layer4"
 # Under the catwalk floor the pipes are hidden (the catwalk shows them to a builder).
-SUPPLY_HIDDEN = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/hidden"
+SUPPLY_HIDDEN = "/obj/machinery/atmospherics/pipe/smart/manifold4w/supply/hidden/layer2"
 SCRUBBERS_HIDDEN = "/obj/machinery/atmospherics/pipe/smart/manifold4w/scrubbers/hidden/layer4"
-SUPPLY_LAYER, SCRUBBER_LAYER = 3, 4
+SUPPLY_LAYER, SCRUBBER_LAYER = 2, 4
 DOOR = '/obj/machinery/door/airlock/public/glass{\n\tname = "Utilities"\n\t}'
 PLAQUE = ('/obj/structure/plaque/static_plaque{\n\tdesc = "Power and air for this plane: a creative SMES (source) feeds the '
           'main cable; creative oxygen and nitrogen canisters feed the vents through an air mixer, and the scrubbers drain '
@@ -85,11 +86,11 @@ def directed(path, direction):
 
 
 def port(direction, layer4=False):
-    return directed("/obj/machinery/atmospherics/components/unary/portables_connector/visible" + ("/layer4" if layer4 else ""), direction)
+    return directed("/obj/machinery/atmospherics/components/unary/portables_connector/visible" + ("/layer4" if layer4 else "/layer2"), direction)
 
 
 def vent(direction):
-    return directed("/obj/machinery/atmospherics/components/unary/vent_pump/on", direction)
+    return directed("/obj/machinery/atmospherics/components/unary/vent_pump/on/layer2", direction)
 
 
 def scrubber(direction):
@@ -124,24 +125,30 @@ def layout(size):
         put(u, 0, CABLE, turf=CATWALK)
     for v in range(1, size):
         put(middle, v, CABLE, turf=CATWALK)
-    put(10, 1, SMES, CABLE, area=UTILITY_AREA)
-    put(10, 2, TERMINAL, area=UTILITY_AREA)
     put(12, 0, APC)
 
-    # Utility room: walls u 0..8, v 1..7; interior u 1..7, v 2..6 (local a = u - 1, b = v - 2).
-    for u in range(0, 9):
+    # Utility room: walls u 1..9, v 1..7; interior u 2..8, v 2..6 (local a = u - 2, b = v - 2).
+    # Keep the west perimeter catwalk continuous past the room.
+    for v in range(1, 8):
+        put(0, v, turf=CATWALK)
+    for u in range(1, 10):
         for v in range(1, 8):
             put(u, v, area=UTILITY_AREA)
-            if u in (0, 8) or v in (1, 7):
+            if u in (1, 9) or v in (1, 7):
                 put(u, v, turf=ROOM_WALL)
     # Door south onto the main cable; the room's APC is fed through it.
-    put(4, 1, DOOR, CABLE, turf=CATWALK)
-    put(4, 2, CABLE)
-    put(5, 2, APC, CABLE)
-    put(6, 1, PLAQUE)
+    put(5, 1, DOOR, CABLE, turf=CATWALK)
+    put(5, 2, CABLE)
+    put(6, 2, APC, CABLE)
+    put(7, 1, PLAQUE)
 
     def room(a, b, *objects):
-        put(1 + a, 2 + b, *objects)
+        put(2 + a, 2 + b, *objects)
+
+    # The source SMES outputs on the room's cable; its unwired input terminal faces it.
+    room(5, 0, CABLE)
+    room(6, 0, SMES, CABLE)
+    room(6, 1, TERMINAL)
 
     # The air mixer takes N2 from the west (node 1), O2 from the south (node 2), outputs east.
     room(0, 1, port(EAST), N2_CANISTER)
@@ -151,19 +158,19 @@ def layout(size):
         room(a, 1, SUPPLY)
     room(3, 2, vent(SOUTH))
     room(5, 2, vent(SOUTH))
-    for a in range(2, 6):
+    for a in range(3, 6):
         room(a, 3, SCRUBBERS)
     room(3, 4, scrubber(SOUTH))
     room(5, 4, scrubber(SOUTH))
     room(6, 3, port(WEST, layer4=True), VOID_CANISTER)
     room(0, 4, AIR_ALARM)
 
-    # Both networks leave through the door (u 4) over the cable tiles v 2, 1 and 0: down from the
+    # Both networks leave through the door (u 5) over the cable tiles v 2, 1 and 0: down from the
     # supply line (v 3) and the scrubber line (v 5).
     room(3, 0, SUPPLY, SCRUBBERS)
     room(3, 1, SCRUBBERS)
     room(3, 2, SCRUBBERS)
-    put(4, 1, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
+    put(5, 1, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
 
     # Spawn pad: 5x5 dark floor centred on the spine, v 2..6.
     centre = (middle, 4)
@@ -185,7 +192,7 @@ def distribution(tiles, put, size):
     """Pipes along the cable and the wall ring, and the vents and scrubbers beside the ring."""
     middle = size // 2
     last = size - 1
-    route = [(u, 0) for u in range(4, size)]                    # south edge: the main cable's run
+    route = [(u, 0) for u in range(5, size)]                    # south edge: the main cable's run
     route += [(middle, v) for v in range(1, size)]              # the middle column: the cable's spine
     route += [(last, v) for v in range(1, size)]                # east column
     route += [(u, last) for u in range(0, last)]                # north row

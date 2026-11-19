@@ -42,9 +42,10 @@ Your equipment is finite. Replacement shells are empty; recover your tools or ma
 	var/datum/babylon_player/player = target
 	if(!..() || owner?.ckey != player.ckey || !owner.client || !world.params["babylon-lobby"])
 		return FALSE
-	var/lobby = owner.client.babylon_lobby_link()
+	var/lobby = owner.client.babylon_lobby_link("quit")
 	if(!lobby)
 		return FALSE
+	owner.client.babylon_set_leave_reason("quit")
 	owner.client << link(lobby)
 	return TRUE
 

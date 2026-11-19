@@ -31,6 +31,7 @@
 #include "modular_babylon/code/moderation.dm"
 #include "modular_babylon/code/world_players.dm"
 #include "modular_babylon/code/interface.dm"
+#include "modular_babylon/code/escape_menu.dm"
 #include "modular_babylon/code/music.dm"
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
