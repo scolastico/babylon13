@@ -14,13 +14,13 @@ Along the south edge (local coordinates: u east, v north, 0,0 = the floor's sout
   the scrubber network on layer 4 (so both can share one route). A plaque on its south wall
   explains the machines.
 - air distribution: both networks leave the room through its door and follow the main cable
-  (south edge, middle column) under the catwalk floor, plus a ring one tile inside the walls
-  (east column, north row, west column above the room), also catwalk. Supply vents and
+  under the catwalk floor around all four sides one tile inside the walls and along both
+  the middle column and middle row. Supply vents and
   scrubbers stand one tile inside the ring, evenly spread over the four sides, each facing the
   ring pipe next to it.
 - creative SMES (source, full charge) inside the utility room at u 8, v 2, with an unwired
   terminal north of it; its cable joins the room's APC and door, then the main cable along
-  the south edge (catwalk floor) and a spine up the middle column.
+  the full outer catwalk ring and both middle catwalk lines.
 - the plane's APC on the south wall, on the main cable.
 - the spawn pad (dark floor, 5x5, centred on the spine): observer start in the middle, eight
   late-join points around it and eight Assistant start points on its rim.
@@ -120,17 +120,9 @@ def layout(size):
         tile[1].extend(objects)
 
     middle = size // 2
-    # Main power: the south edge and the middle column, on catwalk floor (cables visible).
-    for u in range(size):
-        put(u, 0, CABLE, turf=CATWALK)
-    for v in range(1, size):
-        put(middle, v, CABLE, turf=CATWALK)
     put(12, 0, APC)
 
     # Utility room: walls u 1..9, v 1..7; interior u 2..8, v 2..6 (local a = u - 2, b = v - 2).
-    # Keep the west perimeter catwalk continuous past the room.
-    for v in range(1, 8):
-        put(0, v, turf=CATWALK)
     for u in range(1, 10):
         for v in range(1, 8):
             put(u, v, area=UTILITY_AREA)
@@ -189,14 +181,15 @@ def layout(size):
 
 
 def distribution(tiles, put, size):
-    """Pipes along the cable and the wall ring, and the vents and scrubbers beside the ring."""
+    """Power and pipes on the full catwalk ring and cross, with devices beside the ring."""
     middle = size // 2
     last = size - 1
-    route = [(u, 0) for u in range(5, size)]                    # south edge: the main cable's run
-    route += [(middle, v) for v in range(1, size)]              # the middle column: the cable's spine
-    route += [(last, v) for v in range(1, size)]                # east column
-    route += [(u, last) for u in range(0, last)]                # north row
-    route += [(0, v) for v in range(8, last)]                   # west column above the utility room
+    route = [(u, 0) for u in range(size)]                      # south edge
+    route += [(last, v) for v in range(1, size)]                # east edge
+    route += [(u, last) for u in range(last)]                   # north edge
+    route += [(0, v) for v in range(1, last)]                   # west edge, past the utility room
+    route += [(middle, v) for v in range(1, last)]              # middle column
+    route += [(u, middle) for u in range(1, last)]              # middle row
     seen = set()
     for u, v in route:
         if (u, v) in seen:
@@ -204,7 +197,7 @@ def distribution(tiles, put, size):
         seen.add((u, v))
         if tiles[(u, v)][0] == FLOOR:
             tiles[(u, v)][0] = CATWALK
-        put(u, v, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
+        put(u, v, CABLE, SUPPLY_HIDDEN, SCRUBBERS_HIDDEN)
 
     # Devices: one tile inside the ring, facing the ring pipe. Per side the free spots are
     # picked evenly, alternating vent and scrubber, so every side has both.
