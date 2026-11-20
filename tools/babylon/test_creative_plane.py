@@ -342,6 +342,43 @@ class CreativePlaneTest(unittest.TestCase):
                     step = STEP[facing]
                     self.assertIn((x + step[0], y + step[1]), scrubbers, (x, y))
 
+    def test_utilities_cover_the_full_outer_catwalk_ring(self):
+        # A missing edge segment, including by the utility room, breaks the perimeter route.
+        for size_id, size in plane.SIZES.items():
+            keys, full, grid = self.maps[size_id]
+            x0, y0 = plane.floor_origin(size)
+            sides = {
+                "south": [(u, 0) for u in range(size)],
+                "north": [(u, size - 1) for u in range(size)],
+                "west": [(0, v) for v in range(size)],
+                "east": [(size - 1, v) for v in range(size)],
+            }
+            for side, positions in sides.items():
+                for path in (plane.CABLE, plane.SUPPLY_HIDDEN, plane.SCRUBBERS_HIDDEN):
+                    with self.subTest(size=size_id, side=side, utility=path):
+                        for u, v in positions:
+                            key = grid[(x0 + u, y0 + v)]
+                            self.assertIn(plane.CATWALK, keys[key], (u, v))
+                            self.assertEqual(full[key].count(path), 1, (u, v))
+
+    def test_utilities_follow_both_middle_catwalk_lines(self):
+        # The vertical spine must have a matching horizontal line, joined at the center.
+        for size_id, size in plane.SIZES.items():
+            keys, full, grid = self.maps[size_id]
+            x0, y0 = plane.floor_origin(size)
+            middle = size // 2
+            lines = {
+                "vertical": [(middle, v) for v in range(size)],
+                "horizontal": [(u, middle) for u in range(size)],
+            }
+            for axis, positions in lines.items():
+                for path in (plane.CABLE, plane.SUPPLY_HIDDEN, plane.SCRUBBERS_HIDDEN):
+                    with self.subTest(size=size_id, axis=axis, utility=path):
+                        for u, v in positions:
+                            key = grid[(x0 + u, y0 + v)]
+                            self.assertIn(keys[key][-2], (plane.CATWALK, plane.PAD), (u, v))
+                            self.assertEqual(full[key].count(path), 1, (u, v))
+
     def test_pipes_follow_the_cable_under_catwalk(self):
         for size_id, size in plane.SIZES.items():
             with self.subTest(size_id):
