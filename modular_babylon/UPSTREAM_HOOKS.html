@@ -1,0 +1,285 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base href="../"><link rel="stylesheet" href="dmdoc.css"><title>modular_babylon/UPSTREAM_HOOKS.md - /tg/ Station 13</title></head><body><header><a href="index.html">/tg/ Station 13</a> - <a href="index.html#modules">Modules</a> - <a href="index.html#types">Types</a></header><main><h1>Upstream integration hooks <aside>modular_babylon/UPSTREAM_HOOKS.md</aside> <a href="https://github.com/scolastico/babylon13/blob/fb5416a84bdf228abc2699273c51e5bb09202d71/modular_babylon/UPSTREAM_HOOKS.md"><img src="git.png" width="16" height="16" title="modular_babylon/UPSTREAM_HOOKS.md"></a></h1><table class="summary" cellspacing="0"><tr><td colspan="2"><p>Babylon is opt-in: compile <code>babylon.dme</code> (the drone builder) and
+<code>babylon-station.dme</code> (normal tg rounds on the map catalog's station maps). The
+upstream <code>tgstation.dme</code> is unchanged. The fifteen modified upstream DM files use
+hooks guarded by <code>BABYLON_BUILDER</code> and marked <code>BABYLON13</code>. Ordinary SPLURT builds
+compile those blocks out.</p>
+<p>Both Babylon builds define <code>BABYLON_BUILDER</code> (any Babylon cluster world). Each also
+defines exactly one game build define, checked at compile time in
+<code>modular_babylon/__DEFINES/babylon.dm</code>: <code>BABYLON_DRONE</code> (<code>babylon.dme</code>, the drone
+builder) or <code>BABYLON_STATION</code> (<code>babylon-station.dme</code>). Hooks that only fit the drone
+builder are guarded with the positive <code>#ifdef BABYLON_DRONE</code>, never with &quot;not
+<code>BABYLON_STATION</code>&quot;, so a third build gets none of them by accident: the announcement
+suppression (<code>priority_announce.dm</code>), the round-start divergency report, and
+the 255x255 single-level sizing in <code>mapping.dm</code>. All other hooks (admission,
+showcase visitors, persistence preloading, material pruning, the Discord button,
+the SQL message guard, the master's restore wait) apply to both builds. The
+station build keeps the full CentCom map (its shuttle docks are needed for a
+round) and skips the Interlink (<code>ABSOLUTE_MINIMUM</code>).</p>
+<p>Module split: <code>world_flags.dm</code> (<code>GLOB.babylon_world</code>, the supervisor's world
+parameters and <code>babylon_world_ready()</code>), <code>state.dm</code>, <code>persistence.dm</code> (engine,
+with per-build hooks <code>checkpoint_hold</code>, <code>checkpoint_mobs</code>,
+<code>capture_session_state</code>, <code>restore_session_state</code>), admission, control, AFK,
+showcase, spectator, SFW, links, storyteller, moderation, world players,
+interface, music and play time are in both builds. <code>rules.dm</code> (Babylon's world
+rules: one 255x255 level, no events, storyteller subsystem, weather or minor
+mapping), <code>session.dm</code>, drone recovery, builder experience, lore, vault,
+survival, silicons and research are only in <code>babylon.dme</code>;
+<code>station_session.dm</code> only in <code>babylon-station.dme</code>.</p>
+<p>The wrapper also defines upstream's <code>ABSOLUTE_MINIMUM</code> flag to skip the
+separate Interlink/cafe map loader. Builder behavior, restricted observer
+interfaces and lore papers live under <code>modular_babylon</code>; lore placements are
+applied to the fresh upstream map at preparation time, without a copied map.</p>
+<p>Babylon is safe for work. <code>modular_babylon/code/sfw.dm</code> disables inherited
+ERP content through proc and var overrides only (no upstream edits): it locks
+<code>DISABLE_ERP_PREFERENCES</code>/<code>DISABLE_LEWD_ITEMS</code> on, filters lewd interactions,
+emotes, research designs and chemistry, removes the Plug13 verb, and opens the
+new Babylon-only <code>tgui/packages/tgui/interfaces/BabylonInteraction.tsx</code>
+instead of SPLURT's <code>MobInteraction</code> window. After an upstream merge, re-check
+newly added lewd interactions, designs, reactions and verbs against it.</p>
+<p>The Creative panel (<code>modular_babylon/code/creative/</code>, both builds) adds the new
+Babylon-only <code>tgui/packages/tgui/interfaces/BabylonCreative.tsx</code> (with its
+<code>BabylonCreative.test.tsx</code>); no upstream file is edited. After an upstream
+merge, re-check new round events and spawnable types against its blacklists
+(<code>babylon_creative_event_blocked</code>, <code>babylon_creative_spawn_blocked</code>).</p>
+<p>Babylon has no storyteller yet. <code>modular_babylon/code/storyteller.dm</code> runs an
+inert <code>/datum/storyteller/babylon</code> in every Babylon world (no events, no
+antagonists), refuses the storyteller vote and any other storyteller, and keeps
+tgstation's random events off, again through overrides only. Station worlds run
+SPLURT's storytellers without a vote: <code>DEFAULT_STORYTELLER</code> from the config,
+else <code>/datum/storyteller/default</code> (SSgamemode's choice without a vote); Creative
+Plane maps and tutorial worlds are inert like Babylon. After an upstream merge,
+re-check <code>SSgamemode</code>'s <code>set_storyteller</code>/<code>init_storyteller</code>, the storyteller
+vote and <code>SSevents.spawnEvent</code> against it; the native smoke test asserts it.</p>
+<p>Round control in station worlds (<code>modular_babylon/code/station_round.dm</code>,
+station build only) needs no upstream edits either; it overrides procs:
+<code>SSticker</code> <code>setup</code>, <code>standard_reboot</code> and <code>fire</code> (the reboot HUD text), <code>/world/Reboot</code>,
+<code>SSgamemode</code> <code>handle_pre_setup_roundstart_events</code>/<code>handle_post_setup_roundstart_events</code>,
+<code>SSdynamic.on_latejoin</code>, and on the title screen (Skyrat's
+<code>modular_skyrat/modules/title_screen</code>) <code>/mob/dead/new_player</code> <code>get_title_html</code>
+(it inserts Babylon's colours/font, the round status and the owner's Start round
+button after the menu's <code>&lt;div class=&quot;container_nav&quot;&gt;</code>), <code>Topic</code> and <code>Login</code>, plus
+<code>/mob/dead/get_status_tab_items</code> and the tg lobby HUD's <code>time_remaining_str</code>.
+The round is held with <code>SSticker.SetTimeLeft(-1)</code> and started with
+<code>start_immediately</code>. After an upstream merge, re-check the title screen markup
+(<code>container_nav</code>), <code>declare_completion</code> → <code>standard_reboot</code>, the ticker's
+pre-game countdown and <code>setup()</code>, and the storyteller's roundstart event procs.</p>
+<p>Station saves (<code>modular_babylon/code/persistence_levels.dm</code>, station build only)
+need no upstream edits either. A world restoring from a save (its
+<code>data/next_map.json</code> names <code>_maps/babylon/saved</code>) overrides <code>SSmapping</code>
+<code>Initialize</code> (the map config's level traits come from the save, no height
+autosetup, no space/wilderness levels), <code>LoadGroup</code> (only the &quot;Station&quot; group
+loads), <code>setup_ruins</code>, <code>setup_rivers</code>, <code>run_map_terrain_generation</code>,
+<code>run_map_terrain_population</code> and <code>SSminor_mapping.Initialize</code>; every override
+falls through to tg's proc otherwise. Shuttles are saved as the turf beneath
+them (<code>baseturf_skipover/shuttle</code> in the tile's baseturfs) and stationary docks
+keep <code>shuttle_id</code>, size, <code>roundstart_template</code> and <code>json_key</code> in the saved map.
+After an upstream merge, re-check <code>SSmapping.Initialize</code>/<code>loadWorld</code> (new
+generated levels or terrain steps must be skipped when restoring), the
+stationary port vars and <code>/obj/docking_port/mobile/jumpToNullSpace</code> (how a
+shuttle tile's underlying turf and area are found), and
+<code>/datum/map_config/LoadConfig</code>'s trait defaults.
+The master's restore-wait hook (<code>code/controllers/master.dm</code>, both builds)
+counts its waiting rounds as loop iterations: a station restore takes long
+enough that the failsafe otherwise restarted the controller in the middle of
+initialization.</p>
+<p>The Creative Plane maps (<code>modular_babylon/code/creative/plane.dm</code>, station build
+only; maps generated by <code>tools/babylon/gen_creative_plane.py</code>) have no shuttle
+docks. On any map without the <code>emergency_home</code> dock the module overrides
+<code>SSshuttle.canEvac</code> (refused with a message), <code>SSshuttle.CheckAutoEvac</code> (no
+crew-death autocall) and <code>/obj/docking_port/mobile/emergency/request</code> (any other
+call is refused and logged); without <code>cargo_home</code>, the cargo console's <code>ui_act</code>
+refuses &quot;send&quot;/&quot;loan&quot; with a message; and <code>/obj/docking_port/mobile/request</code>
+ignores a request to a missing (null) dock. Maps with the docks are unchanged.
+The creative canister (<code>creative/machines.dm</code>) overrides
+<code>portable_atmospherics</code> <code>connect</code>/<code>disconnect</code> to reconnect itself to the port on
+its tile (mapped plane, restored saves). After an upstream merge, re-check those
+shuttle procs, the cargo console's actions and <code>portable_atmospherics/connect</code>;
+the station smoke asserts them on every Creative Plane map.</p>
+<p><code>modular_babylon/code/moderation.dm</code> grants lobby admins (<code>BABYLON_ADMINS</code>) full
+game-admin rights on admission, removes mentors (no mentor is loaded, admins
+are not made mentors, Mentorhelp and Mentorwho are gone) and relays adminhelps
+to the supervisor for the Discord <code>ahelp</code> feature; Discord replies use the
+game's external admin PM (<code>TgsPm</code>). All through overrides. After an upstream
+merge, re-check <code>MessageNoRecipient</code>, <code>reply_to_admins_notification</code>,
+<code>receive_ahelp</code>, <code>TgsPm</code> and the Skyrat mentor module against it.</p>
+<p><code>modular_babylon/connection.dm</code> is shared with the standalone lobby and owns the
+structured <code>BABYLON_SESSION</code> records and final client deletion hook. Admission,
+world joins, lobby transfers, shutdown and AFK returns supply their context and
+known reason; <code>moderation.dm</code> also wraps <code>/world/IsBanned</code> to record pre-client
+refusals. Small <code>BABYLON_BUILDER</code> hooks retain reasons before upstream disconnects
+in <code>client_procs.dm</code>, both admin player panels, admin/SQL bans, server maintenance,
+IP intelligence, TGUI telemetry, kick mines and the maturity subsystem. After an
+upstream merge, scan client deletions and delayed deletions for new known causes;
+ordinary builds compile without these hooks.</p>
+<p><code>modular_babylon/code/research.dm</code> replaces the research point bank and queue:
+a techweb researches one selected node at a time, all income (through
+<code>add_point_list</code>) goes towards it capped at its price, <code>research_points</code> holds
+that progress, income without a target is dropped and switching targets starts
+over. The target is saved with the world. After an upstream merge, re-check
+<code>add_point_list</code>, <code>research_node</code>, <code>complete_experiment</code>, the queue procs and
+the R&amp;D console / PDA <code>research_node</code> and <code>ui_data</code> against it. <code>sfw.dm</code> (both
+builds) removes designs no world offers (ERP; in Babylon also pAI, AI core, MMI,
+positronic brain) from every node in
+<code>SSresearch.calculate_techweb_nodes</code> and refuses them in <code>/datum/techweb/add_design</code>;
+<code>/datum/techweb_node/Initialize</code> is not usable for that, because upstream's
+<code>initialize_all_techweb_nodes</code> calls it on the old, empty node list.</p>
+<p><code>modular_babylon/code/silicons.dm</code> removes pAIs, station AIs, MMIs and positronic
+brains, which no one can play: pAI cards, AI cores and loose MMIs/posibrains delete
+themselves on creation (wreck, saves, loot), their designs are removed,
+the plasteel &quot;AI core&quot; recipe and the PDA vendor's pAI cards are gone, and ghosts
+get no &quot;Enter Soulcatcher&quot; button. After an upstream merge, re-check new sources
+of pAI cards, AI cores and ghost-joinable silicons against it.</p>
+<p><code>modular_babylon/code/interface.dm</code> trims the game window through overrides and
+runtime winsets (the shared <code>interface/skin.dmf</code> is unchanged): the top bar keeps
+Menu, Settings, Fullscreen and Reconnect in four evenly sized columns, measured again
+on resize; world verbs appear in <strong>World Controls</strong>, directly after Status (including
+for non-admins). The station is named after the world
+(<code>babylon-name</code>, markup characters removed); the status tab drops the round ID;
+and verbs for systems Babylon lacks (antag tickets, OPFOR, round-end reports,
+votes, respawn, relays, forum/Discord-DB linking ...) are removed. After an
+upstream merge, check new player verbs and the <code>infobuttons</code> controls.</p>
+<table><thead><tr><th>Upstream file</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>code/controllers/master.dm</code></td><td>Wait for restoration and final subsystem initialization before physics runs; support the isolated-test hold parameter.</td></tr>
+<tr><td><code>code/controllers/subsystem/mapping.dm</code></td><td>Size the standalone map for Babylon and account for already allocated, unregistered lobby levels (not in the station build).</td></tr>
+<tr><td><code>code/modules/mapping/preloader.dm</code></td><td>Apply saved structural properties before atom initialization builds pipes and power networks.</td></tr>
+<tr><td><code>code/game/machinery/computer/atmos_computers/_air_sensor.dm</code></td><td>Skip fresh-map automatic vent claiming for restored sensors.</td></tr>
+<tr><td><code>code/__HELPERS/priority_announce.dm</code></td><td>Suppress round announcements and command reports in the builder world (not in the station build).</td></tr>
+<tr><td><code>modular_zubbers/code/modules/storyteller/divergency_report.dm</code></td><td>Suppress round-start station-trait reporting (not in the station build).</td></tr>
+<tr><td><code>code/modules/client/client_procs.dm</code></td><td>Validate single-use lobby admission before registering a child client or creating an avatar; a refused client goes back to the lobby with the refusal's notice (<code>babylon_lobby_link()</code>). Enforce showcase play mode and restrict visitor Topics/clicks before target dispatch. Standalone builds restrict access to their configured owner.</td></tr>
+<tr><td><code>code/modules/escape_menu/escape_menu.dm</code></td><td>Add the Discord button (<code>modular_babylon/code/links.dm</code>) to Resources when <code>DISCORDURL</code> is set.</td></tr>
+<tr><td><code>code/controllers/subsystem/verbs.dm</code></td><td>Enforce the visitor verb allowlist for native/context verbs, including verbs belonging to world objects.</td></tr>
+<tr><td><code>code/_onclick/drag_drop.dm</code></td><td>Reject showcase visitor mouse-down/up, drag and drop before target handlers or signals run.</td></tr>
+<tr><td><code>code/modules/keybindings/bindings_client.dm</code></td><td>Limit visitor shortcuts to chat and harmless display controls; normal movement handling remains available.</td></tr>
+<tr><td><code>code/modules/mob/mob_movement.dm</code></td><td>Enforce the visitor body before accepting movement, including reconnects from a former playable body.</td></tr>
+<tr><td><code>code/modules/atmospherics/machinery/components/unary_devices/airlock_pump.dm</code></td><td>Skip fresh-install door animations for saved pumps; rebuild their saved connections after restoration.</td></tr>
+<tr><td><code>code/datums/materials/material_container/material_container.dm</code></td><td>Discard invalid material keys before UI generation and stock accounting, preserving valid quantities.</td></tr>
+<tr><td><code>tgui/packages/tgui-panel/settings/atoms.ts</code>, <code>migration.ts</code></td><td>Default the chat panel (and with it the window) to the dark theme, and apply the default theme on a player's first start. Players' saved choices are kept.</td></tr>
+<tr><td><code>tgui/packages/tgui/interfaces/Techweb/Content.tsx</code>, <code>nodes/TechNode.tsx</code>, <code>types.ts</code></td><td>When the server sends <code>babylon_research</code>, show the node being researched instead of point balances and the queue, a Research / Researching button instead of research and queue buttons, and progress only on that node. Without it, the upstream screens are unchanged.</td></tr>
+<tr><td><code>tgui/packages/tgui-escape-menu/EscapeMenu.tsx</code>, <code>pages/PlayersPage.tsx</code></td><td>When the server sends <code>babylon</code>, hide the Round ID line and the &quot;No Admins Online!&quot; heading. Unchanged otherwise.</td></tr>
+<tr><td><code>html/statbrowser.js</code></td><td>Place World Controls immediately after Status, before MC and Admin. Verb categories are defined in modular Babylon code.</td></tr>
+<tr><td><code>tgui/packages/tgui-escape-menu/pages/HomePage.tsx</code>, <code>pages/QuitPage.tsx</code></td><td>Label game-world departure <strong>Return to lobby</strong> when <code>canReturnToLobby</code> is set. <code>modular_babylon/code/escape_menu.dm</code> intercepts the existing quit message and calls the established return verb; the separate lobby and standalone client quit still exit.</td></tr>
+<tr><td><code>code/modules/admin/sql_message_system.dm</code></td><td>Without a database (<code>SQL_ENABLED</code> off), <code>get_message_output</code> returns quietly instead of telling every player at login that the database connection failed.</td></tr>
+<tr><td><code>tgui/packages/tgui/interfaces/VaultController.tsx</code></td><td>Render the Babylon generation interlock (live generation, ignored battery output, hold timer) when the controller sends those fields; the upstream charge view is unchanged otherwise. Rebuild the TGUI bundle after editing.</td></tr>
+</tbody></table>
+<p>Keep these patches small. Do not copy complete upstream files from the local
+prototype. When upstream changes a hook's surrounding procedure, review its
+execution order, not just whether Git merges the text cleanly. In particular,
+moving restoration after simulation startup reintroduces reactor/network bugs.</p>
+<p>Two SPLURT pull requests are merged here ahead of upstream: #1395 (rough player
+positions through the tgui panel's websocket relay: <code>tgstation.dme</code>,
+<code>config/splurt/game_options.txt</code>, <code>modular_zzplurt/.../atlas_position.dm</code>,
+<code>tgui/packages/tgui-panel/websocket/helpers.ts</code>) and #1396 (the stat panel's map
+entry links to the SPLURT atlas: <code>code/modules/client/client_procs.dm</code>
+<code>openWebMap</code>, <code>config/maps.txt</code> <code>webmap_url</code>s). They are not Babylon hooks: when
+upstream merges them, take upstream's version. Babylon worlds use
+<code>container/default-config</code>, which has no <code>maps.txt</code>, so their stat panel shows no
+map link and send no position updates (both need the map's atlas URL). The link uses
+the z within the station levels (<code>atlas_station_z()</code>); position updates send both the
+world z (<code>z</code>) and that station z (<code>station_z</code>), plus the map's name (<code>map</code>) and atlas
+key (<code>map_key</code>); a <code>webmap_url</code> without a <code>#</code> fragment still gets a working link. These follow-up
+fixes are their own commits, so they can be offered to the two pull requests.</p>
+<p>Upstream bug fixes (not Babylon hooks, no <code>BABYLON13</code> marker; report them upstream and take
+upstream's version once it has its own fix): a shared list (a proc's <code>var/static/list</code> or a
+<code>GLOB</code> list) was assigned to a variable and then changed in place, so the change reached every
+user of the shared list. Each assignment now takes a <code>.Copy()</code>:
+<code>code/modules/antagonists/cult/cult_structure_altar.dm</code>, <code>cult_structure_archives.dm</code> and
+<code>cult_structure_forge.dm</code> (<code>options += extra_item</code> added the unlocked orb, medallion or cursed blade
+again on every use), <code>code/modules/fishing/fishing_portal_machine.dm</code> (the &quot;all destinations&quot;
+menu wrote the linked fishing spots into <code>GLOB.preset_fish_sources</code>),
+<code>code/modules/clothing/suits/armor.dm</code> (subtypes such as the durathread vest and the elder
+atmosian armor added their items to <code>GLOB.security_vest_allowed</code>, so to every armor vest) and
+<code>code/modules/mining/lavaland/mining_loot/berserker.dm</code> (the gatsu armor added the dragonslayer
+to <code>GLOB.mining_suit_allowed</code>). <code>tools/babylon/test_shared_list_aliases.py</code> fails when the
+pattern comes back; the cases it allows are listed there with their reason.</p>
+<p>Core-proc overrides of the tutorial module (modular, no upstream edit; merge upstream signature
+changes into them): <code>modular_babylon/code/tutorial/room_reset.dm</code> re-declares
+<code>/obj/item/melee_attack_chain</code> and <code>/atom/base_ranged_item_interaction</code> (every item use on an
+atom, near and at range) to refuse item use inside a live Paste area's protected source while a
+tutorial runs (<code>babylon_tutorial_blocks_building</code>; builder wands, mobs and carried items are
+exempt). <code>tutorial/npc.dm</code> overrides <code>/mob/living/CanAllowThrough</code>,
+<code>/mob/living/carbon/attach_rot</code> and <code>/obj/item/organ/on_death</code> for anchored and spawn-dead
+tutorial NPCs.</p>
+<p>Persistence overrides (both builds; modular, no upstream edit; merge upstream signature changes
+into them and re-check what each one relies on after every upstream merge):</p>
+<ul>
+<li><code>modular_babylon/code/persistence.dm</code>:
+<ul>
+<li><code>/datum/controller/subsystem/atoms/InitAtom</code>: a hot path with a copied argument list
+(<code>atom/A, from_template, list/arguments</code>) and the <code>INITIALIZE_HINT_*</code> contract. It marks
+companions (objects made during another atom's Initialize). Check its argument list and the
+hint handling first.</li>
+<li><code>/datum/controller/subsystem/mapping/LoadGroup</code> (saved levels instead of the fresh map).</li>
+<li><code>/turf/open/floor/MakeDirty</code>, <code>/datum/controller/subsystem/processing/station/SetupTraits</code>,
+<code>/datum/controller/subsystem/decay/Initialize</code> and <code>/datum/controller/subsystem/area_spawn/Initialize</code>
+(fresh-map rolls that stand back for a resumed world; decay also stands back on Creative
+Planes so their authored floors and perimeter catwalk remain intact).</li>
+<li>Mapload defaults that stand back while a save loads (<code>babylon_loading_saved_map()</code>):
+<code>/obj/structure/closet/emcloset/Initialize</code>, <code>/obj/item/stack/merge_with_loc</code> (no stack
+merging while a save loads), <code>/obj/machinery/disposal/bin/spawn_contained_animal</code>,
+<code>/mob/living/basic/bot/mulebot/Initialize</code>, <code>/obj/machinery/light/Initialize</code>,
+<code>/obj/machinery/camera/Initialize</code>, <code>/obj/structure/reflector/Initialize</code>.</li>
+<li><code>babylon_after_restore</code> / <code>babylon_capture_settings</code> on lights, cameras, bots, ID cards and
+mechs (<code>/obj/vehicle/sealed/mecha</code>): they read upstream variables (<code>cell</code>, <code>has_mock_cell</code>,
+<code>camera_enabled</code>, <code>can_be_possessed</code>, <code>trim</code>, equipment slots).</li>
+</ul>
+</li>
+<li><code>modular_babylon/code/station_round.dm</code>: <code>/world/Reboot</code> (saves a running round, then stops),
+<code>/datum/controller/subsystem/ticker/standard_reboot</code> and <code>fire</code>.</li>
+<li><code>modular_babylon/code/station_characters.dm</code>: <code>/obj/machinery/cryopod/mouse_drop_receive</code>
+(Skyrat's cryopod: a restored character waits for its player).</li>
+</ul>
+<p>The restore paths run without a <code>try</code> in some places and under the subsystem's <code>try</code> in others:
+a new harmless <code>stack_trace</code> in a restore path makes worlds refuse to start (&quot;Restore failed&quot;)
+until it is fixed. That is deliberate (a half restore would be written over the world by the
+next save), so run <code>smoke_native.py</code> and <code>smoke_station.py</code> (including its stability step) after
+every upstream merge.</p>
+<h2 id="byond-516-1686-slot-quirk">BYOND 516.1686 slot quirk</h2>
+<p>DreamMaker 516.1686 (<code>.tgs.yml</code>) sometimes mishandles whichever variable lands on one
+particular internal slot. It has shown up as a proc's static list that is &quot;invalid&quot;
+(<code>code/modules/antagonists/cult/cult_structure_altar.dm:41: error: altar_items: invalid variable</code>, <code>archive_items</code> in <code>cult_structure_archives.dm</code>) and as a local that is
+plainly used but reported as <code>warning (unused_var)</code> (<code>suspect_gloves</code> in
+<code>forensics_helpers.dm</code>, <code>loser_controller</code> in <code>cat_bt.dm</code>, <code>plant_smudge</code> in
+<code>plant_genes.dm</code>). The reported file is never the cause: any change that adds or removes
+a variable anywhere in the build moves the slot onto another variable, so the same
+change can break one build and not the other three. Treat a build that shows it as
+possibly miscompiled, not as noise: the slot is used for code generation too, and a
+clean build only means that whichever variable holds the slot now gives no diagnostic.
+A local that really is never read is an ordinary warning, not the quirk.
+Investigate a failing runtime test and prove its cause independently of this compiler
+workaround. The earlier &quot;All doors&quot; NPC test failure was traced to live-map AI turrets
+adding stamina damage to the walker, together with timing-dependent completion checks.
+Tutorial and area-tool tests now use isolated fixtures and exact completion conditions.
+Moving a padding global until a runtime test passes does not establish a fix.</p>
+<p>Recipe: add or remove one padding global (<code>var/global/babylon_byond_1686_slot_pad_&lt;n&gt;</code>)
+in the block for the affected build at the end of <code>modular_babylon/code/world_flags.dm</code>,
+then compile all four builds again (repeat until all are clean). The pads do nothing
+else; remove the block once a BYOND build fixes the quirk (check newer 516 builds when
+bumping <code>.tgs.yml</code>). <code>tools/babylon/build_dme.py</code>, which the Dockerfile uses for every
+DreamMaker run, prints this recipe when a build log shows the quirk's signature, and then
+fails the build (exit 1), so an image is never built from a possibly miscompiled build. A
+maintainer who checked that the warning is a real unused local (not the quirk) and fixed it
+does not need the escape hatch; <code>BABYLON_ALLOW_SLOT_QUIRK=1</code> lets such a build pass anyway.</p>
+<h2 id="updating-upstream">Updating upstream</h2>
+<pre><code class="language-sh">git remote add upstream https://github.com/SPLURT-Station/S.P.L.U.R.T-tg.git
+git fetch upstream
+git merge upstream/master
+</code></pre>
+<p>Skip <code>remote add</code> if the remote already exists. Preserve upstream history;
+do not squash upstream into this repository or force-push over its branches.</p>
+<p>After every merge:</p>
+<ol>
+<li>Review every <code>BABYLON13</code> marker and the standalone wrapper.</li>
+<li>Rename newly introduced <code>.github/workflows/*.yml</code> / <code>*.yaml</code> files with a
+<code>.disabled</code> suffix before pushing. Keep repository Actions disabled too.</li>
+<li>Compile ordinary <code>tgstation.dme</code>, production <code>babylon.dme</code>, and the local
+<code>babylon-test.dme</code> test build.</li>
+<li>Exercise a fresh wreck, a save/reload, pipe expansion, vent/alarm links,
+materials, airlock groups, and drone death/respawn. Use an isolated process
+and disposable world; never point tests at a player's running instance.</li>
+<li>Run <code>services/supervisor/smoke_native.py</code> and <code>smoke_station.py</code> (with its stability
+step): a new upstream <code>stack_trace</code> in a restore path stops worlds from starting, and a
+new random roll in an <code>Initialize</code> changes saved worlds on every restart.</li>
+</ol>
+<p>The private prototype's six upstream hooks were carried forward. Its chat
+transcript patch, personal config, owner name, repair object IDs, saved world,
+and training/admin subsystem were deliberately not imported.</p></td></tr></table></main><footer>babylon.dme <a href="https://github.com/scolastico/babylon13/tree/fb5416a84bdf228abc2699273c51e5bb09202d71">fb5416a</a> (master) — <a href="https://github.com/SpaceManiac/SpacemanDMM/blob/master/crates/dmdoc/README.md">dmdoc 1.11.0</a></footer></body></html>
