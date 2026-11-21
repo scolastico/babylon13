@@ -1,10 +1,13 @@
 import json
+import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 from checkpoints import Checkpoints, CheckpointError, atomic_json
+from constants import TUTORIAL_SNAPSHOT_MARKER, TUTORIAL_SNAPSHOT_MAX_AGE
 from supervisor import Supervisor, Driver, Denied, load_config
 from test_supervisor import FakeDriver
 
@@ -38,6 +41,30 @@ class Storage(unittest.TestCase):
         self.store.retain(self.world)
         self.assertEqual(self.generations(), set(points[-4:]))
         self.assertEqual([p["generation"] for p in self.store.list(self.world)["checkpoints"]], points[-4:][::-1])
+
+    def station_point(self, count, files=("z2.dmm", "z3.dmm"), levels=("z2.dmm", "z3.dmm")):
+        generation = f"save-20261109-120000-{count}"
+        root = self.store.root(self.world)
+        path = self.store.path(root, generation)
+        path.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            (path / name).write_text("level")
+        atomic_json(path / "state.json", dict(generation=generation, records=[{"id": 1}, {"id": 2}],
+                                              levels=[{"file": name, "traits": {}} for name in levels]))
+        return generation
+
+    def test_station_checkpoints_have_a_file_per_level(self):
+        # Station saves have z<N>.dmm per level instead of map.dmm (fixtures/station_state.json).
+        complete = self.station_point(1)
+        missing = self.station_point(2, files=("z2.dmm",))
+        unsafe = self.station_point(3, levels=("../z2.dmm",))
+        root = self.store.root(self.world)
+        self.assertEqual(self.store.snapshot(root, complete), {"generation": complete, "objects": 2})
+        for broken in (missing, unsafe):
+            with self.assertRaises(CheckpointError):
+                self.store.snapshot(root, broken)
+        atomic_json(root / "latest.json", {"generation": complete})
+        self.assertEqual([p["generation"] for p in self.store.list(self.world)["checkpoints"]], [complete])
 
     def test_custom_retention_is_scoped_to_one_world(self):
         points = [seed(self.store, self.world, n) for n in range(1, 7)]
@@ -108,6 +135,39 @@ class Storage(unittest.TestCase):
                 self.store.rollback(self.world, target, expected)
         self.assertEqual(self.generations(), set(points) | {future})
 
+    def test_tutorial_snapshots_are_never_checkpoints(self):
+        # A submission's snapshot the world could not delete (it stopped while the supervisor copied)
+        # is neither listed, nor a rollback target, and is swept once it is old (arch C2, review S1).
+        first = seed(self.store, self.world, 1)
+        snapshot = seed(self.store, self.world, 2, commit=False)
+        root = self.store.root(self.world)
+        (root / snapshot / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        latest = seed(self.store, self.world, 3)
+        listed = [p["generation"] for p in self.store.list(self.world)["checkpoints"]]
+        self.assertEqual(listed, [latest, first])
+        with self.assertRaises(CheckpointError):
+            self.store.rollback(self.world, snapshot, latest)
+        self.assertEqual(self.store.head(root), latest)
+        # Young snapshots stay (the supervisor may be copying one); old ones go, checkpoints stay.
+        young = seed(self.store, self.world, 4, commit=False)
+        (root / young / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        old = time.time() - TUTORIAL_SNAPSHOT_MAX_AGE - 60
+        os.utime(root / snapshot / TUTORIAL_SNAPSHOT_MARKER, (old, old))
+        self.store.retain(self.world)
+        self.assertEqual(self.generations(), {first, latest, young})
+
+    def test_young_snapshot_older_than_latest_survives_retain(self):
+        # Review C-I1: an autosave commits a newer generation while the supervisor copies a
+        # submission's snapshot; pruning must leave the snapshot to the age-based sweep.
+        root = self.store.root(self.world)
+        points = [seed(self.store, self.world, 1)]
+        snapshot = seed(self.store, self.world, 2, commit=False)
+        (root / snapshot / TUTORIAL_SNAPSHOT_MARKER).write_text("1")
+        points += [seed(self.store, self.world, n) for n in range(3, 3 + self.store.keep + 2)]
+        self.store.retain(self.world, expected=points[-1])
+        self.assertIn(snapshot, self.generations())
+        self.assertNotIn(points[0], self.generations())
+
     def test_bad_head_does_not_delete_older_saves(self):
         points = [seed(self.store, self.world, n) for n in range(1, 7)]
         (self.store.root(self.world) / points[-1] / "state.json").write_text("incomplete")
@@ -150,6 +210,7 @@ class CheckpointPolicies(unittest.TestCase):
                            ticket_lifetime_seconds=60, empty_grace_seconds=120,
                            startup_timeout_seconds=300, public_host="localhost", admins=["admin"])
         self.s = Supervisor(self.config, self.driver)
+        self.s.background_launches = False
         self.world = self.s.dispatch("owner", "create", {"name": "History"})["id"]
         self.points = [seed(self.s.checkpoints, self.world, n) for n in range(1, 7)]
 

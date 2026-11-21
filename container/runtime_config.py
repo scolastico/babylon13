@@ -9,19 +9,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'services/supervisor'))
+from constants import DEFAULTS as SUPERVISOR_DEFAULTS
 from supervisor import ckey, load_config
 
 
 DEFAULTS = {
     'lobby_port': 1361, 'api_port': 1360, 'world_port_first': 1400, 'world_port_last': 1420,
     'max_running_worlds': 4, 'max_players_per_world': 4, 'max_worlds_per_player': 3,
-    'max_running_worlds_per_player': 1, 'kept_save_points_per_world': 4,
-    'delete_unused_worlds_after_days': 60, 'empty_grace_seconds': 120,
-    'startup_timeout_seconds': 300, 'ticket_lifetime_seconds': 60,
-    'shutdown_timeout_seconds': 180,
+    'max_running_worlds_per_player': 1,
+    **SUPERVISOR_DEFAULTS,
+    # A station world's final save takes about a minute; several run in parallel.
+    'shutdown_timeout_seconds': 600,
     # Countdown in every world before a restart; 0 skips it.
     'restart_warning_seconds': 30,
-    'afk_timeout_seconds': 900,
 }
 
 # Upstream's shared Space Station 13 hub entry; its password is public in code/world.dm.
@@ -43,7 +43,8 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
         if not re.fullmatch(r'\d+', raw):
             raise ValueError('BABYLON_' + name.upper() + ' must be an integer')
         number = int(raw)
-        minimum = 0 if name in ('delete_unused_worlds_after_days', 'afk_timeout_seconds', 'restart_warning_seconds') else 1
+        minimum = 0 if name in ('delete_unused_worlds_after_days', 'afk_timeout_seconds', 'restart_warning_seconds',
+                                'tutorial_submit_cooldown_hours') else 1
         if number < minimum or ('port' in name and number > 65535):
             raise ValueError('Invalid BABYLON_' + name.upper())
         values[name] = number
@@ -86,15 +87,18 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
     address = 'byond://%s:%s' % (host, values['lobby_port'])
     config = {key: values[key] for key in (
         'max_running_worlds', 'max_players_per_world', 'max_worlds_per_player',
-        'max_running_worlds_per_player', 'kept_save_points_per_world',
+        'max_running_worlds_per_player', 'kept_save_points_per_world', 'max_total_worlds_per_player',
         'delete_unused_worlds_after_days', 'empty_grace_seconds',
-        'startup_timeout_seconds', 'ticket_lifetime_seconds', 'afk_timeout_seconds')}
+        'startup_timeout_seconds', 'station_startup_timeout_seconds', 'ticket_lifetime_seconds',
+        'afk_timeout_seconds', 'tutorial_submit_cooldown_hours', 'station_autosave_minutes')}
     discord = discord_settings(env, address, env.get('BABYLON_DATA_DIRECTORY', '/data'))
     config['discord'] = public_discord(discord)
     config.update(listen_host='127.0.0.1', listen_port=values['api_port'], public_host=host,
                   bind_address='0.0.0.0', lobby_address=address, lobby_secret=secret, admins=admins,
                   data_directory=env.get('BABYLON_DATA_DIRECTORY', '/data'),
-                  template_directory=str(template), config_directory=str(runtime / 'game-config'),
+                  template_directory=str(template),
+                  map_catalog=env.get('BABYLON_MAP_CATALOG', '').strip() or str(template / '_maps/babylon/catalog.json'),
+                  config_directory=str(runtime / 'game-config'),
                   dreamdaemon='/opt/byond/bin/DreamDaemon', port_first=first, port_last=last,
                   # Optional server-side music (see CLUSTER.md); worlds play nothing without it.
                   music_directory=env.get('BABYLON_MUSIC_DIRECTORY', '/music').strip())
@@ -107,7 +111,7 @@ def settings(env=None, runtime=Path('/run/babylon'), template=ROOT):
 
 DISCORD_FEATURES = ('link', 'roles', 'voice', 'logs', 'status', 'gamelog', 'tickets', 'ahelp')
 DISCORD_CHANNELS = ('status', 'voice_lobby', 'mod_log', 'member_log', 'message_log', 'voice_log', 'game_log', 'bot_log',
-                    'ticket_panel', 'ticket_log', 'ahelp')
+                    'ticket_panel', 'ticket_log', 'ahelp', 'tutorial_review')
 
 
 def flag(env, name, default='false'):

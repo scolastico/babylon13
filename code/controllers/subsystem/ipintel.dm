@@ -294,4 +294,7 @@ ADMIN_VERB(ipintel_revoke, R_BAN, "Revoke Player VPN Whitelist", "Revoke a playe
 	message_string += "."
 
 	to_chat_immediate(src, span_userdanger(message_string))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+	babylon_refuse_admission("IP intelligence check rejected the connection")
+#endif
 	qdel(src)

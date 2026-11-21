@@ -1,4 +1,4 @@
-/datum/babylon_save/proc/capture_drone_profile()
+/datum/babylon_player/proc/capture_drone_profile()
 	var/list/profile = list()
 	if(!builder)
 		return drone_profile.Copy()
@@ -6,14 +6,14 @@
 		profile[field] = builder.vars[field]
 	return profile
 
-/datum/babylon_save/proc/install_drone_actions()
+/datum/babylon_player/proc/install_drone_actions()
 	QDEL_NULL(destruct_action)
 	QDEL_NULL(return_action)
 	install_return_action(builder)
 	destruct_action = new(src)
 	destruct_action.Grant(builder)
 
-/datum/babylon_save/proc/install_return_action(mob/player)
+/datum/babylon_player/proc/install_return_action(mob/player)
 	if(!world.params["babylon-lobby"] || !player)
 		return
 	if(!return_action)
@@ -21,7 +21,7 @@
 	if(return_action.owner != player)
 		return_action.Grant(player)
 
-/datum/babylon_save/proc/begin_respawn(mob/living/basic/drone/babylon/dead_drone)
+/datum/babylon_player/proc/begin_respawn(mob/living/basic/drone/babylon/dead_drone)
 	if(respawn_pending)
 		return
 	if(dead_drone && dead_drone != builder)
@@ -33,7 +33,7 @@
 	QDEL_NULL(destruct_action)
 	to_chat(world, span_notice("Babylon drone lost. Respawn becomes available in 60 seconds."))
 
-/datum/babylon_save/proc/update_respawn_player(client/student)
+/datum/babylon_player/proc/update_respawn_player(client/student)
 	if(!student)
 		return
 	if(!isobserver(student.mob))
@@ -57,14 +57,14 @@
 	respawn_action.desc = seconds_left ? "New drone available in [seconds_left] seconds." : "Return in a new drone at the engineering spawn."
 	respawn_action.build_all_button_icons()
 
-/datum/babylon_save/proc/respawn_builder(mob/requester)
-	if(requester && requester.ckey != owner_ckey)
+/datum/babylon_player/proc/respawn_builder(mob/requester)
+	if(requester && requester.ckey != ckey)
 		return FALSE
 	if(!respawn_pending || world.time < respawn_ready_at || GLOB.babylon_save.busy || GLOB.babylon_save.draining)
 		return FALSE
 	var/turf/spawn_point = respawn_turf
-	if(!valid_respawn_tile(spawn_point))
-		spawn_point = find_respawn_tile()
+	if(!GLOB.babylon_save.valid_respawn_tile(spawn_point))
+		spawn_point = GLOB.babylon_save.find_respawn_tile()
 	if(!spawn_point)
 		to_chat(requester, span_warning("No engineering floor is available for respawn."))
 		return FALSE
@@ -79,7 +79,7 @@
 	respawn_ready_at = 0
 	QDEL_NULL(respawn_action)
 	install_drone_actions()
-	var/client/student = GLOB.directory[owner_ckey]
+	var/client/student = GLOB.directory[ckey]
 	if(student)
 		var/mob/previous = student.mob
 		builder.PossessByPlayer(student.ckey)
@@ -102,7 +102,7 @@
 			return tile
 	return null
 
-/datum/babylon_save/proc/vaporize_builder()
+/datum/babylon_player/proc/vaporize_builder()
 	if(QDELETED(builder) || builder.stat == DEAD || respawn_pending || GLOB.babylon_save.busy || GLOB.babylon_save.draining)
 		return FALSE
 	var/mob/living/basic/drone/babylon/doomed = builder
@@ -124,12 +124,12 @@
 
 /mob/living/basic/drone/babylon/death(gibbed)
 	. = ..()
-	var/datum/babylon_save/player = GLOB.babylon_save?.player_for_drone(src)
+	var/datum/babylon_player/player = GLOB.babylon_save?.player_for_drone(src)
 	if(player)
 		player.begin_respawn(src)
 
 /mob/living/basic/drone/babylon/Destroy()
-	var/datum/babylon_save/player = GLOB.babylon_save?.player_for_drone(src)
+	var/datum/babylon_player/player = GLOB.babylon_save?.player_for_drone(src)
 	if(GLOB.babylon_save?.ready && player)
 		player.begin_respawn(src)
 	return ..()
@@ -142,14 +142,14 @@
 	show_to_observers = FALSE
 
 /datum/action/babylon_self_destruct/Trigger(mob/clicker, trigger_flags)
-	var/datum/babylon_save/session = target
-	if(!..() || owner?.ckey != session.owner_ckey || owner != session.builder)
+	var/datum/babylon_player/player = target
+	if(!..() || owner?.ckey != player.ckey || owner != player.builder)
 		return FALSE
 	if(tgui_alert(owner, "Vaporize your drone? All carried items will drop at your current position. You can respawn after 60 seconds.", "Confirm self-destruct", list("Cancel", "Self-destruct")) != "Self-destruct")
 		return FALSE
-	if(owner != session.builder || owner?.stat == DEAD)
+	if(owner != player.builder || owner?.stat == DEAD)
 		return FALSE
-	return session.vaporize_builder()
+	return player.vaporize_builder()
 
 /datum/action/babylon_respawn
 	name = "Respawn drone"
@@ -159,13 +159,13 @@
 	show_to_observers = FALSE
 
 /datum/action/babylon_respawn/IsAvailable(feedback = FALSE)
-	var/datum/babylon_save/session = target
-	return ..() && session.respawn_pending && world.time >= session.respawn_ready_at
+	var/datum/babylon_player/player = target
+	return ..() && player.respawn_pending && world.time >= player.respawn_ready_at
 
 /datum/action/babylon_respawn/apply_button_icon(atom/movable/screen/movable/action_button/button, force = FALSE)
 	. = ..()
-	var/datum/babylon_save/session = target
-	var/seconds_left = ceil(max(0, session.respawn_ready_at - world.time) / (1 SECONDS))
+	var/datum/babylon_player/player = target
+	var/seconds_left = ceil(max(0, player.respawn_ready_at - world.time) / (1 SECONDS))
 	button.maptext_x = 2
 	button.maptext_y = 2
 	button.maptext_width = 32
@@ -175,12 +175,12 @@
 /datum/action/babylon_respawn/Trigger(mob/clicker, trigger_flags)
 	if(!..())
 		return FALSE
-	var/datum/babylon_save/session = target
-	return session.respawn_builder(owner)
+	var/datum/babylon_player/player = target
+	return player.respawn_builder(owner)
 
 /mob/dead/observer/get_status_tab_items()
 	. = ..()
-	var/datum/babylon_save/session = GLOB.babylon_save.player_sessions[ckey]
-	if(session?.ready && session.respawn_pending)
-		var/seconds_left = ceil(max(0, session.respawn_ready_at - world.time) / (1 SECONDS))
+	var/datum/babylon_player/player = GLOB.babylon_save.player_sessions[ckey]
+	if(GLOB.babylon_save.ready && player?.respawn_pending)
+		var/seconds_left = ceil(max(0, player.respawn_ready_at - world.time) / (1 SECONDS))
 		. += seconds_left ? "Babylon respawn: [seconds_left] seconds" : "Babylon respawn: READY — click Respawn drone"

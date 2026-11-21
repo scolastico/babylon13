@@ -1,14 +1,25 @@
 // Connection state, deliberately excluded from world checkpoints.
 /datum/babylon_afk
 	var/last_inactivity = 0
+	var/paused_inactivity = 0
+	var/was_paused = FALSE
 	var/warned = FALSE
 	var/kick_pending = FALSE
 
-/datum/babylon_afk/proc/update(idle, timeout)
+/datum/babylon_afk/proc/update(idle, timeout, paused = FALSE)
 	if(!timeout || idle < last_inactivity)
 		warned = FALSE
 		kick_pending = FALSE
+		// Input during a pause resets BYOND's clock; its new idle interval was also paused.
+		paused_inactivity = was_paused && idle < last_inactivity ? idle : 0
+	if(paused || was_paused)
+		paused_inactivity += max(0, idle - last_inactivity)
 	last_inactivity = idle
+	was_paused = paused
+	idle = max(0, idle - paused_inactivity)
+	if(paused)
+		kick_pending = FALSE
+		return null
 	if(!timeout)
 		return null
 	if(idle >= timeout)
@@ -24,12 +35,16 @@
 /client
 	var/datum/babylon_afk/babylon_afk
 
-/client/proc/babylon_check_afk(timeout)
+/client/proc/babylon_check_afk(timeout, paused = FALSE)
 	if(!babylon_afk)
 		babylon_afk = new
-	switch(babylon_afk.update(inactivity, timeout))
+		// Resource loading and client setup happened before the first playable check.
+		babylon_afk.paused_inactivity = inactivity
+		babylon_afk.last_inactivity = inactivity
+	paused = paused || !fully_created
+	switch(babylon_afk.update(inactivity, timeout, paused))
 		if("warn")
-			to_chat(src, span_userdanger("You are inactive. Babylon will send you back to the lobby in [DisplayTimeText(max(0, timeout - inactivity))]. Move or interact with the game to stay here."))
+			to_chat(src, span_userdanger("You are inactive. Babylon will send you back to the lobby in [DisplayTimeText(max(0, timeout - max(0, inactivity - babylon_afk.paused_inactivity)))]. Move or interact with the game to stay here."))
 		if("kick")
 			INVOKE_ASYNC(src, PROC_REF(babylon_disconnect_afk), timeout)
 
@@ -40,8 +55,8 @@
 	sleep(1 SECONDS)
 	if(!src)
 		return
-	if(!timeout || inactivity < timeout || GLOB.babylon_save.draining || GLOB.babylon_save.busy)
+	if(!timeout || inactivity - babylon_afk.paused_inactivity < timeout || GLOB.babylon_save.draining || GLOB.babylon_save.busy)
 		babylon_afk.kick_pending = FALSE
 		return
 	log_access("BABYLON AFK: [key_name(src)] returned to the lobby after [DisplayTimeText(timeout)].")
-	babylon_remove_from_world(src, "Returned to the lobby for inactivity. Your body and equipment remain in this world; join it again to continue.")
+	babylon_remove_from_world(src, "Returned to the lobby for inactivity. Your body and equipment remain in this world; join it again to continue.", "timeout")

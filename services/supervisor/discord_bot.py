@@ -10,7 +10,8 @@ Features (BABYLON_DISCORD_FEATURES, see modular_babylon/CLUSTER.md):
   tickets  support tickets: a button in a read-only channel opens a private
            channel for the member and the staff; closing it sends a .txt
            transcript to the member and to the ticket log
-/status and the moderators' /whois are always available.
+/status and the moderators' /whois are always available. Submitted tutorials are announced in the
+tutorial_review channel (BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL) when it is set.
 """
 import asyncio
 from collections import deque
@@ -126,6 +127,17 @@ def ahelp_entry(event):
     return embed, ([{"type": 1, "components": buttons}] if buttons else [])
 
 
+def tutorial_embed(tutorial):
+    """The reviewers' notice of a submitted tutorial. Everything the player wrote is escaped."""
+    embed = discord.Embed(title="📝 New tutorial submitted", color=TEAL,
+                          description=clip(md(tutorial.get("description")), 1500) or "*(no description)*")
+    embed.add_field(name="Title", value=clip(md(tutorial.get("title")), 1024) or "-", inline=False)
+    embed.add_field(name="Author", value=f"`{clip(tutorial.get('author'), 64)}`")
+    embed.add_field(name="Map", value=clip(md(tutorial.get("map_name") or tutorial.get("map")), 1024) or "-")
+    embed.set_footer(text="Review it in the lobby under Pending tutorials (Tutorials tab).")
+    return embed
+
+
 def chunk_lines(lines, limit=1900):
     """Group log lines into code blocks below Discord's message size."""
     blocks, current = [], ""
@@ -206,6 +218,8 @@ class BabylonBot(discord.Client):
             self.loop_ref.create_task(self.game_log_loop())
         if "link" in self.features:
             self.supervisor.discord_link_changed = self.link_changed_threadsafe
+        # Without a tutorial_review channel the notice is only logged (post_tutorial).
+        self.supervisor.tutorial_notify = self.tutorial_threadsafe
         if "ahelp" in self.features:
             self.supervisor.ahelp_relay = self.ahelp_threadsafe
             self.supervisor.ahelp_admins_online = self.admins_online_threadsafe
@@ -711,6 +725,17 @@ class BabylonBot(discord.Client):
             route = discord.http.Route("PATCH", "/channels/{channel_id}/messages/{message_id}",
                                        channel_id=channel_id, message_id=message_id)
         return await self.http.request(route, json=dict(payload, allowed_mentions={"parse": []}))
+
+    # --- tutorial review ---------------------------------------------------------------
+
+    def tutorial_threadsafe(self, tutorial):
+        asyncio.run_coroutine_threadsafe(self.post_tutorial(tutorial), self.loop_ref)
+
+    async def post_tutorial(self, tutorial):
+        if not self.channel("tutorial_review"):
+            log("No tutorial_review channel is set; the tutorial %s waits in the lobby" % tutorial.get("id"))
+            return
+        await self.send("tutorial_review", embed=tutorial_embed(tutorial))
 
     # --- adminhelp relay -----------------------------------------------------------
 

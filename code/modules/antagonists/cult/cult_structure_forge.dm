@@ -31,7 +31,7 @@
 
 	var/extra_item = extra_options()
 
-	options = forge_items
+	options = forge_items.Copy()
 	if(!isnull(extra_item))
 		options += extra_item
 

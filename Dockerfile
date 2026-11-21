@@ -35,16 +35,21 @@ RUN . ./dependencies.sh \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates icons \
  && /tmp/hypnagogic --dont-wait --templates cutter_templates modular_zubbers/icons \
  && python3 tools/build_bt.py
-RUN DreamMaker -DCBT babylon.dme && DreamMaker -DCBT babylon-lobby.dme
+# build_dme.py runs DreamMaker and explains the BYOND 516.1686 slot quirk when it shows up; the
+# quirk fails the build (a possibly miscompiled image is never shipped; see UPSTREAM_HOOKS.md).
+# --build-arg BABYLON_ALLOW_SLOT_QUIRK=1 is the escape hatch for a checked, real unused local.
+ARG BABYLON_ALLOW_SLOT_QUIRK=
+RUN python3 tools/babylon/build_dme.py babylon.dme babylon-station.dme babylon-lobby.dme
 RUN python3 container/stage-runtime.py /src /opt/babylon
 
-# PRs and default-branch pushes build this target: both game builds, the
+# PRs and default-branch pushes build this target: the test game builds (Babylon and station), the
 # standalone lobby, upstream compatibility, Python tests and browser UX tests.
 FROM build AS check
-RUN DreamMaker -DCBT babylon-test.dme && DreamMaker -DCBT tgstation.dme \
+RUN python3 tools/babylon/build_dme.py babylon-test.dme babylon-station-test.dme tgstation.dme \
  && python3 -m unittest discover -s services/supervisor -v \
  && python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v \
  && node tools/babylon/test_lobby_loading.cjs \
+ && node tools/babylon/test_lobby_ui.cjs \
  && node container/test_cleanup.cjs
 
 FROM ubuntu:24.04 AS runtime

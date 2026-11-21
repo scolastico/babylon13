@@ -8,15 +8,18 @@
 #define BABYLON_PLAY_TIME_MAX_STEP (10 SECONDS)
 
 /datum/babylon_save
-	/// Deciseconds played. The world's own record: time with at least one player in it.
-	/// A player's record (in player_sessions): time connected to this world as a player.
+	/// Deciseconds the world was played: time with at least one player in it.
 	var/play_time = 0
 	/// REALTIMEOFDAY of the last counting step, or null before the first.
 	var/play_time_counted_at
 
-/datum/babylon_save/tick_world()
+/datum/babylon_player
+	/// Deciseconds this player was connected to the world as a player.
+	var/play_time = 0
+
+/datum/babylon_save/New()
 	. = ..()
-	count_play_time()
+	tick_listeners += new /datum/babylon_tick_listener(src, CALLBACK(src, PROC_REF(count_play_time)))
 
 /datum/babylon_save/proc/count_play_time()
 	var/now = REALTIMEOFDAY
@@ -24,16 +27,20 @@
 	play_time_counted_at = now
 	if(!step || draining || !ready)
 		return
-	var/anyone = FALSE
+	var/list/playing = list()
 	for(var/player_key in player_sessions)
 		var/client/student = babylon_ready_client(GLOB.directory[player_key])
 		// Visitors and spectating admins watch; they are not playing this world.
 		if(!student || student.babylon_showcase_visitor || student.babylon_admin_spectator)
 			continue
-		var/datum/babylon_save/player = player_sessions[player_key]
+		playing += player_sessions[player_key]
+	add_play_time(step, playing)
+
+/// Adds one counting step to every playing player's record and, when anyone plays, to the world.
+/datum/babylon_save/proc/add_play_time(step, list/playing)
+	for(var/datum/babylon_player/player as anything in playing)
 		player.play_time += step
-		anyone = TRUE
-	if(anyone)
+	if(length(playing))
 		play_time += step
 
 /// "3h 07m", "45m" or "under a minute".
@@ -47,7 +54,7 @@
 
 /// The player's own play time on this world, or null for someone without a session.
 /proc/babylon_player_play_time(ckey)
-	var/datum/babylon_save/player = GLOB.babylon_save?.player_sessions[ckey]
+	var/datum/babylon_player/player = GLOB.babylon_save?.player_sessions[ckey]
 	return player?.play_time
 
 /mob/get_status_tab_items()
@@ -66,7 +73,7 @@
 		return list()
 	var/list/times = list()
 	for(var/player_key in sessions)
-		var/datum/babylon_save/player = sessions[player_key]
+		var/datum/babylon_player/player = sessions[player_key]
 		times[player_key] = player.play_time
 	sortTim(times, GLOBAL_PROC_REF(cmp_numeric_dsc), associative = TRUE)
 	var/list/lines = list()

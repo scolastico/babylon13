@@ -1,0 +1,312 @@
+import { afterEach, describe, expect, it } from 'bun:test';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from '@testing-library/react';
+import { gameDataAtom, store } from '../events/store';
+
+import {
+  type AreaData,
+  blockedReason,
+  type Material,
+  materialLabel,
+  sizeText,
+  stepHint,
+} from './BabylonTutorialArea';
+import {
+  BabylonWorldEditWand,
+  type WorldEditData,
+} from './BabylonWorldEditWand';
+
+const materials: Material[] = [
+  { path: '/turf/open/floor/iron', name: 'floor', group: 'Floors' },
+  { path: '/turf/closed/wall', name: 'wall', group: 'Walls' },
+  { path: '/obj/structure/grille', name: 'grille', group: 'Structures' },
+];
+
+const area: AreaData = {
+  step: 'corner1',
+  corner: null,
+  selection: null,
+  clipboard: null,
+  paste: null,
+  undo: null,
+  busy: false,
+  cooldown: 0,
+  max_tiles: 10000,
+  material: null,
+  only_empty: false,
+  skip_space: true,
+  suffix_mode: 'auto',
+  custom_suffix: '_b',
+  clear_to: 'plating',
+};
+
+const selection = {
+  x1: 10,
+  y1: 20,
+  x2: 21,
+  y2: 27,
+  z: 2,
+  width: 12,
+  height: 8,
+  tiles: 96,
+  problem: null,
+  stats: { objects: 30, tutorial: 4, mobs: 1, players: 0, locked: 0 },
+};
+
+const clipboard = {
+  width: 12,
+  height: 8,
+  objects: 30,
+  tutorial: 4,
+  x: 10,
+  y: 20,
+};
+
+const wand: WorldEditData = {
+  creative: true,
+  notice: null,
+  materials,
+  area,
+};
+
+afterEach(cleanup);
+
+const show = (override: Partial<AreaData> = {}) => {
+  store.set(gameDataAtom, { ...wand, area: { ...area, ...override } });
+  act(() => render(<BabylonWorldEditWand />));
+};
+
+describe('BabylonTutorialArea', () => {
+  it('formats sizes like 12×8 (96 tiles)', () => {
+    expect(sizeText(12, 8)).toBe('12×8 (96 tiles)');
+    expect(sizeText(100, 100)).toBe('100×100 (10,000 tiles)');
+    expect(sizeText(1, 1)).toBe('1×1 (1 tile)');
+  });
+
+  it('opens in the world-edit wand, without the tutorial wand modes', () => {
+    show();
+    expect(screen.getByText('World-edit wand')).toBeDefined();
+    expect(screen.queryByText('Back to Place')).toBeNull();
+    expect(screen.queryByText('Place')).toBeNull();
+    cleanup();
+    store.set(gameDataAtom, { ...wand, creative: false });
+    act(() => render(<BabylonWorldEditWand />));
+    expect(
+      screen.getByText('The world-edit wand only works in creative worlds.'),
+    ).toBeDefined();
+  });
+
+  it('says which corner to click', () => {
+    show();
+    expect(screen.getByText('Select: corner 1 of 2')).toBeDefined();
+    expect(
+      screen.getByText('Click the first corner of an area with the wand.'),
+    ).toBeDefined();
+    show({ step: 'corner2', corner: { x: 4, y: 7 } });
+    expect(
+      screen.getByText('Corner 1 is at 4, 7. Click the opposite corner.'),
+    ).toBeDefined();
+    expect(screen.getByText('Cancel')).toBeDefined();
+  });
+
+  it('disables operations with a reason while nothing is selected', () => {
+    show();
+    const copy = screen.getByText('Copy selection').closest('.Button');
+    expect(copy?.className).toContain('Button--disabled');
+    expect(
+      screen.getAllByText(
+        'Select an area first: click two opposite corners with the wand.',
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('Copy an area first.')).toBeDefined();
+    expect(
+      screen.getByText(
+        'Nothing to undo yet. Undo takes back your last paste, fill, border or clear (one step).',
+      ),
+    ).toBeDefined();
+  });
+
+  it('shows the selection size and what it contains', () => {
+    show({ step: 'selected', selection });
+    expect(screen.getByText('12×8 (96 tiles)')).toBeDefined();
+    expect(screen.getByText('Area selected')).toBeDefined();
+    expect(
+      screen.getByText('Contains 30 objects, 4 tutorial objects, 1 mob', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    const copy = screen.getByText('Copy selection').closest('.Button');
+    expect(copy?.className).not.toContain('Button--disabled');
+    // Fill needs a material.
+    expect(
+      screen.getByText('Pick a floor, wall or structure below first.'),
+    ).toBeDefined();
+  });
+
+  it('names the picked material on Fill and Border', () => {
+    show({ step: 'selected', selection, material: '/turf/closed/wall' });
+    expect(screen.getByText('Fill with wall')).toBeDefined();
+    expect(screen.getByText('Border of wall')).toBeDefined();
+  });
+
+  it('explains the paste corner and the id suffix', () => {
+    show({
+      step: 'paste_target',
+      selection,
+      clipboard,
+      paste: { target: null, problem: null, suffix: '_2' },
+    });
+    expect(
+      screen.getAllByText(/bottom-left \(south-west\) corner/).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText('Auto (_2)')).toBeDefined();
+    const confirm = screen.getByText('Confirm paste').closest('.Button');
+    expect(confirm?.className).toContain('Button--disabled');
+  });
+
+  it('shows the paste footprint with confirm and refusals', () => {
+    show({
+      step: 'paste_confirm',
+      clipboard,
+      paste: {
+        target: { x1: 30, y1: 20, x2: 41, y2: 27 },
+        problem: null,
+        suffix: '_2',
+      },
+    });
+    expect(screen.getByText('30, 20')).toBeDefined();
+    expect(screen.getByText('41, 27')).toBeDefined();
+    const confirm = screen.getByText('Confirm paste').closest('.Button');
+    expect(confirm?.className).not.toContain('Button--disabled');
+    cleanup();
+    show({
+      step: 'paste_confirm',
+      clipboard,
+      paste: {
+        target: { x1: 250, y1: 20, x2: 261, y2: 27 },
+        problem: 'The copy (12×8 (96 tiles)) does not fit there.',
+        suffix: '_2',
+      },
+    });
+    expect(
+      screen.getAllByText('The copy (12×8 (96 tiles)) does not fit there.')
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('asks before clearing and says what goes', () => {
+    show({ step: 'selected', selection });
+    act(() => {
+      fireEvent.click(screen.getByText('Clear selection'));
+    });
+    expect(
+      screen.getByText(
+        'Remove 30 objects, 1 mob and 4 tutorial objects? Undo is approximate.',
+      ),
+    ).toBeDefined();
+  });
+
+  it('filters the material list', () => {
+    show({ step: 'selected', selection });
+    expect(screen.getByText('grille')).toBeDefined();
+    expect(screen.getByText('Structures')).toBeDefined();
+  });
+
+  it('waits out the cooldown', () => {
+    expect(
+      blockedReason(
+        { ...area, selection, cooldown: 1.5 },
+        { selection: true },
+        materials,
+      ),
+    ).toBe(
+      'Wait 1.5 more seconds: bigger areas need a longer pause between operations.',
+    );
+    expect(stepHint({ ...area, step: 'paste_confirm' })).toContain('confirm');
+  });
+
+  it('labels the paste exit by what happened and counts what it replaces', () => {
+    const paste = {
+      target: { x1: 30, y1: 20, x2: 41, y2: 27 },
+      problem: null,
+      suffix: '_2',
+      replaces: { objects: 12, tutorial: 3, mobs: 1 },
+    };
+    show({ step: 'paste_confirm', clipboard, paste, pasted: 0 });
+    expect(screen.getByText('Cancel')).toBeDefined();
+    expect(
+      screen.getByText(': 12 objects, 3 tutorial objects and 1 mob', {
+        exact: false,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.getAllByText('floor markings and machine settings are lost', {
+        exact: false,
+      }).length,
+    ).toBeGreaterThan(0);
+    cleanup();
+    show({
+      step: 'paste_target',
+      clipboard,
+      paste: { ...paste, target: null },
+      pasted: 2,
+    });
+    expect(screen.getByText('Stop pasting')).toBeDefined();
+  });
+
+  it('keeps the last result in the panel and says what was not copied', () => {
+    show({
+      step: 'selected',
+      selection,
+      clipboard: {
+        ...clipboard,
+        not_copied: 'Not copied: 1 mob, floor markings.',
+      },
+      result: { text: 'Copied 12×8 (96 tiles): 30 objects.', ok: true, id: 4 },
+    });
+    expect(
+      screen.getByText('Copied 12×8 (96 tiles): 30 objects.'),
+    ).toBeDefined();
+    expect(
+      screen.getByText('Not copied: 1 mob, floor markings.'),
+    ).toBeDefined();
+  });
+
+  it('marks an approximate undo and warns before replacing it', () => {
+    show({
+      step: 'selected',
+      selection,
+      material: '/turf/closed/wall',
+      undo: 'Clear 12×8 (96 tiles)',
+      undo_approximate: true,
+    });
+    expect(
+      screen.getByText('Undo: Clear 12×8 (96 tiles) (approximate)'),
+    ).toBeDefined();
+    expect(
+      screen.getAllByText('This replaces your undo of: Clear 12×8 (96 tiles).')
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('names materials without paths, telling repeated names apart', () => {
+    const floors: Material[] = [
+      { path: '/turf/open/floor/iron', name: 'floor', group: 'Floors' },
+      {
+        path: '/turf/open/floor/iron/dark_side',
+        name: 'floor',
+        group: 'Floors',
+      },
+      { path: '/turf/closed/wall', name: 'wall', group: 'Walls' },
+    ];
+    expect(materialLabel(floors[1], floors)).toBe('floor (dark side)');
+    expect(materialLabel(floors[2], floors)).toBe('wall');
+    show({ step: 'selected', selection });
+    expect(screen.queryByText('floor/iron')).toBeNull();
+  });
+});

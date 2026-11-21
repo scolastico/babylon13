@@ -1,10 +1,12 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
-source = Path(__file__).resolve().parents[2] / 'container/runtime_config.py'
+ROOT = Path(__file__).resolve().parents[2]
+source = ROOT / 'container/runtime_config.py'
 spec = importlib.util.spec_from_file_location('container_runtime_config', source)
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
@@ -37,6 +39,32 @@ class ContainerConfiguration(unittest.TestCase):
         self.assertEqual(config['kept_save_points_per_world'], 9)
         self.assertEqual(config['afk_timeout_seconds'], 300)
         self.assertEqual(runtime.settings(dict(BABYLON_AFK_TIMEOUT_SECONDS='0'))[0]['afk_timeout_seconds'], 0)
+
+    def test_tutorial_cooldown_and_review_channel_come_from_the_environment(self):
+        self.assertEqual(runtime.settings({})[0]['tutorial_submit_cooldown_hours'], 6)
+        self.assertEqual(runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS='0'))[0]['tutorial_submit_cooldown_hours'], 0)
+        self.assertEqual(runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS='24'))[0]['tutorial_submit_cooldown_hours'], 24)
+        for value in ('-1', '1.5', 'six'):
+            with self.assertRaises(ValueError):
+                runtime.settings(dict(BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS=value))
+        bot = runtime.discord_settings(dict(BABYLON_DISCORD_TOKEN='t', BABYLON_DISCORD_GUILD_ID='123456',
+                                            BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL='987654'))
+        self.assertEqual(bot['channels'], dict(tutorial_review=987654))
+        root = Path(__file__).resolve().parents[2]
+        for name in ('BABYLON_TUTORIAL_SUBMIT_COOLDOWN_HOURS', 'BABYLON_DISCORD_TUTORIAL_REVIEW_CHANNEL'):
+            for document in ('.env.example', 'compose.yml', 'modular_babylon/CLUSTER.md'):
+                self.assertIn(name, (root / document).read_text(), document)
+
+    def test_env_example_and_compose_give_the_same_defaults(self):
+        # An operator copies .env.example; it must not quietly differ from what Compose uses
+        # without it (a shorter stop grace period kills worlds during their final save).
+        compose = (ROOT / 'compose.yml').read_text()
+        example = (ROOT / '.env.example').read_text()
+        defaults = dict(re.findall(r'\$\{(BABYLON_[A-Z0-9_]+):-([^}]*)\}', compose))
+        listed = dict(re.findall(r'(?m)^(BABYLON_[A-Z0-9_]+)=(.*)$', example))
+        self.assertEqual({name: listed.get(name) for name in defaults}, defaults)
+        # Only the music folder is not passed by Compose: it mounts the volume at the default path.
+        self.assertEqual(set(listed) - set(defaults), {'BABYLON_MUSIC_DIRECTORY'})
 
     def test_hub_listing_is_opt_in_and_configurable(self):
         lobby = runtime.settings({})[1]
@@ -228,3 +256,26 @@ class RestartCountdown(unittest.TestCase):
         quiet = type(service)()
         entrypoint.restart_countdown(quiet, 0, sleep=slept.append)
         self.assertTrue(quiet.shutting_down)
+
+    def test_lobby_stays_up_until_players_saw_the_restart_screen(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "container"))
+        import entrypoint
+        now = [0.0]
+        service = type("Service", (), {"restart_screen_shown": set()})()
+        def sleep(seconds):
+            now[0] += seconds
+            if now[0] >= 12:
+                service.restart_screen_shown.add("alice")
+            if now[0] >= 20:
+                service.restart_screen_shown.add("bob")
+        missing = entrypoint.wait_for_lobby_handoff(service, {"alice", "bob"}, timeout=60, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(missing, set())
+        self.assertEqual(now[0], 20 + entrypoint.LOBBY_RENDER_SECONDS)
+        now[0] = 0.0
+        missing = entrypoint.wait_for_lobby_handoff(service, {"carol"}, timeout=30, sleep=sleep, clock=lambda: now[0])
+        self.assertEqual(missing, {"carol"})
+        self.assertEqual(now[0], 30 + entrypoint.LOBBY_RENDER_SECONDS)
+        slept = []
+        self.assertEqual(entrypoint.wait_for_lobby_handoff(service, set(), sleep=slept.append), set())
+        self.assertEqual(slept, [])

@@ -192,6 +192,9 @@
 /obj/effect/mine/kickmine/mineEffect(mob/victim)
 	if(isliving(victim) && victim.client && Adjacent(victim))
 		to_chat(victim, span_userdanger("You have been kicked FOR NO REISIN!"))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+		victim.client.babylon_set_leave_reason("kicked: kick mine")
+#endif
 		qdel(victim.client)
 
 /obj/effect/mine/gas

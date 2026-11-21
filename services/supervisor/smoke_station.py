@@ -1,0 +1,658 @@
+"""Explicit integration test of the station build with real DreamDaemon children.
+
+Runs the real supervisor with babylon-station-test.dmb (compile babylon-station-test.dme first)
+copied over babylon-station.dmb, creates a world on a catalog station map, joins it, checks the
+station build's tests and stops it again. No player world is touched.
+
+    python3 services/supervisor/smoke_station.py --dreamdaemon /opt/byond/bin/DreamDaemon \
+        --config-directory config --data-directory /tmp/smoke-station [--maps metastation boxstation] \
+        [--multiz-map icebox | --no-multiz]
+
+The first map gets the full checks, including a real save (timings and sizes are reported) and
+round control: the round waits for its owner, starts on the owner's Start round and, once it ends,
+the world returns everyone to the lobby and exits without a new save (the supervisor records an
+ordinary stop). Further maps (used to vet the map catalog) are only booted to the ready state,
+checked for the right map and late-join points, and stopped, which saves them. Then every Creative
+Plane map (--creative-planes, default S, M and L) boots as a Creative world (S without Creative mode,
+M and L with it): its floor, landmarks, inert storyteller, refused shuttles and, a few seconds into
+its round, power and the atmos loop are checked; the owner's Start round must start its round, and
+its stop saves it. The --restore-plane map (M) also submits itself as a tutorial through the DM
+path (a forced snapshot without characters that the supervisor copies to pending/ and that never
+becomes the world's checkpoint), gets a tutorial NPC and a changed canister setting before that save, starts again from it and checks that the canisters are back on their
+ports with their settings and that the NPC was not saved but made again by its spawner. A
+tutorial-kind world on the first map checks that its round starts by itself and stops without a
+save. Finally the multi-z map (icebox) starts its round, places markers on the station level and on
+a level without the station trait, saves, stops, starts again from the save and checks that the
+markers, an emptied locker, an animal, the levels' traits and the running round came back.
+On the first map, a running round also gets two players' characters (a damaged one with a backpack
+and a dead one watched as a ghost), saves them twice (the second time on an unchanged level),
+stops and checks after the restart that both are back for their ckeys, once, with their items,
+damage and job.
+Last, every --stability-maps map (default metastation) is saved and restored three times and must
+keep exactly its saved objects, type by type (smoke_stability.py); --only-stability runs just that.
+"""
+import argparse
+import json
+from pathlib import Path
+import secrets
+import shutil
+import socket
+import threading
+import time
+import urllib.error
+import urllib.request
+
+from protocol import topic
+from smoke_stability import restore_cycles
+from supervisor import Driver, Supervisor, serve
+
+
+def dm_entries(packed):
+    """A DM test's packed result as a dict. The debug bridge packs at most a limited number of
+    entries (testing_common.dm pack_value); a cut-off result must fail, never pass silently."""
+    assert packed["length"] == len(packed["entries"]), ("result cut off", packed["length"], len(packed["entries"]))
+    return {entry["entry"]: entry["value"] for entry in packed["entries"]}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dreamdaemon", required=True)
+    parser.add_argument("--config-directory", required=True)
+    parser.add_argument("--data-directory", required=True)
+    parser.add_argument("--api-port", type=int, default=1378)
+    parser.add_argument("--child-port", type=int, default=1468)
+    parser.add_argument("--maps", nargs="+", default=["metastation"])
+    parser.add_argument("--creative-planes", nargs="*", default=["creative_plane_s", "creative_plane_m", "creative_plane_l"])
+    parser.add_argument("--restore-plane", default="creative_plane_m",
+                        help="the Creative Plane map that is saved, restarted and checked (tutorial NPC, canisters)")
+    parser.add_argument("--startup-timeout", type=int, default=900)
+    parser.add_argument("--multiz-map", default="icebox")
+    parser.add_argument("--no-multiz", action="store_true")
+    parser.add_argument("--restore-maps", nargs="*", default=["tramstation"],
+                        help="maps saved, restarted and checked for their transports and links")
+    parser.add_argument("--only-multiz", action="store_true", help="skip the --maps checks and the tutorial world")
+    parser.add_argument("--only-characters", action="store_true",
+                        help="only the characters' save and restore on the first --maps map")
+    parser.add_argument("--only-planes", action="store_true", help="only the --creative-planes checks")
+    parser.add_argument("--stability-maps", nargs="*", default=["metastation"],
+                        help="maps restored three times that must keep exactly their saved objects")
+    parser.add_argument("--only-stability", action="store_true", help="only the --stability-maps checks")
+    parser.add_argument("--only-tutorial-tests", nargs="+", metavar="PROC",
+                        help="only these DM tests, in the tutorial world on the first --maps map")
+    args = parser.parse_args()
+    if args.only_characters or args.only_planes or args.only_tutorial_tests or args.only_stability:
+        args.only_multiz, args.no_multiz, args.restore_maps = True, True, []
+    if args.only_characters or args.only_planes or args.only_tutorial_tests:
+        args.stability_maps = []
+    if args.only_stability:
+        args.creative_planes = []
+    root = Path(__file__).resolve().parents[2]
+    for ext in ("dmb", "rsc"):
+        if not (root / f"babylon-station-test.{ext}").is_file():
+            raise RuntimeError("Compile babylon-station-test.dme first")
+    data = Path(args.data_directory).resolve()
+    if data.exists():
+        raise RuntimeError("Use a new empty test data directory")
+    for port in (args.api_port, args.child_port):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", port))
+    config = dict(data_directory=str(data), template_directory=str(root),
+                  config_directory=str(Path(args.config_directory).resolve()),
+                  dreamdaemon=str(Path(args.dreamdaemon).resolve()),
+                  max_worlds_per_player=20, max_total_worlds_per_player=20, max_running_worlds_per_player=1,
+                  max_running_worlds=1, max_players_per_world=2,
+                  port_first=args.child_port, port_last=args.child_port,
+                  ticket_lifetime_seconds=60, empty_grace_seconds=600,
+                  startup_timeout_seconds=args.startup_timeout, public_host="127.0.0.1", admins=["testadmin"],
+                  listen_host="127.0.0.1", listen_port=args.api_port,
+                  lobby_secret=secrets.token_urlsafe(32), lobby_address="byond://127.0.0.1:1379")
+
+    class TestDriver(Driver):
+        def prepare(self, world, run):
+            # The test build stands in for babylon-station.dmb, which need not be compiled.
+            target = self.data_root() / "worlds" / world["id"]
+            target.mkdir(parents=True, exist_ok=True)
+            for ext in ("dmb", "rsc"):
+                shutil.copy2(root / f"babylon-station-test.{ext}", target / f"babylon-station.{ext}")
+            prepared = super().prepare(world, run)
+            for ext in ("dmb", "rsc"):
+                shutil.copy2(root / f"babylon-station-test.{ext}", prepared / f"babylon-station.{ext}")
+            return prepared
+
+        def restore_source(self, world):
+            # The fresh-map tutorial world ("smoke_tutorial") has no snapshot; a tutorial
+            # instance of a submitted snapshot starts from it like in the real pipeline.
+            if self.field(world, "tutorial", "") == "smoke_tutorial":
+                return None
+            return super().restore_source(world)
+
+    driver = TestDriver(config)
+    service = Supervisor(config, driver)
+    threading.Thread(target=serve, args=(config, service), daemon=True).start()
+
+    def api(action, payload=None, actor="smokeowner"):
+        body = json.dumps(dict(secret=config["lobby_secret"], actor=actor, action=action, payload=payload or {})).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{args.api_port}/api", data=body,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            raise RuntimeError("%s %s: %s" % (action, payload, error.read().decode(errors="replace"))) from None
+        assert result.get("ok"), result
+        return result
+
+    def current():
+        with service.lock:
+            return service.row("SELECT * FROM runs")
+
+    def wait_ready(world):
+        api("join", {"world": world})
+        deadline = time.time() + args.startup_timeout
+        while time.time() < deadline:
+            run = current()
+            if run and run["state"] == "running":
+                return run
+            if run and run["state"] == "error":
+                raise RuntimeError(run["error"])
+            if world in service.launch_failures:
+                # The start failed in the background (the join answered "pending" at once).
+                raise RuntimeError(service.launch_failures[world]["message"])
+            time.sleep(5)
+        raise TimeoutError("Child did not become ready")
+
+    def debug(run, action, payload):
+        result = topic(run["port"], run["secret"], action, payload, timeout=180)
+        assert not result.get("error"), result
+        return result
+
+    def values(run, proc, args=None):
+        """A DM test's entries without asserting them (facts to compare across a restart)."""
+        result = debug(run, "call", dict(target="session", proc=proc, args=args or []))["result"]
+        return dm_entries(result)
+
+    def compare_links(before, after):
+        """After a restart from a save: links are at least as complete as before it."""
+        for key in ("one_apc_per_area", "lift_buttons_linked", "trams_have_ids", "trams_positioned"):
+            assert after[key] or not before[key], (key, before, after)
+        assert after["transports"] == before["transports"], (before["transports"], after["transports"])
+        assert after["lift_buttons"] == before["lift_buttons"], (before, after)
+
+    def checks(run, proc, values=None):
+        result = debug(run, "call", dict(target="session", proc=proc, args=values or []))["result"]
+        values = dm_entries(result)
+        assert values and all(values.values()), (proc, values)
+        return values
+
+    def stop(world):
+        process = driver.processes.get(current()["id"])
+        api("stop", {"world": world})
+        deadline = time.time() + 600
+        while time.time() < deadline and current():
+            time.sleep(1)
+        assert not current(), "Child did not exit after a managed stop"
+        if process:
+            process.wait(timeout=30)
+            assert process.poll() is not None, "DreamDaemon is still running"
+
+    def ticker_state(run):
+        info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        return dm_entries(info)["ticker_state"]
+
+    def wait_round_running(run, timeout=180):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if ticker_state(run) == 3:  # GAME_STATE_PLAYING
+                return
+            time.sleep(2)
+        raise TimeoutError("The round did not start")
+
+    def wait_round_end_stop(world):
+        """The world stops itself after its round ends: never an error state, no save."""
+        process = driver.processes.get(current()["id"])
+        states = set()
+        deadline = time.time() + 180
+        while time.time() < deadline:
+            run = current()
+            if not run:
+                break
+            states.add(run["state"])
+            time.sleep(.5)
+        assert not current(), "The world did not exit after its round ended"
+        assert "error" not in states, states
+        assert "stopping" in states, states
+        if process:
+            process.wait(timeout=30)
+        with service.lock:
+            ended = service.row("SELECT * FROM audit WHERE action='round_ended' AND world=?", (world,))
+        assert ended, "The supervisor was not told about the round's end"
+        return sorted(states)
+
+    def latest(world):
+        path = data / "worlds" / world / "data/babylon/saves/latest.json"
+        return json.loads(path.read_text())["generation"] if path.exists() else None
+
+    def save_size(world, generation):
+        directory = data / "worlds" / world / "data/babylon/saves" / generation
+        files = {path.name: path.stat().st_size for path in sorted(directory.iterdir())}
+        return dict(files=files, total_bytes=sum(files.values()))
+
+    def info(run):
+        result = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        return dm_entries(result)
+
+    catalog = {entry["id"]: entry for entry in json.loads((root / "_maps/babylon/catalog.json").read_text())["maps"]}
+
+    def run_map(index, map_id):
+        started = time.time()
+        world = api("create", dict(name="Station smoke %s" % map_id, visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        status = topic(run["port"], run["secret"], "status")
+        assert status["ready"] and status["players"] == [] and status.get("build") == "station", status
+        assert status.get("map") == map_id, status
+        entry = dict(ready_seconds=round(time.time() - started))
+        info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        entry["info"] = dm_entries(info)
+        expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
+        assert entry["info"]["map_name"] == expected, (entry["info"], expected)
+        entry["world_flags"] = checks(run, "test_station_world_flags")
+        entry["test_station_latejoin"] = checks(run, "test_station_latejoin")
+        if index == 0:
+            assert topic(run["port"], run["secret"], "announce", {"message": "Smoke notice"}).get("ok"), "announce failed"
+            entry["storyteller"] = checks(run, "test_station_storyteller")
+            entry["test_station_save_level"] = checks(run, "test_station_save_level")
+            entry["test_station_emergency_dock"] = checks(run, "test_station_emergency_dock")
+            # The shared modules' tests (testing_common.dm), as the Babylon smoke runs them.
+            for proc in ("test_sfw_content", "test_showcase_visitor", "test_moderation", "test_play_time",
+                         "test_music_loops", "test_creative_machines",
+                         "test_creative_panel_actions", "test_atlas_frames"):
+                entry[proc] = checks(run, proc)
+            entry["test_non_persistent_never_saves"] = checks(run, "test_non_persistent_never_saves")
+            entry["test_save_controls"] = checks(run, "test_save_controls")
+            entry["test_manual_save_cooldown"] = checks(run, "test_manual_save_cooldown")
+            links_before = values(run, "test_station_links")
+            entry["links_fresh"] = links_before
+            # A real station save (all persisted levels) through the control API, as the lobby asks.
+            saved = topic(run["port"], run["secret"], "save", timeout=600)
+            assert saved.get("ok"), saved
+            assert saved.get("reused_levels") == 0, saved
+            entry["save"] = dict(saved, size=save_size(world, saved["generation"]))
+            # Nothing changed since: the next save reuses every level (this one is restored below).
+            saved = topic(run["port"], run["secret"], "save", timeout=600)
+            assert saved.get("ok") and saved.get("reused_levels") == saved.get("levels"), saved
+            entry["save_unchanged"] = dict(saved, size=save_size(world, saved["generation"]))
+            entry["afk"] = bool(checks(run, "test_afk_policy"))
+            entry["join_loading"] = bool(checks(run, "test_join_loading"))
+            # Real DM world.Export -> HTTP ticket redemption, as client.New runs it.
+            address = api("join", {"world": world}, actor="testadmin")["address"]
+            query = dict(action="redeem", actor="testadmin", ticket=address.split("babylon_ticket=")[1])
+            exported = debug(run, "call", dict(target="session", proc="test_supervisor_export", args=[json.dumps(query)]))["result"]
+            assert dm_entries(exported).get("ok"), exported
+            exported = debug(run, "call", dict(target="session", proc="test_supervisor_export", args=[json.dumps(query)]))["result"]
+            assert not dm_entries(exported).get("ok"), "Ticket replay accepted"
+            entry["ticket_redemption"] = True
+            # Round control: hold, the owner's start, the round's end back to the lobby.
+            entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
+            wait_round_running(run)
+            status = topic(run["port"], run["secret"], "status")
+            assert status["ready"] and not status["draining"], status
+            entry["test_round_end_no_save"] = checks(run, "test_round_end_no_save")
+            entry["round_end_states"] = wait_round_end_stop(world)
+            # The round's end saved nothing new: the next start resumes the save from before it.
+            assert latest(world) == saved["generation"], "the round's end saved the world"
+            entry["round_end_without_save"] = True
+            # The next start picks up from that save (before the round): the map comes back whole.
+            restarted = time.time()
+            run = wait_ready(world)
+            entry["restored_ready_seconds"] = round(time.time() - restarted)
+            links_after = values(run, "test_station_links")
+            entry["links_restored"] = links_after
+            compare_links(links_before, links_after)
+            assert links_after["one_apc_per_area"], links_after
+            stop(world)
+        else:
+            stop(world)
+            # An ordinary stop of a persistent world saves it (all its levels).
+            generation = latest(world)
+            assert generation, "the stopped station world was not saved"
+            entry["stop_saved"] = save_size(world, generation)
+        return entry
+
+    def run_multiz(map_id):
+        """Saves a running round on a multi-z map, restarts the world from that save and checks it."""
+        started = time.time()
+        world = api("create", dict(name="Station smoke multi-z", visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        entry = dict(ready_seconds=round(time.time() - started))
+        assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+        wait_round_running(run)
+        links_before = values(run, "test_station_links")
+        first = checks(run, "test_multiz_save_roundtrip")
+        entry["test_multiz_save_roundtrip"] = first
+        entry["save"] = info(run)["last_save"]
+        # Lights, cameras and alarms whose state a map's Initialize would decide anew, on the
+        # deck with a plane offset.
+        saved_state = checks(run, "test_saved_state_setup")
+        entry["test_saved_state_setup"] = saved_state
+        stopped = time.time()
+        stop(world)
+        entry["stop_seconds"] = round(time.time() - stopped)
+        generation = latest(world)
+        assert generation and generation != first.get("generation"), generation
+        entry["stop_save"] = save_size(world, generation)
+        restarted = time.time()
+        run = wait_ready(world)
+        entry["restored_ready_seconds"] = round(time.time() - restarted)
+        entry["restored_info"] = info(run)
+        entry["test_multiz_restored"] = checks(run, "test_multiz_restored",
+                                               [first["markers"], first["station_time"], 1, first["planet_coords"],
+                                                first["traveller"]])
+        entry["test_saved_state_restored"] = checks(run, "test_saved_state_restored", [saved_state["state"]])
+        links_after = values(run, "test_station_links")
+        entry["links"] = dict(before=links_before, after=links_after)
+        compare_links(links_before, links_after)
+        assert links_after["lift_buttons_linked"], links_after
+        # A copy pasted on that deck gets the deck's plane offset once.
+        entry["test_area_paste_planes"] = checks(run, "test_area_paste_planes")
+        stop(world)
+        return entry
+
+    def saved_state(world, generation):
+        return json.loads((data / "worlds" / world / "data/babylon/saves" / generation / "state.json").read_text())
+
+    def character_ids(state):
+        """The ids of the characters and their items; asserts none is one of the levels' records."""
+        ids = set()
+        for character in state["characters"].values():
+            own = {character["id"]} | {record["id"] for record in character["records"]}
+            assert not own & ids, "a body or item is saved for two characters"
+            ids |= own
+        assert not ids & {record["id"] for record in state["records"]}, "a character is in the level records"
+        assert all(int(i[2:]) < state["next_id"] for i in ids), "a character id is past next_id"
+        return ids
+
+    def run_characters(map_id):
+        """A client-less character with a ckey (test helper), damaged, with backpack items and an ID
+        card, a dead one whose player watches as a ghost, a body a stale record still points to, a
+        corpse left behind, a passenger on a docked shuttle and a captain's card on the floor: saved,
+        changed on an unchanged level, saved again, stopped (saved), restarted and found again for
+        their ckeys (once each) with jobs, items, cards, accounts and damage."""
+        world = api("create", dict(name="Station smoke characters", visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+        wait_round_running(run)
+        entry = {}
+        setup = values(run, "test_character_roundtrip")
+        facts = ("x", "y", "floor_x", "floor_y", "card_access", "floor_card_access", "chest_brute", "arm_burn")
+        assert all(value for key, value in setup.items() if key not in facts), ("test_character_roundtrip", setup)
+        entry["test_character_roundtrip"] = setup
+        economy = values(run, "test_station_economy_setup")
+        assert economy.get("researched") and economy.get("budget_set"), ("test_station_economy_setup", economy)
+        entry["test_station_economy_setup"] = economy
+        first = topic(run["port"], run["secret"], "save", timeout=600)
+        assert first.get("ok"), first
+        state = saved_state(world, first["generation"])
+        players = {key for key in state["characters"] if not key.startswith("#")}
+        assert players == {"smokecharacter", "smokeghost", "smokeswapb", "smokeabandon", "smokepassenger", "smokelate", "smoketraveller"}, players
+        assert [state["characters"][key]["real_name"] for key in state["characters"] if key.startswith("#")] == ["Smoke Corpse"], \
+            list(state["characters"])
+        assert "smokecharacter" in state["players"], list(state["players"])
+        character_ids(state)
+        level = str(state["characters"]["smokecharacter"]["z"])
+        # The character's level is unchanged (no client), the character is not: it is captured anyway.
+        changed = checks(run, "test_character_change")
+        entry["test_character_change"] = changed
+        second = topic(run["port"], run["secret"], "save", timeout=600)
+        assert second.get("ok"), second
+        assert second["level_costs"][level][1] == "reused", ("the character's level was captured again", second["level_costs"])
+        state = saved_state(world, second["generation"])
+        character = state["characters"]["smokecharacter"]
+        assert (character["x"], character["y"]) == (changed["x"], changed["y"]), (character["x"], character["y"], changed)
+        assert "/obj/item/multitool" in [record["type"] for record in character["records"]], "the new item was not saved"
+        character_ids(state)
+        entry["unchanged_level_reused"] = dict(level=level, saves=[first["generation"], second["generation"]])
+        stop(world)
+        run = wait_ready(world)
+        entry["test_character_roundtrip_restored"] = checks(
+            run, "test_character_roundtrip_restored", [changed["x"], changed["y"], setup["chest_brute"], setup["arm_burn"],
+                                                       setup["card_access"], setup["floor_card_access"], setup["floor_x"],
+                                                       setup["floor_y"]])
+        entry["test_station_economy_restored"] = checks(run, "test_station_economy_restored", [economy["node"]])
+        stop(world)
+        return entry
+
+    def run_restore(map_id):
+        """Saves a world on a map with transports (tram, lifts), restarts it and compares the links."""
+        world = api("create", dict(name="Station smoke restore %s" % map_id, visibility="private", map=map_id))["id"]
+        run = wait_ready(world)
+        before = values(run, "test_station_links")
+        stop(world)
+        assert latest(world), "the stopped world was not saved"
+        run = wait_ready(world)
+        after = values(run, "test_station_links")
+        compare_links(before, after)
+        assert after["trams_have_ids"] and after["trams_positioned"] and after["lift_buttons_linked"], after
+        # The tram found its platform and nav beacon when it loaded (no CRASH in the world's logs).
+        for log_file in (data / "worlds" / world).rglob("*.log"):
+            text = log_file.read_text(errors="replace")
+            assert "initialized without the required landmarks" not in text, log_file
+        entry = dict(before=before, after=after)
+        if after["transports"].count("icts_tram:"):
+            # A tram saved between stations drives back to a platform after the restore. Trams
+            # only run during a round (SStransport does not fire in the pre-round lobby).
+            assert debug(run, "call", dict(target="session", proc="begin_round", args=["Babylon smoke"]))["result"]
+            wait_round_running(run)
+            entry["mid_trip"] = checks(run, "test_tram_mid_trip")
+            time.sleep(10)
+            stop(world)
+            run = wait_ready(world)
+            deadline = time.time() + 180
+            while True:
+                recovered = values(run, "test_station_links")
+                if recovered["trams_positioned"] or time.time() > deadline:
+                    break
+                time.sleep(5)
+            assert recovered["trams_positioned"], recovered
+            # It really was between stations: the restore drove it back (reset_stray_trams()).
+            reset_logged = any("saved between stations" in f.read_text(errors="replace")
+                               for f in (data / "worlds" / world).rglob("*.log"))
+            assert reset_logged, "the tram was not reset after the restore"
+            assert recovered["transports"] == after["transports"], (after["transports"], recovered["transports"])
+            entry["mid_trip_recovered"] = recovered
+        stop(world)
+        return entry
+
+    def eventually(run, proc, timeout=120):
+        """Checks that need the simulation to run a while (air, power): retried until all pass;
+        on a timeout the assertion carries <proc>_info's numbers."""
+        deadline = time.time() + timeout
+        while True:
+            result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
+            values = dm_entries(result)
+            if values and all(values.values()):
+                return values
+            if time.time() > deadline:
+                info = debug(run, "call", dict(target="session", proc=proc + "_info", args=[]))["result"]
+                raise AssertionError((proc, values, dm_entries(info)))
+            time.sleep(3)
+
+    def run_creative_plane(map_id):
+        """A Creative world on a Creative Plane map: the map works and its round starts."""
+        started = time.time()
+        # S runs without Creative mode: the plane's creative machines must work anyway.
+        creative = 0 if map_id == "creative_plane_s" else 1
+        world = api("create", dict(name="Station smoke %s" % map_id, visibility="private", map=map_id, creative=creative))["id"]
+        run = wait_ready(world)
+        status = topic(run["port"], run["secret"], "status")
+        assert status["ready"] and status.get("build") == "station" and status.get("map") == map_id, status
+        entry = dict(ready_seconds=round(time.time() - started))
+        info = debug(run, "call", dict(target="session", proc="test_station_info", args=[]))["result"]
+        entry["info"] = dm_entries(info)
+        expected = json.loads((root / "_maps" / catalog[map_id]["map_json"]).read_text())["map_name"]
+        assert entry["info"]["map_name"] == expected, (entry["info"], expected)
+        entry["world_flags"] = checks(run, "test_station_world_flags")
+        entry["test_station_latejoin"] = checks(run, "test_station_latejoin")
+        entry["test_creative_plane"] = checks(run, "test_creative_plane")
+        entry["test_round_hold_and_owner_start"] = checks(run, "test_round_hold_and_owner_start")
+        wait_round_running(run)
+        entry["test_creative_plane_round"] = eventually(run, "test_creative_plane_round")
+        setup = None
+        if map_id == args.restore_plane:
+            # A tutorial NPC, one of its outfit items dropped, an ordinary item and a changed
+            # creative canister setting go into the save; the restore must bring back the right ones.
+            setup = checks(run, "test_creative_plane_save_setup")
+            entry["test_creative_plane_save_setup"] = setup
+            entry["tutorial_submit"] = check_tutorial_submit(run, world)
+        stop(world)
+        # An ordinary stop of a persistent world saves it.
+        generation = latest(world)
+        assert generation, "the stopped Creative Plane world was not saved"
+        entry["stop_saved"] = save_size(world, generation)
+        if setup:
+            restarted = time.time()
+            run = wait_ready(world)
+            entry["restored_ready_seconds"] = round(time.time() - restarted)
+            # The NPC spawner makes its NPC once the world is up; canisters reconnect at once.
+            deadline = time.time() + 120
+            while True:
+                restored = values(run, "test_creative_plane_restored", [setup["spawner_id"], setup["outfit_type"]])
+                if (restored and all(restored.values())) or time.time() > deadline:
+                    break
+                time.sleep(3)
+            assert restored and all(restored.values()), ("test_creative_plane_restored", restored)
+            entry["test_creative_plane_restored"] = restored
+            stop(world)
+            entry["tutorial_from_snapshot"] = check_tutorial_from_snapshot(
+                entry["tutorial_submit"]["test_tutorial_submit_live"]["tutorial"])
+        return entry
+
+    def check_tutorial_from_snapshot(tutorial_id):
+        """A tutorial instance of the submitted snapshot (taken in a running round) starts its
+        tutorial round at once: not as a resumed round, which would skip the tutorial start."""
+        instance = api("create", dict(name="Station smoke tutorial snapshot", visibility="private",
+                                      map=args.restore_plane))["id"]
+        with service.lock, service.db:
+            service.db.execute("UPDATE worlds SET kind='tutorial', tutorial=? WHERE id=?", (tutorial_id, instance))
+        run = wait_ready(instance)
+        wait_round_running(run)
+        result = checks(run, "test_tutorial_snapshot_round")
+        stop(instance)
+        assert not (data / "worlds" / instance / "data/babylon/saves/latest.json").exists(), "a tutorial instance saved"
+        return result
+
+    def check_tutorial_submit(run, world):
+        """A Creative world submits itself as a tutorial through the DM path and the real supervisor:
+        a forced snapshot without characters, copied to pending/, never the world's checkpoint."""
+        result = dict(test_tutorial_snapshot=checks(run, "test_tutorial_snapshot"),
+                      test_tutorial_snapshot_full_capture=checks(run, "test_tutorial_snapshot_full_capture"))
+        live = checks(run, "test_tutorial_submit_live", ["smokeowner"])
+        result["test_tutorial_submit_live"] = live
+        stored = data / "tutorials" / "pending" / live["tutorial"]
+        meta = json.loads((stored / "meta.json").read_text())
+        assert meta["title"] == "Smoke tutorial" and meta["author"] == "smokeowner" and meta["source_world"] == world, meta
+        assert meta["generation"] == live["generation"], meta
+        state = json.loads((stored / "save" / "state.json").read_text())
+        assert state["generation"] == live["generation"] and state.get("characters") == {}, state.get("characters")
+        assert all((stored / "save" / level["file"]).is_file() for level in state["levels"]), state["levels"]
+        saves = data / "worlds" / world / "data/babylon/saves"
+        assert not (saves / live["generation"]).exists(), "the tutorial snapshot was left in the world"
+        assert not (saves / "latest.json").exists(), "the tutorial snapshot became the world's checkpoint"
+        with service.lock:
+            row = service.row("SELECT * FROM tutorials WHERE id=?", (live["tutorial"],))
+        assert row and row["status"] == "pending" and row["title"] == "Smoke tutorial", row
+        result["stored"] = dict(levels=len(state["levels"]), objects=len(state.get("records", [])))
+        return result
+
+    def discard_child():
+        """Kills a failed child so the next map can start (max_running_worlds is 1)."""
+        run = current()
+        if not run:
+            return
+        process = driver.processes.get(run["id"])
+        if process and process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+        with service.lock, service.db:
+            service.db.execute("DELETE FROM runs WHERE id=?", (run["id"],))
+
+    report = dict(passed=False, maps={})
+    try:
+        time.sleep(.5)
+        for index, map_id in enumerate([] if args.only_multiz else args.maps):
+            try:
+                entry = run_map(index, map_id)
+            except Exception as error:
+                # The first map is the test; further maps only vet the catalog and are reported.
+                if index == 0:
+                    raise
+                entry = dict(failed=repr(error))
+                discard_child()
+            report["maps"][map_id] = entry
+            print(json.dumps({map_id: entry}), flush=True)
+        for map_id in ([] if args.only_multiz and not args.only_planes else args.creative_planes):
+            try:
+                entry = run_creative_plane(map_id)
+            except Exception as error:
+                entry = dict(failed=repr(error))
+                discard_child()
+            report["maps"][map_id] = entry
+            print(json.dumps({map_id: entry}), flush=True)
+        if not args.only_multiz or args.only_tutorial_tests:
+            # A tutorial-kind world starts its round by itself (no owner hold).
+            world = api("create", dict(name="Station smoke tutorial", visibility="private", map=args.maps[0]))["id"]
+            with service.lock, service.db:
+                service.db.execute("UPDATE worlds SET kind='tutorial', tutorial='smoke_tutorial' WHERE id=?", (world,))
+            run = wait_ready(world)
+            tutorial = dict(test_tutorial_round=checks(run, "test_tutorial_round"),
+                            world_flags=checks(run, "test_station_world_flags"))
+            # Tutorial objects, triggers, actions and NPCs in a running tutorial round.
+            # Every test reports before any failure is raised, so one run shows all problems.
+            for proc in args.only_tutorial_tests or (
+                    "test_tutorial_submit_refusals", "test_tutorial_objects", "test_tutorial_flow", "test_tutorial_triggers", "test_npc_effects", "test_tutorial_review",
+                    "test_tutorial_chains", "test_tutorial_players", "test_tutorial_gates", "test_tutorial_world_actions", "test_tutorial_final_review", "test_area_tools_limits", "test_paste_suffix_rewrites_refs", "test_area_tools_roundtrip",
+                    "test_area_tools_copy_settings", "test_area_tools_paste_id_card", "test_tutorial_room_reset", "test_tutorial_checkpoint_has_no_characters"):
+                result = debug(run, "call", dict(target="session", proc=proc, args=[]))["result"]
+                tutorial[proc] = dm_entries(result)
+            for proc, got in tutorial.items():
+                assert got and all(got.values()), (proc, got)
+            stop(world)
+            # A tutorial instance is not saved and is deleted once it stops.
+            assert not (data / "worlds" / world / "data/babylon/saves/latest.json").exists(), "a tutorial world saved"
+            tutorial["stopped_without_save"] = True
+            report["tutorial"] = tutorial
+            print(json.dumps({"tutorial": tutorial}), flush=True)
+        if not args.only_multiz or args.only_characters:
+            report["characters"] = {args.maps[0]: run_characters(args.maps[0])}
+            print(json.dumps({"characters": report["characters"]}), flush=True)
+        for map_id in args.restore_maps:
+            report.setdefault("restore", {})[map_id] = run_restore(map_id)
+            print(json.dumps({"restore": {map_id: report["restore"][map_id]}}), flush=True)
+        if not args.no_multiz:
+            report["multiz"] = {args.multiz_map: run_multiz(args.multiz_map)}
+            print(json.dumps({"multiz": report["multiz"]}), flush=True)
+        for map_id in args.stability_maps:
+            stable = api("create", dict(name="Stability smoke %s" % map_id, visibility="private", map=map_id))["id"]
+            report.setdefault("stability", {})[map_id] = restore_cycles(
+                stable, wait_ready, stop, data, census=lambda run: values(run, "test_companion_census"))
+            print(json.dumps({"stability": {map_id: report["stability"][map_id]}}), flush=True)
+        report["passed"] = not any("failed" in entry for entry in report["maps"].values())
+        (data / "result.json").write_text(json.dumps(report, indent=2))
+        print(json.dumps(report, indent=2))
+        if not report["passed"]:
+            raise SystemExit(1)
+    finally:
+        run = current()
+        if run:
+            try:
+                api("stop", {"world": run["world"]})
+                deadline = time.time() + 60
+                while time.time() < deadline and current():
+                    time.sleep(1)
+            except Exception:
+                pass
+            if current():
+                print("Test child retained for diagnosis; see test data directory.")
+
+
+if __name__ == "__main__":
+    main()

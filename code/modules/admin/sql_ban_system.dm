@@ -1163,6 +1163,9 @@
 		if(GLOB.admin_datums[player_client.ckey] || GLOB.deadmins[player_client.ckey])
 			is_admin = TRUE
 		if(kick_banned_players && (!is_admin || (is_admin && applies_to_admins)))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+			player_client.babylon_set_leave_reason("banned")
+#endif
 			qdel(player_client)
 
 	for(var/client/other_player_client in GLOB.clients - player_client)
@@ -1172,6 +1175,9 @@
 			if(GLOB.admin_datums[other_player_client.ckey] || GLOB.deadmins[other_player_client.ckey])
 				is_admin = TRUE
 			if(kick_banned_players && (!is_admin || (is_admin && applies_to_admins)))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+				other_player_client.babylon_set_leave_reason("banned")
+#endif
 				qdel(other_player_client)
 
 #undef MAX_ADMINBANS_PER_ADMIN

@@ -38,7 +38,7 @@
 
 	var/extra_item = extra_options()
 
-	options = altar_items
+	options = altar_items.Copy()
 	if(!isnull(extra_item))
 		options += extra_item
 

@@ -1,4 +1,4 @@
-// World owners (and server admins) manage who may play in their world from the Babylon tab:
+// World owners (and server admins) manage who may play in their world from the World Controls tab:
 // members, kicks and world bans. Bans are stored by the supervisor and apply to this world only.
 
 /client
@@ -28,6 +28,8 @@
 	. = ..()
 	// A rejected admission returns before the client is registered.
 	if(src && (src in GLOB.clients))
+		babylon_session_joined = TRUE
+		babylon_log_session("join_world")
 		babylon_announced = babylon_announce(babylon_showcase_visitor ? "[html_encode(key)] is visiting the world." : (babylon_admin_spectator ? "[html_encode(key)] is spectating the world." : "[html_encode(key)] joined the world."))
 	if(src && babylon_world_manager())
 		add_verb(src, list(/client/proc/babylon_add_member, /client/proc/babylon_remove_member,
@@ -35,9 +37,9 @@
 
 /// Asks the supervisor; tells the player what went wrong and returns null on failure.
 /client/proc/babylon_world_request(op, target, reason)
-	var/list/result = babylon_supervisor_request(list("action" = "world_manage", "actor" = ckey, "op" = op, "target" = target, "reason" = reason))
-	if(!result)
-		to_chat(src, span_warning("The server did not answer. Try again."))
+	var/list/result = babylon_supervisor_request_within(list("action" = "world_manage", "actor" = ckey, "op" = op, "target" = target, "reason" = reason))
+	if(result["timeout"])
+		to_chat(src, span_warning("The server did not answer in time; the change may still apply. Check before you retry."))
 		return null
 	if(!result["ok"])
 		to_chat(src, span_warning(html_encode(result["error"] || "That did not work.")))
@@ -53,11 +55,12 @@
 		players[player.key] = player
 	return players
 
-/proc/babylon_remove_from_world(client/player, message)
+/proc/babylon_remove_from_world(client/player, message, reason = "kicked")
 	if(!player)
 		return
 	to_chat(player, span_userdanger(message))
-	var/lobby = world.params["babylon-lobby"]
+	var/lobby = player.babylon_lobby_link(reason)
+	player.babylon_set_leave_reason(reason)
 	if(lobby)
 		player << link(lobby)
 	// Let the notice and the lobby link reach the player before disconnecting.
@@ -65,19 +68,24 @@
 		if(player)
 			qdel(player)
 
+/proc/babylon_member_prompt()
+	if(babylon_is_station_build())
+		return "BYOND account to add. Members can start this world and play in it, even when you are away. The owner or an admin starts the round."
+	return "BYOND account to add. Members can build and start this world, even when you are away."
+
 /client/proc/babylon_add_member()
 	set name = "Add member"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
-	var/target = tgui_input_text(mob, "BYOND account to add. Members can build and start this world, even when you are away.", "Add member", max_length = 30)
+	var/target = tgui_input_text(mob, babylon_member_prompt(), "Add member", max_length = 30)
 	if(!target || !babylon_world_request("member_add", target))
 		return
 	to_chat(src, span_notice("[html_encode(target)] is now a member of this world."))
 
 /client/proc/babylon_remove_member()
 	set name = "Remove member"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/listing = babylon_world_request("list")
@@ -93,7 +101,7 @@
 
 /client/proc/babylon_kick_player()
 	set name = "Kick player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/players = babylon_kickable_players()
@@ -110,7 +118,7 @@
 
 /client/proc/babylon_ban_player()
 	set name = "Ban player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/players = babylon_kickable_players()
@@ -128,12 +136,12 @@
 	log_admin("BABYLON WORLD: [key_name(src)] banned [target] from this world: [reason]")
 	var/client/player = GLOB.directory[ckey(target)]
 	if(player)
-		babylon_remove_from_world(player, "You were banned from this world by [key][reason ? ": [reason]" : ""].")
+		babylon_remove_from_world(player, "You were banned from this world by [key][reason ? ": [reason]" : ""].", "banned[reason ? ": [reason]" : ""]")
 	to_chat(src, span_notice("[html_encode(target)] is banned from this world."))
 
 /client/proc/babylon_unban_player()
 	set name = "Unban player"
-	set category = "Babylon"
+	set category = "World Controls"
 	if(!babylon_world_manager())
 		return
 	var/list/listing = babylon_world_request("list")

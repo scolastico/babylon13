@@ -39,10 +39,14 @@ Your equipment is finite. Replacement shells are empty; recover your tools or ma
 	show_to_observers = FALSE
 
 /datum/action/babylon_return_to_lobby/Trigger(mob/clicker, trigger_flags)
-	var/datum/babylon_save/session = target
-	if(!..() || owner?.ckey != session.owner_ckey || !owner.client || !world.params["babylon-lobby"])
+	var/datum/babylon_player/player = target
+	if(!..() || owner?.ckey != player.ckey || !owner.client || !world.params["babylon-lobby"])
 		return FALSE
-	owner.client << link(world.params["babylon-lobby"])
+	var/lobby = owner.client.babylon_lobby_link("quit")
+	if(!lobby)
+		return FALSE
+	owner.client.babylon_set_leave_reason("quit")
+	owner.client << link(lobby)
 	return TRUE
 
 /mob/dead/observer

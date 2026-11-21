@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const elements = {};
-for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost']) {
+for (const id of ['browser-content', 'action-loading', 'loading-world', 'loading-stage', 'connection-lost', 'handoff-return']) {
   elements[id] = { style: {}, textContent: '', innerHTML: '' };
 }
 let paints = 0;
@@ -34,6 +34,17 @@ const click = (stage = 'Waiting for confirmation...') => context.beginAction({
   getAttribute(name) { return name === 'data-world' ? 'Test world' : stage; },
 });
 
+const startupNotifications = [];
+context.window.location = {};
+Object.defineProperty(context.window.location, 'href', {
+  set(value) { startupNotifications.push(value); },
+});
+assert.equal(typeof context.lobbyWindowReady, 'function', 'document load notifies the native lobby');
+context.lobbyWindowReady('[0x123]', 7);
+assert.deepEqual(startupNotifications, ['byond://?src=%5B0x123%5D;action=window_ready;generation=7']);
+context.lobbyWindowReady('[0x123]', 7);
+assert.equal(startupNotifications.length, 1, 'duplicate document callbacks cannot activate again');
+
 render('world list', 'mine', 0, true);
 context.window.pageYOffset = 420;
 render('updated player counts', 'mine', 0);
@@ -61,6 +72,7 @@ render('stopping poll', 'mine', 1);
 assert.equal(elements['action-loading'].style.display, 'block');
 render('stopped list', 'mine', 2, true);
 assert.equal(context.window.pageYOffset, 420);
+assert.equal(startupNotifications.length, 1, 'polls and action completions do not activate again');
 click('Loading worlds...');
 render('active list', 'active', 3, true);
 assert.equal(context.window.pageYOffset, 0, 'new tab starts at the top');
@@ -91,4 +103,36 @@ assert.equal(elements['browser-content'].style.display, 'none');
 assert.equal(click(), false, 'links do nothing once the connection is lost');
 render('late list', 'mine', 9, true);
 assert.equal(elements['browser-content'].style.display, 'none', 'nothing replaces the reconnect screen');
+context.lobbyWindowNotified = false;
+context.lobbyWindowReady('[0x123]', 7);
+assert.equal(startupNotifications.length, 1, 'a disconnected document cannot notify readiness');
 console.log('Lobby loading, cancellation, stale-poll, scroll and lost-connection checks passed.');
+
+// An intentional server handoff stops lobby heartbeats too. Keep its explanation and a
+// direct lobby recovery link, rather than claiming that the server restarted.
+intervals.length = 0;
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/loading.js'), 'utf8'), context);
+elements['handoff-return'] = { style: {}, href: '' };
+elements['connection-lost'].style.display = 'none';
+render('world list', 'mine', 0, true);
+assert.equal(startupNotifications.length, 1, 'rendering a new document is not a load notification');
+assert.equal(typeof context.showLobbyHandoff, 'function', 'the lobby must distinguish handoff from connection loss');
+context.showLobbyHandoff('Test world', 'byond://192.0.2.10:1361');
+assert.equal(elements['loading-world'].textContent, 'Test world');
+assert.equal(elements['handoff-return'].href, 'byond://192.0.2.10:1361');
+assert.equal(elements['handoff-return'].style.display, 'inline-block');
+render('late completion', 'mine', 1, true);
+context.lobbyAlive();
+now += 60000;
+tick();
+assert.notEqual(elements['connection-lost'].style.display, 'block', 'handoff is not a lobby outage');
+assert.equal(elements['action-loading'].style.display, 'block', 'late polls cannot replace the handoff');
+assert.equal(click(), false, 'old lobby actions remain blocked after handoff');
+context.lobbyWindowReady('[0x123]', 8);
+assert.equal(startupNotifications.length, 1, 'a late load event cannot activate after handoff');
+console.log('Intentional handoff and recovery-link checks passed.');
+
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../../modular_babylon/lobby/loading.js'), 'utf8'), context);
+context.lobbyWindowReady('[0x123]', 9);
+assert.equal(startupNotifications.at(-1), 'byond://?src=%5B0x123%5D;action=window_ready;generation=9',
+  'a returning connection gets a fresh load notification');

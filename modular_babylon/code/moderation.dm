@@ -56,14 +56,14 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	var/list/query = list("action" = "ahelp", "kind" = kind, "ticket" = "[ticket_id]", "ckey" = player_ckey,
 		"key" = player_key, "sender" = sender, "message" = copytext_char("[message]", 1, 2001))
 	// The HTTP call blocks; never hold up the adminhelp itself.
-	INVOKE_ASYNC(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_supervisor_request), query)
+	INVOKE_ASYNC(GLOBAL_PROC, GLOBAL_PROC_REF(babylon_supervisor_request_within), query)
 
 /// A new ticket: relayed, then the player learns how many admins are online on Discord.
 /datum/admin_help/proc/babylon_relay_new_ticket(message)
 	set waitfor = FALSE
 	var/list/response
 	if(world.params["babylon-world"])
-		response = babylon_supervisor_request(list("action" = "ahelp", "kind" = "new", "ticket" = "[id]", "ckey" = initiator_ckey,
+		response = babylon_supervisor_request_within(list("action" = "ahelp", "kind" = "new", "ticket" = "[id]", "ckey" = initiator_ckey,
 			"key" = initiator?.key || initiator_ckey, "message" = copytext_char("[message]", 1, 2001)))
 	if(!initiator)
 		return
@@ -116,7 +116,12 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	if(findtext(trim(LOWER_TEXT(message)), "ticket ") == 1)
 		return list("ok" = FALSE, "result" = "Replies starting with 'ticket ' are ticket commands")
 	GLOB.babylon_relaying_reply = TRUE
-	var/result = TgsPm(target, message, istext(sender) && length(sender) ? "[sender] (Discord)" : "Discord")
+	var/result
+	// A runtime must not leave the flag set: every later in-game admin PM would skip Discord.
+	try
+		result = TgsPm(target, message, istext(sender) && length(sender) ? "[sender] (Discord)" : "Discord")
+	catch(var/exception/error)
+		result = "Error: [error]"
 	GLOB.babylon_relaying_reply = FALSE
 	if(result == "Error: No client")
 		result = "The player is no longer in this world"
@@ -141,3 +146,10 @@ GLOBAL_VAR_INIT(babylon_relaying_reply, FALSE)
 	if(ticket.initiator)
 		to_chat(ticket.initiator, span_notice("Your adminhelp has been closed by an admin."), confidential = TRUE)
 	return list("ok" = TRUE, "result" = "Closed")
+
+/// Engine/SQL/whitelist refusals happen before /client/New and admission can log them.
+/world/IsBanned(key, address, computer_id, type, real_bans_only = FALSE)
+	. = ..()
+	if(!real_bans_only && type != "world" && islist(.) && .["reason"])
+		world.log << babylon_session_log_line("connect", key, address, world.params["babylon-name"] || world.name, world.params["babylon-world"])
+		world.log << babylon_session_log_line("refused", key, address, world.params["babylon-name"] || world.name, world.params["babylon-world"], .["reason"])

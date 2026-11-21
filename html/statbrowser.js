@@ -69,7 +69,8 @@ function createStatusTab(name) {
   button.textContent = name;
   button.className = 'button';
   //ORDERING ALPHABETICALLY
-  button.style.order = { Status: 1, MC: 2 }[name] || name.charCodeAt(0);
+  // BABYLON13: world actions stay directly after Status for players and admins.
+  button.style.order = { Status: 1, 'World Controls': 2, MC: 3 }[name] || name.charCodeAt(0);
   //END ORDERING
   menu.appendChild(button);
   SendTabToByond(name);

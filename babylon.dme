@@ -1,5 +1,9 @@
 // Optional Babylon build. Keep tgstation.dme identical to upstream.
+// BABYLON_BUILDER: any Babylon cluster world (this build and babylon-station.dme) and the upstream
+// hooks they share. BABYLON_DRONE: this build, Babylon's drone builder; the hooks and code that
+// only fit it test this positive define (never "not BABYLON_STATION").
 #define BABYLON_BUILDER
+#define BABYLON_DRONE
 #define FORCE_MAP "babylon13"
 #define MINIMAL_CENTCOM
 #define ABSOLUTE_MINIMUM
@@ -7,7 +11,11 @@
 #define SKIP_SPACE_LEVELS
 #define SKIP_LAVALAND
 #include "tgstation.dme"
+#include "modular_babylon/__DEFINES/babylon.dm"
+#include "modular_babylon/connection.dm"
+#include "modular_babylon/code/world_flags.dm"
 #include "modular_babylon/code/state.dm"
+#include "modular_babylon/code/rules.dm"
 #include "modular_babylon/code/persistence.dm"
 #include "modular_babylon/code/session.dm"
 #include "modular_babylon/code/afk.dm"
@@ -28,9 +36,37 @@
 #include "modular_babylon/code/research.dm"
 #include "modular_babylon/code/world_players.dm"
 #include "modular_babylon/code/interface.dm"
+#include "modular_babylon/code/escape_menu.dm"
 #include "modular_babylon/code/music.dm"
 #include "modular_babylon/code/music_loops.dm"
 #include "modular_babylon/code/play_time.dm"
+#include "modular_babylon/code/creative/machines.dm"
+#include "modular_babylon/code/creative/powers.dm"
+#include "modular_babylon/code/creative/spawning.dm"
+#include "modular_babylon/code/creative/teleport.dm"
+#include "modular_babylon/code/creative/events.dm"
+#include "modular_babylon/code/creative/supermatter.dm"
+#include "modular_babylon/code/creative/panel.dm"
+#include "modular_babylon/code/tutorial/objects.dm"
+#include "modular_babylon/code/tutorial/triggers.dm"
+#include "modular_babylon/code/tutorial/gates.dm"
+#include "modular_babylon/code/tutorial/actions.dm"
+#include "modular_babylon/code/tutorial/npc.dm"
+#include "modular_babylon/code/tutorial/runtime.dm"
+#include "modular_babylon/code/tutorial/players.dm"
+#include "modular_babylon/code/tutorial/inventory.dm"
+#include "modular_babylon/code/tutorial/world_actions.dm"
+#include "modular_babylon/code/tutorial/area_tools.dm"
+#include "modular_babylon/code/tutorial/world_edit.dm"
+#include "modular_babylon/code/tutorial/room_reset.dm"
+#include "modular_babylon/code/tutorial/wand.dm"
+#include "modular_babylon/code/tutorial/submit.dm"
 #ifdef BABYLON_TESTING
+#include "modular_babylon/code/testing_common.dm"
+#include "modular_babylon/code/creative/testing_machines.dm"
+#include "modular_babylon/code/creative/testing_creative.dm"
 #include "modular_babylon/code/testing.dm"
+#include "modular_babylon/code/tutorial/testing_tutorial.dm"
+#include "modular_babylon/code/tutorial/testing_area_tools.dm"
+#include "modular_babylon/code/tutorial/testing_submit.dm"
 #endif

@@ -12,8 +12,11 @@ for name in ('_maps', 'strings', 'icons', 'sound', 'html', 'tgui/public',
                     ignore=shutil.ignore_patterns('*.dm', '*.dme', '*.dmb', '*.rsc', '*.lk',
                                                  '__pycache__', 'test_*.py', 'smoke_*.py',
                                                  'active.dmm', 'node_modules', '.cache'))
-for name in ('babylon.dmb', 'babylon.rsc', 'babylon-lobby.dmb', 'babylon-lobby.rsc',
-             'LICENSE', 'GPLv3.txt'):
+for name in ('babylon.dmb', 'babylon.rsc', 'babylon-station.dmb', 'babylon-station.rsc',
+             'babylon-lobby.dmb', 'babylon-lobby.rsc', 'LICENSE', 'GPLv3.txt'):
+    # The station build is optional until it is compiled.
+    if name.startswith('babylon-station') and not (source / name).exists():
+        continue
     shutil.copy2(source / name, output / name)
 for name in ('librust_g.so', 'libdreamluau.so'):
     shutil.copy2(Path('/opt/native') / name, output / name)

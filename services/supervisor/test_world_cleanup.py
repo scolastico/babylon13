@@ -21,6 +21,7 @@ class Expiry(unittest.TestCase):
                            startup_timeout_seconds=300, public_host="localhost", admins=[])
         self.driver = FakeDriver()
         self.s = Supervisor(self.config, self.driver, lambda: self.now)
+        self.s.background_launches = False
         self.world = self.s.dispatch("owner", "create", {"name": "Old world"})["id"]
         self.path = Path(self.temp.name) / "worlds" / self.world
         self.path.mkdir(parents=True)
@@ -153,6 +154,7 @@ class Expiry(unittest.TestCase):
         connection.commit()
         connection.close()
         self.s = Supervisor(self.config, self.driver, lambda: self.now)
+        self.s.background_launches = False
         self.assertEqual(self.s.world(self.world)["last_used"], 9999)
 
     def test_filesystem_cleanup_is_confined_to_named_world(self):

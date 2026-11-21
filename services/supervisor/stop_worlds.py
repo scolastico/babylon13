@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 
+from constants import DEFAULTS
 from logstream import log
 
 
@@ -17,7 +18,18 @@ def running_worlds(database):
     with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
-            'SELECT r.world,r.state,r.error,w.owner FROM runs r JOIN worlds w ON w.id=r.world')]
+            'SELECT r.world,r.state,r.error,w.owner,w.map FROM runs r JOIN worlds w ON w.id=r.world')]
+
+
+def station_build_starting(config, worlds):
+    """True when a world that is still starting runs on the (slower) station build."""
+    from catalog import load_catalog
+    from supervisor import build_of, catalog_path
+    try:
+        catalog = load_catalog(catalog_path(config))
+        return any(build_of(catalog, world['map']) == 'station' for world in worlds if world['state'] == 'starting')
+    except Exception:
+        return False
 
 
 def stop_worlds(config, timeout=180, request=None, sleep=time.sleep, clock=time.monotonic):
@@ -40,30 +52,39 @@ def stop_worlds(config, timeout=180, request=None, sleep=time.sleep, clock=time.
             if not result.get('ok'):
                 raise RuntimeError(result.get('error', 'Supervisor rejected shutdown'))
     log('Saving and stopping %d world(s)...' % len(worlds))
-    # A child cannot checkpoint until restoration/initialization has finished.
-    # The supervisor refuses new worlds and joins while shutting down (restart_countdown).
-    deadline = clock() + max(timeout, config.get('startup_timeout_seconds', 300))
-    while any(world['state'] == 'starting' for world in worlds):
-        if clock() >= deadline:
-            raise TimeoutError('A world is still starting; supervisor and children left running')
-        sleep(.5)
-        worlds = running_worlds(database)
-    for world in worlds:
-        request(world['owner'], world['world'])
+    # Running worlds are asked to stop at once, so their final saves run while other worlds are
+    # still starting. A starting world cannot checkpoint until restoration/initialization has
+    # finished: its stop is requested once it runs. The supervisor refuses new worlds and joins
+    # while shutting down (restart_countdown). One deadline covers both: the stop timeout, or the
+    # startup wait when a world is still starting (the longer of the two).
     deadline = clock() + timeout
+    if any(world['state'] == 'starting' for world in worlds):
+        wait = max(timeout, config.get('startup_timeout_seconds', DEFAULTS['startup_timeout_seconds']))
+        if station_build_starting(config, worlds):
+            # Station-build worlds start slower than Babylon ones; wait as long as the supervisor allows them.
+            wait = max(wait, config.get('station_startup_timeout_seconds', DEFAULTS['station_startup_timeout_seconds']))
+        deadline = clock() + wait
+    requested = set()
     while True:
         remaining = running_worlds(database)
         if not remaining:
             log('All worlds saved and stopped.')
             return
-        failures = [world for world in remaining if world['state'] == 'error']
+        # Only worlds whose stop was requested on an earlier pass: a world already in error before
+        # its request leaves that state when the request is taken.
+        failures = [world for world in remaining if world['state'] == 'error' and world['world'] in requested]
         if failures:
             raise RuntimeError('World save/stop failed; processes retained: ' +
                                '; '.join(world['error'] or world['world'] for world in failures))
         if clock() >= deadline:
+            if any(world['state'] == 'starting' for world in remaining):
+                raise TimeoutError('A world is still starting; supervisor and children left running')
             raise TimeoutError('World shutdown timed out; supervisor and children left running')
+        for world in remaining:
+            if world['state'] != 'starting' and world['world'] not in requested:
+                request(world['owner'], world['world'])
+                requested.add(world['world'])
         sleep(.5)
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)

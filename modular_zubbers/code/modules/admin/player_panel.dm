@@ -401,6 +401,9 @@ GLOBAL_LIST_INIT(pp_limbs, list(
 			to_chat(target_mob, span_danger("You have been kicked from the server by [admin_client.holder.fakekey ? "an Administrator" : "[admin_client.key]"]."), confidential = TRUE)
 			log_admin("[key_name(admin_client)] kicked [key_name(target_mob)].")
 			message_admins(span_adminnotice("[key_name_admin(admin_client)] kicked [key_name_admin(target_mob)]."))
+#ifdef BABYLON_BUILDER // BABYLON13: retain the known disconnect cause.
+			target_client.babylon_set_leave_reason("kicked")
+#endif
 			qdel(target_client)
 			return TRUE
 

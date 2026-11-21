@@ -1,5 +1,5 @@
 /datum/controller/subsystem/gamemode/proc/send_trait_report()
-#ifdef BABYLON_BUILDER // BABYLON13: see modular_babylon/UPSTREAM_HOOKS.md
+#ifdef BABYLON_DRONE // BABYLON13: see modular_babylon/UPSTREAM_HOOKS.md
 	return
 #endif
 	. = "<b><i>Central Command Status Summary</i></b><hr>"

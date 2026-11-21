@@ -40,7 +40,7 @@
 
 	var/extra_item = extra_options()
 
-	options = archive_items
+	options = archive_items.Copy()
 	if(!isnull(extra_item))
 		options += extra_item
 
