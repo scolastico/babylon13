@@ -1,0 +1,749 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><base href="../"><link rel="stylesheet" href="dmdoc.css"><title>modular_babylon/VALIDATION.md - Babylon 13 Lobby</title></head><body><header><a href="index.html">Babylon 13 Lobby</a> - <a href="index.html#modules">Modules</a> - <a href="index.html#types">Types</a></header><main><h1>Groundwork validation <aside>modular_babylon/VALIDATION.md</aside> <a href="https://github.com/scolastico/babylon13/blob/fb5416a84bdf228abc2699273c51e5bb09202d71/modular_babylon/VALIDATION.md"><img src="git.png" width="16" height="16" title="modular_babylon/VALIDATION.md"></a></h1><table class="summary" cellspacing="0"><tr><td colspan="2"><p>Validated locally on 2026-11-09, based on upstream master
+<code>58cd83015ba7a528c87ad4c894785caa6e655265</code>.</p>
+<ul>
+<li>Dream Maker 516.1686: <code>babylon-test.dme -DCBT</code>, zero errors/warnings.</li>
+<li>Dream Maker 516.1686: <code>babylon.dme -DCBT</code>, zero errors/warnings.</li>
+<li>Dream Maker 516.1686: ordinary <code>tgstation.dme -DCBT</code>, zero errors/warnings.</li>
+<li>Upstream TGUI dependencies installed with the frozen lockfile and
+<code>bun run tgui:build</code> completed successfully.</li>
+<li>A separate localhost test process loaded the canonical upstream Babylon
+wreck, saved a seeded world, stopped, prepared that checkpoint, and reloaded.</li>
+<li>The comparison covered 3,304 saved objects and 2,474 room tiles. It checked
+nested/held inventory, appearance, airlock board settings and reconstructed
+cycle groups, nondefault vent pressure/direction, expanded scrubber range,
+and exact saved room/device/pipeline gas data.</li>
+<li>The owner was configured through world parameters using a test identity;
+no personal owner account is compiled into the module.</li>
+<li><code>tgstation.dme</code> is unchanged. Core integration changes are limited to the six
+files listed in <a href="UPSTREAM_HOOKS.md">UPSTREAM_HOOKS.md</a> at that initial milestone;
+cluster admission adds a seventh guarded upstream hook.</li>
+<li>All 30 previously active workflow YAML files were renamed with <code>.disabled</code>;
+repository Actions were disabled separately.</li>
+</ul>
+<p>The earlier local prototype had additional reactor-running, pipe-expansion,
+lathe-material, autosave-countdown and drone-recovery tests. Those results do
+not substitute for repeating coverage against this fork after future changes.
+This initial smoke test is not a full persistence or multiplayer certification.</p>
+<h2 id="lobby-supervisor-milestone-2026-11-09">Lobby/supervisor milestone (2026-11-09)</h2>
+<ul>
+<li>All four builds compile with zero errors/warnings on 516.1686: ordinary
+upstream <code>tgstation.dme</code>, production <code>babylon.dme</code>, privileged local
+<code>babylon-test.dme</code>, and independent <code>babylon-lobby.dme</code>.</li>
+<li>Twelve supervisor tests pass: private/password/member/admin access, offline
+editing and validation, per-owner/global quotas, concurrent starts, pending
+and redeemed capacity reservations, ticket binding/expiry/replay, membership
+removal, supervisor restart and save failure retention.</li>
+<li>Real DreamDaemon native smoke passes: fresh startup, DM HTTP ticket
+redemption, replay rejection, administrator admission to a private world,
+final save/exit, restart and two separate player roster entries. A second
+drone enclosed inside a locker retains its held backpack and pending respawn.</li>
+<li>The earlier persistence regression passes after the roster refactor:
+3,334 objects, 2,474 room tiles, nested/held inventory, vent settings,
+scrubber widenet, airlock electronics/groups, and exact room/device/pipe gas.</li>
+<li>The menu was opened in a real DreamSeeker client and visually checked. It
+uses a dedicated browser-only skin with no map or SS13 gameplay controls.</li>
+<li>A production child admitted an actual authenticated DreamSeeker client
+using a supervisor-issued ticket; the player appeared in its live roster.
+Owner stop then committed a checkpoint and disconnected the client.</li>
+<li>The separate private prototype on port 1339 was not restarted or changed.</li>
+</ul>
+<p>Generated logs/results are ignored under <code>data/babylon-supervisor/</code> in the
+developer checkout. See <a href="CLUSTER.md">CLUSTER.md</a> for repeatable commands and
+remaining operational limitations. These checks are not a public-hosting or
+multi-client load certification.</p>
+<h2 id="checkpoint-retention-and-rollback">Checkpoint retention and rollback</h2>
+<ul>
+<li>Twenty-six supervisor/storage tests pass, including the existing twelve
+policy tests. Coverage adds default/custom retention, numeric generation
+ordering, commit/busy boundaries, owner/admin and stopped-world restrictions,
+required destructive confirmation, stale selections, interrupted rollback
+recovery, damaged heads, filesystem path/symlink confinement, and staging the
+selected map/state on the next start.</li>
+<li>The independent lobby build compiles with zero errors/warnings after adding
+the stopped-world checkpoint selection and deletion-warning confirmation.</li>
+</ul>
+<h2 id="repeating-the-smoke-test">Repeating the smoke test</h2>
+<p>The 2026-11-10 builder update additionally passed 38 Python tests, including
+inactivity expiry, interrupted deletion, migration of existing activity data,
+path confinement, and preservation of the upstream map under six lore additions.
+The production, test and lobby builds compile with zero errors/warnings.
+Native smoke checks cover empty replacement equipment through the real respawn
+path, Return-before-Self-destruct action order, removal of ghost role/minigame
+HUD entries, retained DNR/re-entry, zero physical cafe turfs, and all six paper
+items surviving save/reload. The lobby's selected tab was checked in DreamSeeker;
+Join displayed its loading panel immediately in a real client before startup.</p>
+<p>Use a <strong>disposable checkout</strong>, supply the pinned BYOND/native dependencies and
+build the TGUI assets. Compile <code>babylon-test.dme</code> first. Supply your own local
+configuration directory with a fresh COMMS_KEY; do not commit it.</p>
+<pre><code class="language-powershell">powershell -File tools/babylon/Test-Persistence.ps1 `
+  -DreamDaemon C:\BYOND\bin\dd.exe `
+  -ConfigDirectory C:\BabylonTestConfig `
+  -Port 1351
+</code></pre>
+<p>The test refuses an occupied port, the private prototype's port, or an existing
+saved world. It only stops the process it launched. Generated results, logs,
+map and checkpoint files remain ignored in the disposable checkout.</p>
+<h2 id="lore-vault-annex-and-survival-2026-11-10">Lore, vault annex and survival (2026-11-10)</h2>
+<ul>
+<li><code>babylon.dme -DCBT</code> and <code>babylon-test.dme -DCBT</code> compile with zero
+errors/warnings on Dream Maker 516 after adding <code>vault.dm</code>, <code>survival.dm</code>,
+the rewritten <code>lore.dm</code> and the VaultController TGUI change; the TGUI bundle
+rebuilt successfully with <code>bun run tgui:build</code>.</li>
+<li>All 38 supervisor Python tests pass. The map overlay test now checks the
+46-tile vault annex patch, the 14 lore placements, that lore only lands on
+floor tiles, and that the annex is enclosed by indestructible walls.</li>
+<li>Not yet exercised at runtime: a fresh world with the annex loaded, the
+generation interlock against a running reactor, the one-hour pulse sequence,
+the saved <code>lore</code> state across a checkpoint, and lethal hunger/thirst on a
+human. Run the native smoke test in a disposable world before hosting.</li>
+</ul>
+<h2 id="lore-placement-fixes-2026-11-11">Lore placement fixes (2026-11-11)</h2>
+<ul>
+<li>The hidden satchels no longer land on bare plating: the overlay rejects
+plating and broken/burnt turfs for hidden recipes, and the cell note moved
+from north solar control (no intact floor) to the engine room. The test
+asserts every satchel tile is an intact floor.</li>
+<li>The interlock memo, transcript and Vale's final letter ship in archive boxes
+whose storage refuses observers; Babylon lore papers close their UI for
+non-admin ghosts. The test asserts no loose paper in either vault chamber.</li>
+<li>The continuity interlock moved from the tile in front of the inner doors to
+the tile beside it; the displaced plastic crate moved to the vault's
+south-east corner. The test asserts the doorway tile holds no blocker.</li>
+<li><code>babylon.dme -DCBT</code> and <code>babylon-test.dme -DCBT</code> compile with zero
+errors/warnings; all 42 supervisor Python tests pass. Not exercised at
+runtime: a ghost clicking a lore box or paper, and the new tile layout.</li>
+</ul>
+<h2 id="local-persistence-fixes-ported-to-the-multiplayer-fork-2026-11-10">Local persistence fixes ported to the multiplayer fork (2026-11-10)</h2>
+<ul>
+<li>Production <code>babylon.dme</code>, <code>babylon-test.dme</code>, and ordinary <code>tgstation.dme</code>
+compile with zero errors and warnings on Dream Maker 516.1686. All 38
+supervisor Python tests pass.</li>
+<li><code>smoke_reload_fixes.py</code> passes against a read-only copy of the original PoC
+workshop checkpoint, with new persistence fields deliberately removed in
+the disposable copy. It verifies no critter reseeding; consistent door
+collision/animation; alarm threshold and mode persistence; cycling-pump
+targets, side links and removability; bidirectional canister attachments
+and deliberate detachment; real circuit extraction/reinstallation and
+console completion; invalid-material UI recovery without changing stock;
+and a second player's saved roster entry.</li>
+<li>Evidence: ignored local artifact
+<code>data/babylon-supervisor/ported-reload-fixes-2/result.json</code>; checkpoint
+generations <code>save-20261110-235443-100</code> and <code>save-20261110-235625-101</code>.</li>
+<li>The managed native smoke also passes HTTP ticket redemption/replay checks,
+admin admission, two-player inventories, empty respawn, trimmed ghost HUD,
+return-button order, no physical cafe, and real save/stop/restart. Evidence:
+<code>data/babylon-supervisor/ported-managed-2/result.json</code>.</li>
+<li>The fresh managed test loads the newer annex and retains its 12 immediately
+available lore papers through reload. The two sealed lore crates populate
+on first opening and are excluded from that initial-paper count. The pulse
+sequence, interlock behavior and human survival scenarios remain separate
+tests; this port does not change their implementation.</li>
+<li>Test children exit after completion. No private player save, live world,
+credential, or generated binary is committed.</li>
+</ul>
+<h2 id="lobby-loading-and-scroll-behavior-2026-11-11">Lobby loading and scroll behavior (2026-11-11)</h2>
+<ul>
+<li><code>babylon-lobby.dme</code> compiles with zero errors/warnings.</li>
+<li><code>node tools/babylon/test_lobby_loading.cjs</code> checks immediate loading,
+duplicate-click blocking, late-poll rejection, completion/cancellation,
+unchanged-content rendering, and scroll retention across updates and tabs.</li>
+<li>An isolated native lobby/browser on port 1371 confirmed real DM-to-browser
+callbacks, tab switching, stable scrolling across the five-second poll,
+a visible loading panel behind deletion confirmation, cancellation, and
+the deletion progress message followed by the updated map list. Only a
+disposable probe world was deleted; its runtime files were removed too.</li>
+<li>The primary lobby was restarted on port 1361. The supervisor and game-world
+processes do not need a restart for these browser changes.</li>
+</ul>
+<h2 id="windows-cluster-launchers-2026-11-11">Windows cluster launchers (2026-11-11)</h2>
+<ul>
+<li>Both root <code>.cmd</code> launchers were exercised from a different working directory,
+including their Python auto-detection and double-click-style pause behavior.
+Duplicate Start and repeated Stop were verified.</li>
+<li>A disposable real world was started, saved/stopped through the shutdown
+helper, and its committed map/state checkpoint verified before cleanup.
+The test world was then deleted through the normal supervisor API.</li>
+<li>All 47 Python tests pass, including startup waiting, multi-world stop
+requests, save-failure retention, and timeout retention. No launcher can
+force-kill a child world. The cluster was left stopped after validation.</li>
+</ul>
+<h2 id="worlds-creative-and-tutorials-container-end-to-end-run-h1-2026-11-15">Worlds, creative and tutorials: container end-to-end run (H1, 2026-11-15)</h2>
+<p>Run on the real runtime image (<code>docker build --target runtime</code>, tree of <code>feat/world-types</code>
+after the H1 fixes) with a prod-like environment: the production compose values
+(<code>MAX_RUNNING_WORLDS=6</code>, <code>MAX_WORLDS_PER_PLAYER=3</code>, <code>MAX_RUNNING_WORLDS_PER_PLAYER=1</code>,
+<code>MAX_PLAYERS_PER_WORLD=20</code>, <code>SHUTDOWN_TIMEOUT_SECONDS=180</code>), except
+<code>EMPTY_GRACE_SECONDS=3600</code> so that worlds nobody joins are not stopped by the empty-world
+timer during the checks. Data on a bind mount, the default container config
+(<code>container/default-config</code>). No BYOND client: the driver talked to the supervisor's
+<code>/api</code> with the lobby secret (as the lobby does), to its child HTTP actions as a world
+does (redeem), and to the worlds over their authenticated Topic control (<code>status</code>,
+<code>save</code>). For the tutorial flow the station build was replaced by
+<code>babylon-station-test.dmb</code> (bind-mounted over <code>babylon-station.dmb</code>) for its <code>call</code>,
+<code>spawn</code> and <code>find</code> helpers; everything else ran the production programs.</p>
+<p>Exercised, all passing unless noted:</p>
+<ul>
+<li><strong>World types.</strong> One world each of Babylon (drone), MetaStation, IceBox Station
+(multi-level) and Creative Plane S with Creative, started in parallel by different
+owners. Each: Join answered <code>pending</code> (background start), ready after 21 s, 84 s,
+120-156 s and 30 s; a checkpoint through Topic <code>save</code> (2.6 s, 53 s, 70-75 s, 1 s);
+Stop saved again; a second start resumed from that generation (status <code>last_save</code>), a
+third save had <code>save_count + 1</code>, the same level count and <code>next_id</code> not lower.</li>
+<li><strong>Restore fidelity (record counts by type between the stop's save and the save after the
+restart).</strong> Creative Plane S unchanged (166 records). See &quot;Found&quot; for the others.</li>
+<li><strong>Tutorial flow</strong> (Creative Plane S, Creative, not persistent): round started as the
+owner; a <code>start</code> marker, a Message action, a Complete action, a Tutorial-starts trigger
+and a Zone trigger placed through the test helpers; submitted through the DM path
+(<code>test_tutorial_submit_live</code>: the panel's <code>submissions.begin/submit</code> and the real
+supervisor): stored under <code>pending/</code>, meta title/author/map/source world correct,
+<code>characters</code> and <code>players</code> empty, 5 tutorial records, the snapshot removed from the
+world, <code>latest.json</code> untouched, cooldown started and a second submission refused. A
+player did not see the pending tutorial; the admin's Accept moved it to <code>published/</code> and
+the player saw it. <strong>Play</strong> made a private <code>tutorial</code> world (persistent 0), running after
+30 s with its round started and the five objects at their places; Stop deleted its row
+and directory. <strong>Copy to my worlds</strong> made the player a Creative, persistent world whose
+first checkpoint is the tutorial (round started, 163 records); it started from that
+seed with the objects in place, and its Stop saved a new generation.</li>
+<li><strong>Stop during prepare</strong>: Join then Stop at once (state <code>starting</code>, no pid): the launch was
+cancelled before a process started, nothing saved; the starter's next Join was told
+&quot;The world's start was cancelled: it was stopped.&quot; once, and the Join after it started
+the world normally (a cancel has no back-off).</li>
+<li><strong>Failed start with back-off</strong> (IceBox, its checkpoint's <code>state.json</code> hidden): the starter
+heard &quot;The saved state is missing or corrupt&quot; once; the next Join of the starter and of
+an admin answered &quot;... Try again in 30 seconds.&quot; with no run; after the file came back
+and 30 s passed, Join started it and it resumed from the same generation.</li>
+<li><strong>Late login</strong>: a redeem with <code>wait_seconds=0.001</code> was refused with <code>admission_timeout</code>
+without spending the ticket; the same ticket then redeemed (<code>mode player</code>, role owner);
+a replay was refused.</li>
+<li><strong>Limits</strong> (non-admin owner, defaults above): 3 persistent worlds, the 4th refused (&quot;Your
+world limit has been reached&quot;); 17 non-persistent worlds up to the total of 20, the 21st
+refused (&quot;Your total world limit has been reached&quot;); turning Persistent on for an
+unsaved world refused by the saved-world limit; a second running world of the owner
+refused (&quot;This owner's running-world limit has been reached&quot;). All 20 deleted again.</li>
+<li><strong>Container shutdown</strong> (<code>docker stop -t 600</code>, the production <code>stop_grace_period</code> of 10m)
+with Babylon, Creative Plane S, MetaStation and IceBox running: 127 s in all, exit code
+0: the 30 s countdown, then the four final saves in parallel (2 s, 1 s, 54 s, 81 s); the
+last world exited 94 s after the countdown, inside the production
+<code>BABYLON_SHUTDOWN_TIMEOUT_SECONDS=180</code>. Every world's <code>latest.json</code> named the new save.</li>
+</ul>
+<p>Found and fixed (details in the commit messages):</p>
+<ul>
+<li>An IceBox checkpoint (a full capture after a restart) had a damaged <code>z4.dmm</code> (&quot;Undefined
+model key&quot;). The next start ran without that level and its shutdown save wrote the loss
+over the world (366 objects fewer). Level maps were one huge string written unchecked,
+the class <code>state.json</code> was fixed for earlier. They are now written in checked 1 MB
+pieces, with a size check. A restore whose saved map did not load fails the start, so
+nothing gets saved over it. The damaged file itself was deleted with the run data before
+this was noticed, so the root cause is not confirmed; it did not recur in the later runs.</li>
+<li>Every Babylon restart gave each restored light a second backup cell (63 per restart):
+the restored cell is now adopted. Every restart also added about 400 dirt decals, and
+station restarts added cobwebs and rat or spider nests: upstream's mapload dirt and
+Skyrat's round-start decay ran again over the saved level. Decay is skipped for a world
+that resumes a save, and dirt, disposal-bin animals and the MULEbot swap stand back for a
+saved map, like lights and cameras. A contract test lists every random mapload default
+in upstream code. Re-checked: a Babylon restart now changes only the companion objects
+below (3342 -&gt; 3355 records, before: about +480).</li>
+<li>The combined suite afterwards caught a station world reporting ready up to a second
+before it could save (a stop in that window skipped its save). Status ready is now the
+session's ready flag in both builds.</li>
+<li>The back-off refusal read &quot;...corrupt Try again in 30 seconds.&quot; (missing full stop).</li>
+</ul>
+<p>Follow-up (H1b): objects a world makes again on every load are no longer saved, and older
+saves lose their extra copies on their next start:</p>
+<ul>
+<li>objects another object makes in its Initialize (marked when they are made);</li>
+<li>CentCom's objects;</li>
+<li>round-start area spawns.</li>
+</ul>
+<p><code>smoke_stability.py</code> restores a world three times; the full smoke run passed with it:</p>
+<ul>
+<li>Babylon (test build, in smoke_native): 5826 records on every save, from the first one on.</li>
+<li>MetaStation: its restored saves are identical, type by type (87601 records). Its first
+restore differs from the fresh save only by 6 sheets of reinforced glass and one lavaland
+sliding puzzle piece.</li>
+<li>Before H1b, every MetaStation restart added about 30 objects and every IceBox restart about
+260.</li>
+</ul>
+<p>The Babylon fixtures of the native smoke are old saves. Their first start removed the copies
+they held (5 CentCom floor lights, 8 gravity generator parts).</p>
+<p>The readiness fix was re-checked in the container: three Creative Plane S worlds and one
+MetaStation world, each stopped the moment the supervisor saw it running, all saved.</p>
+<p>Not exercised (needs a real client): joining a world, the lobby page itself, the Creative
+panel and tutorial wand UI, playing a tutorial to its end, rejoining a saved character,
+AFK return, the restart screen hand-off with players connected, Discord.</p>
+<h2 id="final-review-fixes-h2-2026-11-16">Final review fixes (H2, 2026-11-16)</h2>
+<p>The fix round after the final whole-branch review. The full suite ran on <code>8b8527e1a77</code>:</p>
+<ul>
+<li>all five builds through <code>tools/babylon/build_dme.py</code>, which now fails a build that shows the
+BYOND 516.1686 slot quirk: 0 errors, 0 warnings each;</li>
+<li><code>smoke_native.py</code>: passed, including the Babylon stability step (6017 records on every save);</li>
+<li><code>smoke_station.py</code>, full matrix: passed. MetaStation, the Creative Planes S/M/L (including a
+tutorial instance started from the submitted snapshot), the tutorial world with every
+tutorial test, characters, the tramstation restore, IceBox multi-z and MetaStation
+stability. Stability is now identical from the first restore on (84389 records, no
+differences). The first-restore loss of 6 reinforced glass sheets and a lavaland puzzle
+piece is gone: stacks no longer merge while a save loads;</li>
+<li>supervisor (281, 16 skipped without discord.py), tools (59), node lobby and container tests,
+tgui (106 tests, tsc, biome, tgui:build).</li>
+</ul>
+<p>Newly covered:</p>
+<ul>
+<li>a tutorial started from a snapshot taken in a running round starts its tutorial;</li>
+<li>a character on CentCom (a level that is not saved) is kept and arrives at arrivals;</li>
+<li>a restored character can't be put into cryo by someone else before its player returned;</li>
+<li>research (a node, its designs, the point bank) and the cargo budget survive a restart;</li>
+<li>Reboot World saves a running round;</li>
+<li>Preview is refused for world-changing actions;</li>
+<li>a pAI card (station) or a box with a mouse (Babylon) is never deleted with an inventory;</li>
+<li>Give item shares the run's object cap;</li>
+<li>no snapshot during a test run, and none that reuses an old level;</li>
+<li>the supervisor's snapshot pruning, hung-instance stop, shutdown order, damaged pointer,
+audit index and copy journal.</li>
+</ul>
+<p>Known limitation: cyborgs and the station AI are not saved (their player late-joins after a
+restart).</p>
+<p>Not exercised (needs a real client): the Preview button's disabled state in game, the cryo
+refusal with real players, Reboot World from the admin verb, a tutorial player actually
+spawning at the start marker from a snapshot instance.</p>
+<h2 id="complete-playable-station-catalog-and-vault-preview-2026-11-18">Complete playable station catalog and vault preview (2026-11-18)</h2>
+<p>The complete top-level config audit found exactly eight omitted playable stations.
+All eight now use the station build, their original JSON configs and committed
+256×128 previews. Existing BoxStation, MetaStation, DeltaStation, IceBox,
+Tramstation, KiloStation, North Star and PubbyStation remain available.
+Runtime Station, minimal runtime, multi-z debug and gateway test remain excluded;
+Babylon still uses the Babylon build with <code>map_json: null</code>.</p>
+<p>Paths below are relative to <code>_maps/</code>; preview filenames are under
+<code>_maps/babylon/previews/</code>. Level counts were checked against both the actual DMM
+grids and config traits, rather than inferred from names.</p>
+<table><thead><tr><th>Added station / config</th><th>Source DMM</th><th>Levels / multiz</th><th>Preview</th></tr></thead><tbody>
+<tr><td>Biodome / <code>biodome.json</code></td><td><code>map_files/biodome/biodome.dmm</code></td><td>2 / yes</td><td><code>biodome.png</code></td></tr>
+<tr><td>Blueshift / <code>blueshift.json</code></td><td><code>map_files/Blueshift/Blueshift.dmm</code></td><td>2 / yes</td><td><code>blueshift.png</code></td></tr>
+<tr><td>Cardinal Station / <code>cardinalstation.json</code></td><td><code>map_files/CardinalStation/CardinalStation.dmm</code></td><td>1 / no</td><td><code>cardinalstation.png</code></td></tr>
+<tr><td>Catwalk Station / <code>catwalkstation.json</code></td><td><code>map_files/CatwalkStation/CatwalkStation_2023.dmm</code></td><td>2 / yes</td><td><code>catwalkstation.png</code></td></tr>
+<tr><td>Moon Station / <code>moonstation.json</code></td><td><code>map_files/moonstation/moonstation.dmm</code></td><td>3 / yes</td><td><code>moonstation.png</code></td></tr>
+<tr><td>Nebula Station / <code>nebulastation.json</code></td><td><code>map_files/NebulaStation/NebulaStation.dmm</code></td><td>2 / yes</td><td><code>nebulastation.png</code></td></tr>
+<tr><td>Ouroboros / <code>ouroboros.json</code></td><td><code>map_files/Ouroboros/Ouroboros.dmm</code></td><td>2 / yes</td><td><code>ouroboros.png</code></td></tr>
+<tr><td>Void Raptor / <code>voidraptor.json</code></td><td><code>map_files/VoidRaptor/VoidRaptor.dmm</code></td><td>1 / no</td><td><code>voidraptor.png</code></td></tr>
+</tbody></table>
+<p>The source/config scan found no additional playable omissions. The prepare test
+checks <strong>all sixteen</strong> stations through the real driver's selection/build and
+<code>prepare_station</code> paths: <code>data/next_map.json</code> matches the shipped config byte for
+byte. That preserves case-sensitive automapper <code>required_map</code> matching, including
+Catwalk's <code>_2023</code> filename. No upstream map or automapper edits were necessary.</p>
+<p>The unsupported renderer-input class was the first-<code>map_file</code>-only resolver,
+combined with silent skips for missing configs/files. Its only implementation
+and its test consumer were replaced together. All files and all their levels
+now participate in deck selection; independent dictionaries prevent colliding
+keys in separate files from changing tiles. Fixtures cover mixed multi-z files,
+key collisions, missing second files, empty/invalid lists, case mismatches and
+unsafe source paths. Every catalog entry, including Babylon, must have a PNG.</p>
+<p>The native Moon run also exposed a related arrival-list assumption: its ten
+map-authored cryopod arrivals live in <code>SSjob.latejoin_override_trackers</code>.
+The existing late-join test counted only ordinary points and falsely failed
+capacity despite a valid assistant arrival. The whole-code scan found three
+Babylon production fallbacks with the same omission: <code>character_arrival_turf</code>
+(returning bodies), <code>babylon_tutorial_start_turf</code> (without a tutorial marker),
+and <code>station_spawn_turf</code> (without an observer landmark). They now share
+<code>babylon_latejoin_points</code>, which follows upstream job spawning's override-before-
+default priority. Observer landmarks and tutorial markers still have priority.
+<code>ensure_latejoin_points</code>, station info/capacity checks, restored-character
+arrival checks and Creative Plane arrival diagnostics use the same helper.
+Remaining direct writes intentionally populate the ordinary fallback list.</p>
+<p>Before the fix, the native <code>test_station_arrival_overrides</code> failed all three
+override cases while all three no-override cases passed. It restores the original
+lists after its synchronous probes. The final matrix below reruns that guard
+on each station, alongside real admission and the map's actual late-join checks.</p>
+<p>As clarified during the task, the new station cards retain the existing
+<strong>department-color schematic</strong> style; Creative Plane retains its special grid,
+ring and spawn palette. Regenerating every station/plane with
+<code>python3 tools/babylon/render_map_previews.py</code> leaves all twenty PNG hashes
+unchanged, including the separately generated Babylon preview.</p>
+<p>Babylon's former null preview/B13 fallback is now <code>babylon.png</code>: an actual
+SPLURT atlas sprite rendering of the prepared fresh wreck from
+<code>RandomRuins/SpaceRuins/skyrat/drones_derelict.dmm</code>, including both Babylon
+map overlays. <code>session.dm</code> selects the secure-engineering drone shell at
+(41,53), in front of the outer vault doors at (41,56–57) and the generation
+controller at (42,55). The crop is inclusive x33–52/y49–58/z1 (20×10 tiles),
+composited from full-resolution base/foreground strips and downsampled to
+256×128. It is a static atlas reconstruction, not a running-game screenshot.</p>
+<p><code>python3 tools/babylon/render_babylon_preview.py</code> uses the pinned atlas image
+<code>ghcr.io/scolastico/splurt-atlas@sha256:6f7f94eedd4a950f18294d8be0731ffcbfa97d078aabda3004029b0d00697148</code>.
+It mounts the checkout read-only and stages the exact same fresh-map overlay as
+the supervisor. Two independent full atlas runs produced the same PNG SHA256
+<code>c5d40c5ee69c82d7b5b1ae734bab5531db3d91e756cc2c108cb697f04b3f3827</code>.
+<code>babylon.render.json</code> records source revision, renderer/crop/layers, prepared-map
+hash and image hash. The atlas reported zero missing icons and one missing
+<code>nun_hood</code> state while rendering the full wreck; that state is outside this crop.
+All nine new images were visually inspected. The crop fixture checks exact
+pixels across chunk boundaries, DMM y orientation, foreground composition,
+hidden utilities, deterministic output, resizing and out-of-range rejection.</p>
+<p>Checks run:</p>
+<ul>
+<li><code>python3 -m unittest discover -s services/supervisor -v</code>: 284 tests, passing;
+16 optional Discord tests skipped without discord.py. This includes all six
+catalog tests, the map-overlay test and all 22 driver/prepare tests.</li>
+<li><code>python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v</code>: 65 tests,
+passing; one native BYOND routing test skips on the host (BYOND is in Docker).
+The nine renderer tests parse every catalog station's actual source levels.
+The skipped routing test was also run separately in the native Docker image
+and passed (one test, no skips).</li>
+<li>Pinned atlas container: <code>node --test /source/tools/babylon/test_atlas_preview.mjs</code>
+passes. <code>CLUSTER.md</code> includes the complete Docker command.</li>
+<li><code>node tools/babylon/test_lobby_ui.cjs</code>: passing. The existing lobby already
+sends every catalog PNG with <code>browse_rsc</code>; no JS/CSS changes were required.</li>
+<li><code>python3 tools/babylon/build_dme.py babylon-station.dme babylon-station-test.dme</code>
+in the native image: both compile on BYOND 516.1686 with zero errors/warnings.</li>
+<li>Independent read-only code review approved with no important/critical findings.</li>
+</ul>
+<p>The final focused native matrix passed for every addition on the rebuilt
+station-test binary. Both independent batches exited successfully after stopping
+each nonpersistent disposable world normally. Each row checked the actual loaded
+DM map name against its source config, native Topic readiness/run/world identity,
+a reachable child listener, the real DM routing helper, fresh and running DM
+HTTP ticket admission, replay rejection, effective arrival points and an Assistant
+spawn on a station level. All seven override/default regression checks passed
+on every map; Moon reports its ten actual map-authored cryopod arrival points.</p>
+<table><thead><tr><th>Map</th><th style="text-align: right">Ready after</th><th style="text-align: right">Effective arrival points</th><th>Native admission / arrivals / override regression</th></tr></thead><tbody>
+<tr><td>Biodome</td><td style="text-align: right">102.2 s</td><td style="text-align: right">6</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Blueshift</td><td style="text-align: right">112.2 s</td><td style="text-align: right">22</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Cardinal Station</td><td style="text-align: right">90.2 s</td><td style="text-align: right">170</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Catwalk Station</td><td style="text-align: right">112.2 s</td><td style="text-align: right">12</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Moon Station</td><td style="text-align: right">116.2 s</td><td style="text-align: right">10</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>NebulaStation</td><td style="text-align: right">114.3 s</td><td style="text-align: right">8</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Ouroboros</td><td style="text-align: right">106.2 s</td><td style="text-align: right">8</td><td>pass / pass / 7 checks pass</td></tr>
+<tr><td>Void Raptor</td><td style="text-align: right">100.2 s</td><td style="text-align: right">91</td><td>pass / pass / 7 checks pass</td></tr>
+</tbody></table>
+<p>Reproduce from a source checkout with compiled test resources and native libraries
+available in the runtime template (use a new empty data directory):</p>
+<pre><code class="language-sh">python3 services/supervisor/smoke_handoff.py \
+  --dreamdaemon /opt/byond/bin/DreamDaemon \
+  --config-directory container/default-config \
+  --template-directory /path/to/staged-runtime-template \
+  --data-directory data/babylon-supervisor/catalog-smoke-new \
+  --maps biodome blueshift cardinalstation catwalkstation \
+         moonstation nebulastation ouroboros voidraptor
+</code></pre>
+<p>The recorded run used two independent containers from the local native runtime
+image, splitting the map list four/four. Runtime templates linked the current
+checkout's source assets/test binaries and the image's native libraries. Evidence
+is ignored under <code>data/babylon-supervisor/catalog-final-{a,b}/result.json</code>; compile
+and per-world logs are under <code>catalog-work/</code>. The live cluster and existing player
+data were not touched. This uses real Supervisor/Driver preparation and real
+DreamDaemon children; the driver subclass only stages the test build in place of
+the production executable. It is not fake-driver load evidence.</p>
+<p>Observed runtime caveats: all eight boots logged the upstream tracking-collar
+<code>Cannot read null.tracking</code> overlay error during preference asset generation.
+Moon also logged five ore-generation mineral-budget exhaustion errors. These
+were present before the arrival fix and did not prevent readiness, either native
+admission phase, or any required spawn check. Early emergency-shuttle lookup
+warnings and fixed arrivals rooms without a mobile arrivals shuttle also occur;
+station arrivals fallbacks were checked explicitly. Per supervisor direction,
+these upstream gameplay defects remain outside this catalog/arrival change.</p>
+<p>No full end-to-end suite or real DreamSeeker client was exercised by this task.
+The native matrix does not certify client.New, game-window readiness, long-round
+gameplay, or mining/ore-vent correctness. The story's review owns full E2E and
+real-client validation.</p>
+<h2 id="remote-lobby-world-routing-2026-11-18">Remote lobby/world routing (2026-11-18)</h2>
+<p>The reported failed join was a destination error: a separate Windows DreamSeeker
+reached the Linux host's lobby over the LAN, but the supervisor's default
+<code>public_host=127.0.0.1</code> sent it to its own machine for the child connection.
+The original child reached ready, remained alive and saved/stopped normally;
+there was no admission. The quoted restart message came from the stale lobby
+browser's 15-second heartbeat watchdog after the intentional disconnect.</p>
+<p><code>modular_babylon/connection.dm</code>, included by the lobby and both game builds,
+validates destinations and routes default loopback links through the server
+IP:port returned by BYOND's <code>winget(client, null, &quot;url&quot;)</code>. It preserves the
+configured target port and ticket query. Non-loopback public addresses remain
+authoritative. Invalid endpoints fail closed. This uses the connected server
+address, never <code>client.address</code> (the player's address). BYOND documents the
+special call in <a href="https://www.byond.com/docs/ref/skinparams.html">https://www.byond.com/docs/ref/skinparams.html</a>.</p>
+<p>Every shared occurrence found is covered:</p>
+<ul>
+<li>Lobby <code>join_world</code>: ordinary Join/Create, tutorial Play/Edit, admin
+spectating and the existing rejoin flow all use this common handoff. Tutorial
+copies use ordinary Join from My worlds.</li>
+<li><code>babylon_lobby_link</code>: admission refusal and timeout notices.</li>
+<li>The explicit Return to Babylon lobby verb and the drone/ghost HUD return action.</li>
+<li>Managed save/stop and the station round-end return loop.</li>
+<li>Moderation removal and the AFK path that calls it.</li>
+<li>The existing hidden-window rejoin path, including its spectator query.</li>
+</ul>
+<p>The lobby logs the offered endpoint without its ticket, rather than claiming
+that sending <code>link()</code> was a successful join. Its browser now has an explicit
+handoff state and a direct return-to-lobby link; late polls and missing lobby
+heartbeats cannot replace this with the restart error. Real outages still show
+the existing reconnect screen.</p>
+<p>Regression and build checks:</p>
+<ul>
+<li><code>python3 -m unittest discover -s services/supervisor -v</code>: 282 tests, passing;
+16 Discord tests skipped without discord.py. The new contract guard caught
+direct loopback return paths before they were changed.</li>
+<li><code>python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v</code>: 60 tests,
+passing in the native BYOND environment. On the host, the one native-only
+routing test skips because BYOND is supplied in Docker.</li>
+<li><code>node tools/babylon/test_lobby_loading.cjs</code>,
+<code>node tools/babylon/test_lobby_ui.cjs</code> and <code>node container/test_cleanup.cjs</code>:
+passing. The handoff test failed before the new browser state existed.</li>
+<li><code>python3 tools/babylon/build_dme.py babylon-lobby.dme babylon.dme babylon-station.dme babylon-test.dme babylon-station-test.dme</code>: all five
+compile on BYOND 516.1686 with zero errors and warnings.</li>
+<li><code>tools/babylon/test_connection_routes.py</code> executes the actual shared DM
+helper in a disposable native world. Cases cover LAN/local routing, explicit
+public hosts, target ports, unchanged ticket/notice/rejoin queries and invalid
+destinations/endpoints, including unusable ports and injected URL syntax.</li>
+</ul>
+<p>Native and real-client evidence are recorded separately below. Test data,
+compiled resources and packet summaries stay ignored under
+<code>data/babylon-supervisor/handoff-diagnosis/</code>; no credentials, ticket values or
+private LAN address are committed. The existing live cluster was not modified.</p>
+<p>The focused <code>services/supervisor/smoke_handoff.py</code> passed on the rebuilt test
+binaries with the real supervisor, native Topic readiness/listeners, shared DM
+router, and each world's DM HTTP redemption procedure. It checked both the
+first ready join and another join of the running world, unchanged ticket and
+port, reachable routed hostname, child identity, and refused ticket replay:</p>
+<table><thead><tr><th>Map</th><th style="text-align: right">Ready after</th><th>Fresh DM admission</th><th>Running DM admission</th></tr></thead><tbody>
+<tr><td>Babylon</td><td style="text-align: right">22.3 s</td><td>pass</td><td>pass</td></tr>
+<tr><td>Creative Plane S</td><td style="text-align: right">26.1 s</td><td>pass</td><td>pass</td></tr>
+<tr><td>Creative Plane M</td><td style="text-align: right">28.1 s</td><td>pass</td><td>pass</td></tr>
+<tr><td>Creative Plane L</td><td style="text-align: right">30.2 s</td><td>pass</td><td>pass</td></tr>
+<tr><td>MetaStation</td><td style="text-align: right">80.2 s</td><td>pass</td><td>pass</td></tr>
+</tbody></table>
+<p>Reproduce in a source tree with the native/runtime assets and both test builds:</p>
+<pre><code class="language-sh">python3 services/supervisor/smoke_handoff.py \
+  --dreamdaemon /opt/byond/bin/DreamDaemon \
+  --config-directory container/default-config \
+  --data-directory data/babylon-supervisor/handoff-new
+</code></pre>
+<p>The run used <code>--template-directory /opt/babylon</code> for the staged runtime assets
+and <code>--client-endpoint handoff-smoke:15561</code> inside a container with that hostname.
+The source remained mounted read-only. Evidence is the ignored
+<code>focused-smoke-2/result.json</code>. An earlier attempt to probe the host's LAN
+endpoint from inside Docker timed out on that container-to-host hairpin route;
+it stopped its disposable child normally. It is not counted as a passing LAN
+check. No full gameplay end-to-end suite was run.</p>
+<p>A separate Windows DreamSeeker did successfully create and join Creative Plane S
+on an isolated patched cluster (test lobby 15361, child 15400). The user confirmed
+that the game connected without issues. Header-only tcpdump summaries show the
+lobby TCP close followed by a successful TCP handshake and resource traffic to
+the Linux host's published child port. Matching logs show the LAN endpoint
+being offered, supervisor admission and completed client.New. This confirms
+the actual remote-client failure boundary, rather than inferring it from link().</p>
+<p>The other four production worlds were ready on ports 15401–15404. In follow-up,
+the user reported that the tested flow works and chose not to join every server,
+considering further manual repetition unnecessary. A full five-map Windows
+window/return matrix is therefore not claimed; the complete five-map coverage
+above is native/DM, and the specific observed Windows join is Creative S.
+No further user action is pending for that matrix. A repeatable manual check,
+if needed later, is:
+connect DreamSeeker from another machine to the host's LAN address on the test
+lobby port, create/join S, return/rejoin S, then join Babylon, M, L and MetaStation
+from Active worlds and return between them. Confirm each game window opens and
+match its offered host/port, TCP connection, admission and completed-client log.</p>
+<h2 id="startup-windows-2026-11-18">Startup windows (2026-11-18)</h2>
+<p>The standalone lobby only saved the previous window size/maximized state; it had
+no startup maximize hook. Game worlds already maximized after their main window
+became visible. The lifecycle audit found and addressed both startup paths:</p>
+<ul>
+<li>Lobby: the browser document's <code>load</code> event now sends a generation-tagged
+readiness notification. It bypasses page actions and their busy state, checks
+ownership, page initialization and the current connection's generation, then
+waits for <code>mainwindow</code> visibility. It maximizes and requests native window
+focus once. The guard belongs to <code>/client</code>, so returning to a retained lobby
+mob gets a fresh guard; stale/duplicate callbacks cannot reactivate it.</li>
+<li>Both Babylon and station game builds share <code>code/interface.dm</code>: the existing
+visible-window callback now has a per-client guard and requests top-level
+focus after its maximize/viewport setup. A saved fullscreen preference still
+skips maximization. Resize only schedules viewport fitting.</li>
+</ul>
+<p>Every modular <code>winset</code> and browser focus call was audited. Icon/top-bar writes,
+game splash/visibility handling, spectator/session title-browser visibility and
+the lobby's dialog keyboard-focus helpers remain separate from startup
+activation. No periodic refresh, heartbeat, resize, mob Login or later game
+event gains an activation call. No upstream skin/client file was changed:
+<code>toggle_fullscreen</code>, <code>set_fullscreen</code>, the preference application and the manual
+Fullscreen button keep their existing behavior. The shared connection/handoff
+router and existing hidden-window recovery path are unchanged.
+The wider source scan also found upstream input/keybinding/TGUI-say focus,
+modal focus restoration and saved skin size/maximized parameters; these are
+input/dialog/preference behavior, with no additional startup maximize path.</p>
+<p>Native API evidence and limits:</p>
+<ul>
+<li><a href="https://www.byond.com/docs/ref/skinparams.html">BYOND skin parameters</a>
+documents <code>focus=true</code> for all controls (including MAIN windows),
+<code>is-maximized=true</code> for MAIN, and <code>is-default</code> as selection of default controls.
+The requests use <code>winset(src, &quot;mainwindow&quot;, &quot;focus=true&quot;)</code>, targeting the
+top-level window rather than <code>mainwindow.browser</code>, chat or map keyboard focus.
+Maximization is a separate, preceding write; no new automatic fullscreen
+setting is issued.</li>
+<li>This is the supported native activation request. The reference does not
+guarantee that a background DreamSeeker will appear above another application.
+<a href="https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow">Microsoft's foreground API documentation</a>
+describes OS restrictions on foreground changes; that is distinct from whether
+BYOND accepts the parameter. The request is consumed once even if activation
+is denied. There are no new OS utilities, reconnect workarounds or focus retries.</li>
+<li>No Windows DreamSeeker/display is available in this worktree. Actual startup
+maximization, activation while another application is foreground, manual
+fullscreen toggling, and leave/reenter/no-later-focus-steal behavior were not
+observed for this change. The earlier Windows Creative S join above does not
+establish these window behaviors. A future real-client check should cover
+initial lobby load, game load and Return to lobby, switching to another app
+during each load, then resizing/refreshing and waiting after each activation.</li>
+</ul>
+<p>Automated checks:</p>
+<ul>
+<li><code>node tools/babylon/test_lobby_loading.cjs</code>: document readiness once, no
+refresh/action-completion notification, no late activation during handoff or
+disconnection, and a fresh notification for the next connection. Existing
+loading/scroll/handoff tests and <code>test_lobby_ui.cjs</code> pass.</li>
+<li><code>test_window_startup.py</code>: native DreamMaker/DreamDaemon probe executes the
+extracted production lobby/game hook bodies on headless test receivers, with
+window I/O, preferences and client context supplied by the test harness.
+It records one maximize/focus sequence per connection, visibility gating,
+return-load behavior, duplicate/stale/uninitialized callbacks, no action
+dispatch from readiness, continued viewport fitting and preserved fullscreen
+preference. Static contracts check ownership, load/Topic/visibility/resize
+bindings and inclusion in both game builds. This observes emitted settings,
+not OS focus.
+A mutation probe removing the game's startup guard fails on duplicate focus.</li>
+<li>Tool checks: 63 Python tests pass with native BYOND available. Supervisor:
+282 tests OK, 16 skipped without discord.py; existing fixtures emit background
+<code>AttributeError</code> for a fake process missing <code>poll</code> and Python 3.14 unclosed
+database ResourceWarnings. <code>node container/test_cleanup.cjs</code> passes.</li>
+<li>The first compile passed lobby and both production games, then the drone test
+build hit the documented BYOND 516.1686 slot quirk at <code>necropolis_gate.dm:54</code>
+(<code>loc_connections: invalid variable</code>). One padding global was added only to
+the drone test block in <code>code/world_flags.dm</code>, following the existing
+<a href="UPSTREAM_HOOKS.md#byond-5161686-slot-quirk">compiler workaround</a>. No upstream
+declaration or compiler warning gate was changed.</li>
+<li>After that adjustment, <code>python3 tools/babylon/build_dme.py babylon-lobby.dme babylon.dme babylon-station.dme babylon-test.dme babylon-station-test.dme</code>
+passes on BYOND 516.1686: all five builds have zero errors and warnings.
+The 63 tool tests and both lobby browser scripts pass again. No full gameplay
+end-to-end suite was run; the story review owns that combined validation.</li>
+</ul>
+<p>Integration follow-up: merging the story's catalog/UI work preserves all validation
+sections and the precise remote-client scope above. Its real-browser geometry
+fixture now supplies <code>src</code>/<code>poll_generation</code> for the new body load callback and
+marks native notification consumed before <code>onload</code>, because its standalone HTTP
+page has no BYOND server. Without that adaptation the fixture first fails on a
+missing interpolation, then its external-protocol notification disrupts browser
+focus/keyboard/click checks. The native callback itself stays covered by the
+loading and native lifecycle probes; no approved startup production file changed.
+All 208 real-browser layout/interaction checks pass on the combined tree, as do
+68 tool tests with native BYOND, 284 supervisor tests (16 Discord skips), both
+lobby browser scripts and container cleanup. This is not gameplay E2E evidence.
+All five builds (lobby and both production/test game variants) also compile on
+the merged source with BYOND 516.1686, zero errors and warnings in each.</p>
+<h2 id="lobby-layout-and-responsive-dialogs-2026-11-18">Lobby layout and responsive dialogs (2026-11-18)</h2>
+<p>The reported card mismatch reproduced with the actual catalog, CSS and browser
+script. Separate group containers placed the Creative Plane preview about 22 px
+below Babylon and gave the cards heights of about 223 and 196 px. Group help and
+card descriptions now occupy shared grid rows. All map-pick buttons use a column
+layout, so stretching a card cannot vertically center its preview/text. A lone
+available group fills its row. Narrow screens visually stack each introduction
+with its card. The DOM retains both introductions before the cards, and each
+card group references its help paragraph through <code>aria-describedby</code>. Heading
+IDs use a separate namespace from card-button IDs so labels and focus targets
+remain unique. These changes use the grid/flex features already present
+in the lobby; no subgrid, display:contents or new JavaScript syntax is required.</p>
+<p>Audit findings and every affected occurrence fixed:</p>
+<ul>
+<li>Card sizing/alignment: single-card group introductions and cards share rows;
+<code>.map-pick</code>, <code>.map-preview</code> and <code>.map-body</code> keep previews and text at the top
+across both builder and station cards, even with unequal descriptions.</li>
+<li>Selected Creative Plane: <code>.map-card.selected</code> paints the entire content area,
+including the space between/around size buttons. Body bottom padding provides
+at least 12 px between description and controls. Size focus is inset; card
+focus is dashed and inset, separate from the outer selection border.</li>
+<li>Narrow picker: Stations retains its existing auto-fill columns, including two
+columns at 600 px and one at 320–375 px. Tutorial grids use one shrinkable
+column only at 400 px and below, where their 340 px minimum may not fit.
+Size buttons may wrap, and their intended 14 px font is no longer overwritten
+by the later <code>font</code> shorthand.</li>
+<li>Long unbroken text: inherited wrapping covers world names/descriptions,
+notices, modal text/titles, errors, loading/reconnect messages and toasts.
+Flex items that previously forced overflow now shrink: world-card headings
+and errors, Discord bar spans, modal heading content and footer errors,
+Discord command inputs, toggle text, chosen-map summaries, member names,
+checkpoint dates and toast text. The modal close and member-remove buttons
+keep their size and remain reachable.</li>
+<li>Lobby header: the heading and New world action wrap with spacing instead of
+compressing each other at narrow widths.</li>
+<li>Chosen-map summary: preview/text retain usable widths, and Change map wraps
+onto another line when needed. This also fixes the shared tutorial summary.</li>
+<li>Details footer: smaller side padding/button margins fit its four actions into
+two rows at 320 px, down from three rows (about 191 px high).
+Long repeated footer errors scroll within three lines, keeping the form and
+actions visible; the complete error also remains in the dialog body.</li>
+<li>Checkpoint picker: dates, object counts and Current badges wrap within rows
+rather than forcing the dialog wider.</li>
+<li>Tutorial previews: map/review/play badges share a wrapping overlay container;
+Pending review no longer overlaps Babylon at 320 px. Their existing colors
+and preview style are preserved.</li>
+<li>Toasts: the fixed container is bounded by both viewport edges and its text
+can shrink/wrap; long errors no longer extend beyond the screen. A stack of
+three long messages scrolls within half the viewport height. Padding leaves
+room for toast shadows inside that scrolling container. The shared root is
+hidden when empty so its padding cannot intercept clicks on dialog actions,
+including after the final dismissal, timeout or overlay cleanup. Loading,
+intentional handoff and lost-connection screens clear stale toasts alongside
+the modal, as <code>lobbyHideOverlays</code> promises.</li>
+</ul>
+<p><code>tools/babylon/test_lobby_layout.cjs</code> serves a disposable HTTP fixture on a
+loopback port, uses the actual lobby CSS/JS/catalog/previews, and extracts the
+static page/loading/world-card/header/empty/Discord HTML from <code>lobby.dm</code>, replacing
+DM interpolations with fixture values. It does not execute DM or contact a game
+server. A small representative world-action row supplies controls. Single-line
+inputs may scroll their values and decorative preview art may clip intentionally;
+their element bounds must still fit. No mock DOM is used for geometry.</p>
+<p>Reproduce the focused browser checks with Node and Playwright (installed only
+in ignored runtime scratch space):</p>
+<pre><code class="language-sh">npm install --prefix data/babylon-supervisor/lobby-layout/browser --no-package-lock --no-audit --no-fund playwright@1.61.1
+data/babylon-supervisor/lobby-layout/browser/node_modules/.bin/playwright install chromium
+NODE_PATH=&quot;$PWD/data/babylon-supervisor/lobby-layout/browser/node_modules&quot; \
+  LOBBY_SCREENSHOT_DIR=data/babylon-supervisor/lobby-layout/after \
+  node tools/babylon/test_lobby_layout.cjs
+</code></pre>
+<p>An existing Chromium executable can be supplied with <code>CHROMIUM_EXECUTABLE</code>,
+for example the Playwright Chromium path on the test host.
+The final run passed 208 checks at widths 320, 375, 600, 640, 641, 768 and 1920 px
+(740 px tall below desktop; desktop 1920×1080). Checks cover neither/Babylon/
+Creative Plane S/M/L selection, equal preview/title/description tops and card
+heights, unequal help/description lengths, the selected background and spacing,
+inset keyboard focus on both card buttons and sizes, unique modal IDs and
+associated group help, radio arrows, Tab/Shift+Tab containment, retained name and
+description across steps, world/empty lists, navigation tabs, Discord bar, both
+wizard steps, busy/error states, members, long Join titles, danger confirmations,
+Discord copy controls, checkpoint loading/list, tutorials/badges, toasts and
+loading/reconnect screens. The card/color/focus/overflow guards failed before
+the fixes; separate new guards also caught the badge overlap, footer height
+and lone-group sizing before those fixes.
+Vertical overflow guards also failed on oversized footer errors and toast
+stacks, and the DOM test caught stale toasts surviving overlay cleanup. Review
+guards also reproduced lost Stations columns at 600 px, missing shadow space
+and the colliding Creative Plane heading/button IDs before their fixes. The
+spacing assertion requires at least 12 px, matching the intended padding.
+At 320/375 px, lower-edge hit tests and actual mouse clicks send real create
+requests before any toast and after the final toast dismissal; these four
+checks reproduced the invisible padded-root blocker before the <code>:empty</code> fix.
+Long-message stack scrolling and actual dismiss buttons are exercised at every
+width so hiding an empty root does not hide active notifications.</p>
+<p>Browser screenshots were inspected at desktop and narrow widths, including
+<code>desktop-map-unselected.png</code>, <code>desktop-map-selected.png</code>, <code>320-map.png</code>,
+<code>320-details.png</code>, <code>320-tutorials.png</code>, and the corresponding 375 px files.
+Review follow-up evidence includes <code>600-stations.png</code> (two columns) and
+<code>600-toast.png</code>/<code>320-toast.png</code> (shadows with room inside the container).
+Before/after PNGs remain ignored under
+<code>data/babylon-supervisor/lobby-layout/{before,after,review}/</code>; representative final
+images accompany the review hand-in.</p>
+<p>Other verification:</p>
+<ul>
+<li><code>node tools/babylon/test_lobby_ui.cjs</code>: passed (including wizard payloads,
+limits, accessibility attributes, confirmations and poll preservation).</li>
+<li><code>node tools/babylon/test_lobby_loading.cjs</code>: passed (including stale polls,
+scroll preservation, outages and intentional handoff).</li>
+<li><code>python3 -m unittest discover -s tools/babylon -p 'test_*.py' -v</code>: 60 tests,
+OK; the one native BYOND connection-routing test skipped on this host.</li>
+<li><code>node --check modular_babylon/lobby/lobby.js</code> and <code>git diff --check</code>: passed.</li>
+</ul>
+<p>Limitations: rendering was verified in standalone Chromium, not the embedded
+DreamSeeker browser. No native game build or full game end-to-end suite ran for
+these browser-only changes. Window lifecycle hooks, DM markup and map catalog/
+PNG generation were left to their separate work streams.</p></td></tr></table></main><footer>babylon-lobby.dme <a href="https://github.com/scolastico/babylon13/tree/fb5416a84bdf228abc2699273c51e5bb09202d71">fb5416a</a> (master) — <a href="https://github.com/SpaceManiac/SpacemanDMM/blob/master/crates/dmdoc/README.md">dmdoc 1.11.0</a></footer></body></html>
